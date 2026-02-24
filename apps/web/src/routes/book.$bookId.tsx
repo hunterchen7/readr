@@ -55,15 +55,24 @@ function BookDetailPage() {
             {book.totalChapters ? <p>Chapters: {book.totalChapters}</p> : null}
           </div>
 
-          {book.downloadUrl ? (
-            <a
-              href={book.downloadUrl}
-              className="mt-6 inline-block rounded-md bg-gray-900 px-4 py-2 text-sm text-white hover:bg-gray-800"
-              download
+          <div className="mt-6 flex gap-3">
+            <Link
+              to="/reader/$bookId"
+              params={{ bookId }}
+              className="inline-block rounded-md bg-gray-900 px-4 py-2 text-sm text-white hover:bg-gray-800"
             >
-              Download
-            </a>
-          ) : null}
+              Read
+            </Link>
+            {book.downloadUrl ? (
+              <a
+                href={book.downloadUrl}
+                className="inline-block rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                download
+              >
+                Download
+              </a>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

@@ -13,6 +13,7 @@ import { Route as UploadRouteImport } from './routes/upload'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LibraryRouteImport } from './routes/library'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ReaderBookIdRouteImport } from './routes/reader.$bookId'
 import { Route as BookBookIdRouteImport } from './routes/book.$bookId'
 
 const UploadRoute = UploadRouteImport.update({
@@ -35,6 +36,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReaderBookIdRoute = ReaderBookIdRouteImport.update({
+  id: '/reader/$bookId',
+  path: '/reader/$bookId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BookBookIdRoute = BookBookIdRouteImport.update({
   id: '/book/$bookId',
   path: '/book/$bookId',
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/upload': typeof UploadRoute
   '/book/$bookId': typeof BookBookIdRoute
+  '/reader/$bookId': typeof ReaderBookIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/upload': typeof UploadRoute
   '/book/$bookId': typeof BookBookIdRoute
+  '/reader/$bookId': typeof ReaderBookIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,13 +70,33 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/upload': typeof UploadRoute
   '/book/$bookId': typeof BookBookIdRoute
+  '/reader/$bookId': typeof ReaderBookIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/library' | '/login' | '/upload' | '/book/$bookId'
+  fullPaths:
+    | '/'
+    | '/library'
+    | '/login'
+    | '/upload'
+    | '/book/$bookId'
+    | '/reader/$bookId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/library' | '/login' | '/upload' | '/book/$bookId'
-  id: '__root__' | '/' | '/library' | '/login' | '/upload' | '/book/$bookId'
+  to:
+    | '/'
+    | '/library'
+    | '/login'
+    | '/upload'
+    | '/book/$bookId'
+    | '/reader/$bookId'
+  id:
+    | '__root__'
+    | '/'
+    | '/library'
+    | '/login'
+    | '/upload'
+    | '/book/$bookId'
+    | '/reader/$bookId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -77,6 +105,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   UploadRoute: typeof UploadRoute
   BookBookIdRoute: typeof BookBookIdRoute
+  ReaderBookIdRoute: typeof ReaderBookIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -109,6 +138,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reader/$bookId': {
+      id: '/reader/$bookId'
+      path: '/reader/$bookId'
+      fullPath: '/reader/$bookId'
+      preLoaderRoute: typeof ReaderBookIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/book/$bookId': {
       id: '/book/$bookId'
       path: '/book/$bookId'
@@ -125,6 +161,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   UploadRoute: UploadRoute,
   BookBookIdRoute: BookBookIdRoute,
+  ReaderBookIdRoute: ReaderBookIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
