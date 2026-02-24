@@ -228,6 +228,53 @@ export const ttsAudioChunks = pgTable("tts_audio_chunks", {
   format: text("format").default("opus"),
 });
 
+// Collections / tags
+export const collections = pgTable("collections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  color: text("color"),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const bookCollections = pgTable(
+  "book_collections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookId: uuid("book_id")
+      .references(() => books.id, { onDelete: "cascade" })
+      .notNull(),
+    collectionId: uuid("collection_id")
+      .references(() => collections.id, { onDelete: "cascade" })
+      .notNull(),
+    addedAt: timestamp("added_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_collection_unique_idx").on(table.bookId, table.collectionId),
+  ],
+);
+
+// Reading stats
+export const readingSessions = pgTable("reading_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull(),
+  bookId: uuid("book_id")
+    .references(() => books.id, { onDelete: "cascade" })
+    .notNull(),
+  startedAt: timestamp("started_at").notNull(),
+  endedAt: timestamp("ended_at"),
+  durationMinutes: integer("duration_minutes"),
+  pagesRead: integer("pages_read"),
+  startPercentage: integer("start_percentage"),
+  endPercentage: integer("end_percentage"),
+});
+
 export const syncLog = pgTable(
   "sync_log",
   {
