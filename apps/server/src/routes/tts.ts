@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { eq, and } from "drizzle-orm";
-import { generateTTSSchema } from "@readr/shared";
+import { generateTTSSchema, streamTTSSchema } from "@readr/shared";
 import { scopeToUser } from "../middleware/user-scope.js";
 import { env } from "../lib/env.js";
 import { queueTTSJob, getQueueDepth } from "../services/tts-queue.js";
@@ -177,6 +177,44 @@ ttsRouter.get("/tts/audio/:bookId/:chapter", async (c) => {
 
   const url = await getPresignedDownloadUrl(chunk.audioKey);
   return c.json({ url });
+});
+
+// POST /tts/stream — proxy to Kokoro streaming endpoint
+ttsRouter.post("/tts/stream", async (c) => {
+  if (!env.TTS_WORKER_URL) {
+    return c.json({ error: "TTS worker not configured" }, 503);
+  }
+
+  const body = await c.req.json();
+  const parsed = streamTTSSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid body", details: parsed.error.flatten() }, 400);
+  }
+
+  try {
+    const res = await fetch(`${env.TTS_WORKER_URL}/tts/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: parsed.data.text,
+        voice_config: parsed.data.voiceConfig,
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      return c.json({ error: "TTS streaming failed" }, 502);
+    }
+
+    // Stream the audio response through
+    return new Response(res.body, {
+      headers: {
+        "Content-Type": "audio/ogg",
+        "Transfer-Encoding": "chunked",
+      },
+    });
+  } catch {
+    return c.json({ error: "TTS worker unreachable" }, 502);
+  }
 });
 
 export default ttsRouter;
