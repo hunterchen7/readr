@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback } from "react";
-import { View, Text, ActivityIndicator, StyleSheet, Pressable } from "react-native";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { View, Text, ActivityIndicator, StyleSheet, Pressable, FlatList, Alert } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
+import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
 import { getBook } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -11,6 +12,20 @@ import {
   DEFAULT_THEME,
   type ReaderTheme,
 } from "../../components/reader/ReaderControls";
+import { ContextMenu } from "../../components/reader/ContextMenu";
+import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
+import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
+import {
+  upsertProgress,
+  getProgress,
+  getBookmarks,
+  createBookmark,
+  deleteBookmark,
+  createHighlight,
+  createNote,
+} from "../../lib/local-db";
+import { DEFAULT_LOOKUP_PROVIDERS } from "@readr/shared";
+import * as Linking from "expo-linking";
 
 interface TocItem {
   label: string;
@@ -21,10 +36,25 @@ interface TocItem {
 export default function ReaderScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const webviewRef = useRef<WebView>(null);
+
   const [showControls, setShowControls] = useState(false);
   const [theme, setTheme] = useState<ReaderTheme>(DEFAULT_THEME);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [progress, setProgress] = useState(0);
+  const [currentPosition, setCurrentPosition] = useState<BookPosition | null>(null);
+
+  // Context menu state
+  const [contextMenuVisible, setContextMenuVisible] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
+  const [selectionCfi, setSelectionCfi] = useState("");
+
+  // Notes state
+  const [showTypedNote, setShowTypedNote] = useState(false);
+  const [showHandwriting, setShowHandwriting] = useState(false);
+
+  // Bookmarks state
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [showBookmarks, setShowBookmarks] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],
@@ -33,6 +63,23 @@ export default function ReaderScreen() {
   });
 
   const book = data?.book;
+
+  // Load saved progress and bookmarks on mount
+  useEffect(() => {
+    if (!bookId) return;
+    async function load() {
+      const [savedProgress, savedBookmarks] = await Promise.all([
+        getProgress(bookId!),
+        getBookmarks(bookId!),
+      ]);
+      if (savedProgress) {
+        setProgress(Math.round(savedProgress.position.percentage));
+        setCurrentPosition(savedProgress.position);
+      }
+      setBookmarks(savedBookmarks);
+    }
+    load();
+  }, [bookId]);
 
   const sendToWebView = useCallback(
     (type: string, payload: Record<string, unknown>) => {
@@ -60,10 +107,26 @@ export default function ReaderScreen() {
       switch (msg.type) {
         case "ready":
           sendToWebView("setTheme", theme as unknown as Record<string, unknown>);
+          // Restore saved position
+          if (currentPosition?.cfi) {
+            sendToWebView("goToLocation", { cfi: currentPosition.cfi });
+          }
           break;
-        case "progressUpdated":
-          setProgress(msg.payload.percentage ?? 0);
+        case "progressUpdated": {
+          const pct = msg.payload.percentage ?? 0;
+          setProgress(pct);
+          const position: BookPosition = {
+            percentage: pct,
+            cfi: msg.payload.cfi,
+            chapter: msg.payload.chapter,
+            page: msg.payload.page,
+          };
+          setCurrentPosition(position);
+          if (bookId) {
+            upsertProgress(bookId, position);
+          }
           break;
+        }
         case "tocLoaded":
           setToc(msg.payload.chapters ?? []);
           break;
@@ -71,13 +134,90 @@ export default function ReaderScreen() {
           setShowControls(true);
           break;
         case "selectionChanged":
-          // Will be used by context menu in Phase 2.4
+          if (msg.payload.text) {
+            setSelectedText(msg.payload.text);
+            setSelectionCfi(msg.payload.cfi ?? "");
+            setContextMenuVisible(true);
+          }
           break;
       }
     } catch {
       // Ignore non-JSON messages
     }
   }
+
+  // ─── Context menu handlers ─────────────────────────────────────────
+
+  async function handleHighlight(color: HighlightColor) {
+    if (!bookId || !selectionCfi) return;
+    await createHighlight(bookId, selectionCfi, color, selectedText);
+    sendToWebView("addHighlight", { cfi: selectionCfi, color });
+    setContextMenuVisible(false);
+  }
+
+  async function handleBookmarkFromMenu() {
+    if (!bookId || !currentPosition) return;
+    const label = selectedText.slice(0, 60) || undefined;
+    const bm = await createBookmark(bookId, currentPosition, label);
+    setBookmarks((prev) => [bm, ...prev]);
+    setContextMenuVisible(false);
+  }
+
+  function handleNoteFromMenu() {
+    setContextMenuVisible(false);
+    setShowTypedNote(true);
+  }
+
+  function handleCopy() {
+    if (selectedText) {
+      // Use WebView to copy to clipboard
+      sendToWebView("copyToClipboard", { text: selectedText });
+    }
+    setContextMenuVisible(false);
+  }
+
+  function handleLookup(url: string) {
+    setContextMenuVisible(false);
+    Linking.openURL(url);
+  }
+
+  // ─── Note handlers ─────────────────────────────────────────────────
+
+  async function handleSaveTypedNote(text: string) {
+    if (!bookId || !currentPosition) return;
+    await createNote(bookId, currentPosition, "typed", text);
+    setShowTypedNote(false);
+  }
+
+  async function handleSaveHandwriting(strokes: import("@readr/shared").Stroke[], penConfig: import("@readr/shared").PenConfig) {
+    if (!bookId || !currentPosition) return;
+    await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
+    setShowHandwriting(false);
+  }
+
+  // ─── Bookmark handlers ────────────────────────────────────────────
+
+  async function handleCreateBookmark() {
+    if (!bookId || !currentPosition) return;
+    const bm = await createBookmark(bookId, currentPosition);
+    setBookmarks((prev) => [bm, ...prev]);
+  }
+
+  async function handleDeleteBookmark(bmId: string) {
+    await deleteBookmark(bmId);
+    setBookmarks((prev) => prev.filter((b) => b.id !== bmId));
+  }
+
+  function handleGoToBookmark(bm: Bookmark) {
+    if (bm.position.cfi) {
+      sendToWebView("goToLocation", { cfi: bm.position.cfi });
+    } else if (bm.position.page != null) {
+      sendToWebView("goToLocation", { page: bm.position.page });
+    }
+    setShowBookmarks(false);
+  }
+
+  // ─── Render ────────────────────────────────────────────────────────
 
   if (isLoading) {
     return (
@@ -103,6 +243,12 @@ export default function ReaderScreen() {
     ? getPdfReaderHtml(book.downloadUrl!)
     : getReaderHtml(book.downloadUrl!);
 
+  const lookupProviders = DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
+    name: p.name,
+    icon: p.icon ?? "🔍",
+    urlTemplate: p.urlTemplate,
+  }));
+
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       <View style={[styles.header, { backgroundColor: theme.bg }]}>
@@ -112,9 +258,17 @@ export default function ReaderScreen() {
         <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
           {book.title ?? "Reading"}
         </Text>
-        <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
-          <Text style={[styles.headerButtonText, { color: theme.fg }]}>⚙</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable onPress={handleCreateBookmark} style={styles.headerButton}>
+            <Text style={[styles.headerButtonText, { color: theme.fg }]}>🔖</Text>
+          </Pressable>
+          <Pressable onPress={() => setShowBookmarks(true)} style={styles.headerButton}>
+            <Text style={[styles.headerButtonText, { color: theme.fg }]}>☰</Text>
+          </Pressable>
+          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
+            <Text style={[styles.headerButtonText, { color: theme.fg }]}>⚙</Text>
+          </Pressable>
+        </View>
       </View>
 
       <WebView
@@ -144,6 +298,77 @@ export default function ReaderScreen() {
         onGoToChapter={handleGoToChapter}
         onSearch={handleSearch}
       />
+
+      <ContextMenu
+        visible={contextMenuVisible}
+        selectedText={selectedText}
+        onClose={() => setContextMenuVisible(false)}
+        onHighlight={handleHighlight}
+        onBookmark={handleBookmarkFromMenu}
+        onNote={handleNoteFromMenu}
+        onCopy={handleCopy}
+        onLookup={handleLookup}
+        lookupProviders={lookupProviders}
+      />
+
+      <TypedNoteEditor
+        visible={showTypedNote}
+        onSave={handleSaveTypedNote}
+        onCancel={() => setShowTypedNote(false)}
+      />
+
+      <HandwritingCanvas
+        visible={showHandwriting}
+        onSave={handleSaveHandwriting}
+        onCancel={() => setShowHandwriting(false)}
+      />
+
+      {/* Bookmarks panel */}
+      {showBookmarks ? (
+        <View style={styles.bookmarksPanel}>
+          <View style={styles.bookmarksPanelHeader}>
+            <Text style={styles.bookmarksPanelTitle}>
+              Bookmarks ({bookmarks.length})
+            </Text>
+            <Pressable onPress={() => setShowBookmarks(false)}>
+              <Text style={styles.bookmarksPanelClose}>✕</Text>
+            </Pressable>
+          </View>
+          {bookmarks.length === 0 ? (
+            <Text style={styles.bookmarksEmpty}>
+              No bookmarks yet. Tap 🔖 to add one.
+            </Text>
+          ) : (
+            <FlatList
+              data={bookmarks}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={styles.bookmarkRow}
+                  onPress={() => handleGoToBookmark(item)}
+                  onLongPress={() => {
+                    Alert.alert("Delete Bookmark?", item.label ?? "This bookmark", [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Delete",
+                        style: "destructive",
+                        onPress: () => handleDeleteBookmark(item.id),
+                      },
+                    ]);
+                  }}
+                >
+                  <Text style={styles.bookmarkLabel} numberOfLines={1}>
+                    {item.label ?? `Page ${item.position.page ?? Math.round(item.position.percentage)}%`}
+                  </Text>
+                  <Text style={styles.bookmarkMeta}>
+                    {Math.round(item.position.percentage)}%
+                  </Text>
+                </Pressable>
+              )}
+            />
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -152,7 +377,6 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
   error: { color: "#dc2626", marginBottom: 12 },
-  muted: { color: "#666", marginBottom: 12 },
   link: { color: "#111", fontWeight: "600" },
   header: {
     flexDirection: "row",
@@ -166,6 +390,7 @@ const styles = StyleSheet.create({
   headerButton: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },
   headerButtonText: { fontSize: 20 },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 15, fontWeight: "500" },
+  headerActions: { flexDirection: "row" },
   webview: { flex: 1 },
   progressBar: {
     height: 20,
@@ -183,4 +408,38 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.05)",
   },
   progressText: { fontSize: 11, opacity: 0.5 },
+  bookmarksPanel: {
+    position: "absolute",
+    top: 92,
+    right: 8,
+    width: 280,
+    maxHeight: 400,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+    padding: 12,
+  },
+  bookmarksPanelHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  bookmarksPanelTitle: { fontSize: 15, fontWeight: "600" },
+  bookmarksPanelClose: { fontSize: 18, padding: 4, color: "#666" },
+  bookmarksEmpty: { color: "#999", textAlign: "center", paddingVertical: 16, fontSize: 13 },
+  bookmarkRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#eee",
+  },
+  bookmarkLabel: { flex: 1, fontSize: 14, marginRight: 8 },
+  bookmarkMeta: { fontSize: 12, color: "#999" },
 });
