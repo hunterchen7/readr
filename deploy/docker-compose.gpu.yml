@@ -1,0 +1,20 @@
+services:
+  tts-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.tts
+    env_file: ../.env
+    volumes:
+      - tts-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - redis
+
+volumes:
+  tts-models:

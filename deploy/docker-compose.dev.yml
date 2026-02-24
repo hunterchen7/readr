@@ -1,0 +1,31 @@
+# Development services — run with: docker compose -f deploy/docker-compose.dev.yml up -d
+# This starts only the infrastructure services (Postgres, Redis).
+# The app services (server, web, mobile) are run locally via `pnpm dev`.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reader
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: reader
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reader"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+volumes:
+  pgdata:
+  redisdata:
