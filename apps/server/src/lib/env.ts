@@ -2,7 +2,8 @@ import { z } from "zod";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
-  REDIS_URL: z.string().url().optional(),
+  REDIS_URL: z.string().url().default("redis://localhost:6379"),
+  TTS_WORKER_URL: z.string().url().optional(),
 
   S3_ENDPOINT: z.string().url(),
   S3_BUCKET: z.string().min(1),

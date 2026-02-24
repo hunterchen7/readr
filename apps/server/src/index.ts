@@ -9,6 +9,7 @@ import booksRouter from "./routes/books.js";
 import annotationsRouter from "./routes/annotations.js";
 import progressRouter from "./routes/progress.js";
 import syncRouter from "./routes/sync.js";
+import ttsRouter from "./routes/tts.js";
 
 const app = new Hono();
 
@@ -33,6 +34,7 @@ app.route("/api/books", booksRouter);
 app.route("/api", annotationsRouter);
 app.route("/api/books", progressRouter);
 app.route("/api", syncRouter);
+app.route("/api", ttsRouter);
 
 // Global error handler
 app.onError((err, c) => {
