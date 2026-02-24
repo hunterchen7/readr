@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@readr/shared": "workspace:*",
+    "@readr/sync-engine": "workspace:*",
     "hono": "^4",
     "@hono/node-server": "^1",
     "better-auth": "^1",

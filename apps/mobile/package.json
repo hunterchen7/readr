@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@readr/shared": "workspace:*",
+    "@readr/sync-engine": "workspace:*",
     "expo": "~54.0.33",
     "expo-router": "~5",
     "expo-linking": "~7",
