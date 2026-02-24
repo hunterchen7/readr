@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { getBook } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
+import { getPdfReaderHtml } from "../../components/reader/pdf-html";
 import {
   ReaderControls,
   DEFAULT_THEME,
@@ -98,17 +99,9 @@ export default function ReaderScreen() {
   }
 
   const format = book.format ?? "epub";
-
-  if (format !== "epub") {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.muted}>PDF reader coming in Phase 2.2</Text>
-        <Pressable onPress={() => router.back()}>
-          <Text style={styles.link}>Go back</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  const readerHtml = format === "pdf"
+    ? getPdfReaderHtml(book.downloadUrl!)
+    : getReaderHtml(book.downloadUrl!);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -128,7 +121,7 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={styles.webview}
         originWhitelist={["*"]}
-        source={{ html: getReaderHtml(book.downloadUrl!) }}
+        source={{ html: readerHtml }}
         onMessage={handleMessage}
         javaScriptEnabled
         domStorageEnabled
