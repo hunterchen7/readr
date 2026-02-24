@@ -6,6 +6,8 @@ import { AppError } from "./lib/errors.js";
 import { auth } from "./routes/auth.js";
 import { authMiddleware } from "./middleware/auth.js";
 import booksRouter from "./routes/books.js";
+import annotationsRouter from "./routes/annotations.js";
+import progressRouter from "./routes/progress.js";
 
 const app = new Hono();
 
@@ -27,6 +29,8 @@ app.on(["POST", "GET"], "/api/auth/**", (c) => auth.handler(c.req.raw));
 // Protected API routes
 app.use("/api/*", authMiddleware);
 app.route("/api/books", booksRouter);
+app.route("/api", annotationsRouter);
+app.route("/api/books", progressRouter);
 
 // Global error handler
 app.onError((err, c) => {
