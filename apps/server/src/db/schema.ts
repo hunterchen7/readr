@@ -13,7 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
+  id: text("id").primaryKey(),
   email: text("email").unique().notNull(),
   name: text("name"),
   emailVerified: boolean("email_verified").default(false),
@@ -27,7 +27,7 @@ export const users = pgTable("users", {
 // better-auth session and account tables
 export const sessions = pgTable("sessions", {
   id: text("id").primaryKey(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   token: text("token").unique().notNull(),
@@ -40,7 +40,7 @@ export const sessions = pgTable("sessions", {
 
 export const accounts = pgTable("accounts", {
   id: text("id").primaryKey(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   accountId: text("account_id").notNull(),
@@ -81,7 +81,7 @@ export const books = pgTable(
   "books",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
+    userId: text("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     fileId: uuid("file_id")
@@ -107,7 +107,7 @@ export const readingProgress = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
-    userId: uuid("user_id")
+    userId: text("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     deviceId: text("device_id").notNull(),
@@ -133,7 +133,7 @@ export const bookmarks = pgTable("bookmarks", {
   bookId: uuid("book_id")
     .references(() => books.id, { onDelete: "cascade" })
     .notNull(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   position: jsonb("position").notNull(),
@@ -147,7 +147,7 @@ export const highlights = pgTable("highlights", {
   bookId: uuid("book_id")
     .references(() => books.id, { onDelete: "cascade" })
     .notNull(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   cfiRange: text("cfi_range").notNull(),
@@ -163,7 +163,7 @@ export const notes = pgTable("notes", {
   bookId: uuid("book_id")
     .references(() => books.id, { onDelete: "cascade" })
     .notNull(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   position: jsonb("position").notNull(),
@@ -184,7 +184,7 @@ export const notes = pgTable("notes", {
 
 export const lookupProviders = pgTable("lookup_providers", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   name: text("name").notNull(),
@@ -200,7 +200,7 @@ export const ttsJobs = pgTable("tts_jobs", {
   bookId: uuid("book_id")
     .references(() => books.id, { onDelete: "cascade" })
     .notNull(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   status: text("status").notNull().default("queued"),
@@ -231,7 +231,7 @@ export const ttsAudioChunks = pgTable("tts_audio_chunks", {
 // Collections / tags
 export const collections = pgTable("collections", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   name: text("name").notNull(),
@@ -261,7 +261,7 @@ export const bookCollections = pgTable(
 // Reading stats
 export const readingSessions = pgTable("reading_sessions", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   bookId: uuid("book_id")
@@ -279,7 +279,7 @@ export const syncLog = pgTable(
   "sync_log",
   {
     id: serial("id").primaryKey(),
-    userId: uuid("user_id")
+    userId: text("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     entityType: text("entity_type").notNull(),
