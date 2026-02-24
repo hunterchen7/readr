@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { eq, and, gte, sql, desc } from "drizzle-orm";
+import { and, gte, sql, desc } from "drizzle-orm";
+import { scopeToUser } from "../middleware/user-scope.js";
 
 type Variables = { userId: string };
 
@@ -48,13 +49,13 @@ statsRouter.get("/stats/summary", async (c) => {
       sessionCount: sql<number>`COUNT(*)`,
     })
     .from(schema.readingSessions)
-    .where(eq(schema.readingSessions.userId, userId));
+    .where(scopeToUser.readingSessions(userId));
 
   // Total books
   const [booksResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(schema.books)
-    .where(eq(schema.books.userId, userId));
+    .where(scopeToUser.books(userId));
 
   // Reading streak (consecutive days)
   const thirtyDaysAgo = new Date();
@@ -67,7 +68,7 @@ statsRouter.get("/stats/summary", async (c) => {
     .from(schema.readingSessions)
     .where(
       and(
-        eq(schema.readingSessions.userId, userId),
+        scopeToUser.readingSessions(userId),
         gte(schema.readingSessions.startedAt, thirtyDaysAgo),
       ),
     )
@@ -105,7 +106,7 @@ statsRouter.get("/stats/summary", async (c) => {
     .from(schema.readingSessions)
     .where(
       and(
-        eq(schema.readingSessions.userId, userId),
+        scopeToUser.readingSessions(userId),
         gte(schema.readingSessions.startedAt, weekStart),
       ),
     );
@@ -134,7 +135,7 @@ statsRouter.get("/stats/daily", async (c) => {
     .from(schema.readingSessions)
     .where(
       and(
-        eq(schema.readingSessions.userId, userId),
+        scopeToUser.readingSessions(userId),
         gte(schema.readingSessions.startedAt, thirtyDaysAgo),
       ),
     )

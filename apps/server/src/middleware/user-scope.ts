@@ -11,6 +11,10 @@ export const scopeToUser = {
   ttsJobs: (userId: string) => eq(schema.ttsJobs.userId, userId),
   lookupProviders: (userId: string) =>
     eq(schema.lookupProviders.userId, userId),
+  collections: (userId: string) =>
+    eq(schema.collections.userId, userId),
+  readingSessions: (userId: string) =>
+    eq(schema.readingSessions.userId, userId),
 } as const;
 
 /** Combine user scope with an additional condition */

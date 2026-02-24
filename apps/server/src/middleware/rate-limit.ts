@@ -58,12 +58,13 @@ export const apiRateLimit = rateLimit({
   keyPrefix: "api",
 });
 
-// Periodic cleanup of expired entries
-setInterval(() => {
+// Periodic cleanup of expired entries (unref so it doesn't prevent graceful shutdown)
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of counters) {
     if (now >= entry.resetAt) {
       counters.delete(key);
     }
   }
-}, 5 * 60 * 1000); // Every 5 minutes
+}, 5 * 60 * 1000);
+cleanupTimer.unref();

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { eq, and } from "drizzle-orm";
+import { scopeToUser } from "../middleware/user-scope.js";
 
 type Variables = { userId: string };
 
@@ -14,7 +15,7 @@ collectionsRouter.get("/", async (c) => {
   const result = await db
     .select()
     .from(schema.collections)
-    .where(eq(schema.collections.userId, userId))
+    .where(scopeToUser.collections(userId))
     .orderBy(schema.collections.sortOrder);
 
   return c.json({ collections: result });
@@ -52,7 +53,7 @@ collectionsRouter.patch("/:id", async (c) => {
       ...(body.color !== undefined && { color: body.color }),
       ...(body.sortOrder !== undefined && { sortOrder: body.sortOrder }),
     })
-    .where(and(eq(schema.collections.id, id), eq(schema.collections.userId, userId)))
+    .where(and(eq(schema.collections.id, id), scopeToUser.collections(userId)))
     .returning();
 
   if (!updated) return c.json({ error: "Not found" }, 404);
@@ -70,7 +71,7 @@ collectionsRouter.delete("/:id", async (c) => {
 
   const deleted = await db
     .delete(schema.collections)
-    .where(and(eq(schema.collections.id, id), eq(schema.collections.userId, userId)))
+    .where(and(eq(schema.collections.id, id), scopeToUser.collections(userId)))
     .returning();
 
   if (deleted.length === 0) return c.json({ error: "Not found" }, 404);
@@ -87,7 +88,7 @@ collectionsRouter.post("/:id/books", async (c) => {
   const [collection] = await db
     .select()
     .from(schema.collections)
-    .where(and(eq(schema.collections.id, collectionId), eq(schema.collections.userId, userId)))
+    .where(and(eq(schema.collections.id, collectionId), scopeToUser.collections(userId)))
     .limit(1);
 
   if (!collection) return c.json({ error: "Collection not found" }, 404);
