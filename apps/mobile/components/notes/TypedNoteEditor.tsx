@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { View, TextInput, Pressable, Text, StyleSheet, Modal } from "react-native";
+import { useDisplay } from "../../contexts/DisplayContext";
 
 interface TypedNoteEditorProps {
   visible: boolean;
@@ -14,7 +15,13 @@ export function TypedNoteEditor({
   onSave,
   onCancel,
 }: TypedNoteEditorProps) {
+  const display = useDisplay();
   const [text, setText] = useState(initialText);
+
+  // Reset text when modal opens with new initialText
+  useEffect(() => {
+    if (visible) setText(initialText);
+  }, [visible, initialText]);
 
   function handleSave() {
     if (text.trim()) {
@@ -25,7 +32,7 @@ export function TypedNoteEditor({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      animationType={display.animationsEnabled ? "slide" : "none"}
       presentationStyle="pageSheet"
       onRequestClose={onCancel}
     >

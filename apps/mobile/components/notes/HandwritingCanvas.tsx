@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { View, Pressable, Text, StyleSheet, Modal } from "react-native";
 import type { Stroke, StrokePoint, PenConfig } from "@readr/shared";
+import { useDisplay } from "../../contexts/DisplayContext";
 
 // Note: This component uses a basic touch-based drawing approach.
 // @shopify/react-native-skia integration for pressure-sensitive drawing
@@ -22,6 +23,7 @@ export function HandwritingCanvas({
   onSave,
   onCancel,
 }: HandwritingCanvasProps) {
+  const display = useDisplay();
   const [strokes, setStrokes] = useState<Stroke[]>(initialStrokes);
   const [currentStroke, setCurrentStroke] = useState<StrokePoint[]>([]);
   const [penColor, setPenColor] = useState("#000000");
@@ -82,7 +84,7 @@ export function HandwritingCanvas({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      animationType={display.animationsEnabled ? "slide" : "none"}
       presentationStyle="fullScreen"
       onRequestClose={onCancel}
     >

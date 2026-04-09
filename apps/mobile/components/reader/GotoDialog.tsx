@@ -7,6 +7,7 @@ import {
   Pressable,
   StyleSheet,
 } from "react-native";
+import { useDisplay } from "../../contexts/DisplayContext";
 
 interface GotoDialogProps {
   visible: boolean;
@@ -34,6 +35,7 @@ export function GotoDialog({
   onGoToPage,
   onGoToFraction,
 }: GotoDialogProps) {
+  const display = useDisplay();
   const [pageInput, setPageInput] = useState("");
   const [pctInput, setPctInput] = useState("");
 
@@ -60,7 +62,7 @@ export function GotoDialog({
   }
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible={visible} animationType={display.animationsEnabled ? "fade" : "none"} onRequestClose={onClose}>
       <Pressable style={styles.overlay} onPress={onClose} />
       <View style={styles.dialog}>
         <Text style={styles.title}>Go to…</Text>
