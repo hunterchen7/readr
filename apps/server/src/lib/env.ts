@@ -22,6 +22,15 @@ const envSchema = z.object({
 
   PUBLIC_URL: z.string().url().optional(),
 
+  // === Resend (optional — email recovery) ===
+  // Leave unset to disable the whole email feature. When set, the
+  // /api/email/* routes become available and the mobile Settings
+  // screen shows the "attach recovery email" flow.
+  RESEND_API_KEY: z.string().optional(),
+  // From address for outbound mail. Must be on a Cloudflare / Resend
+  // verified domain. Example: Readr <readr@reader.example.com>
+  RESEND_FROM: z.string().optional(),
+
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("debug"),

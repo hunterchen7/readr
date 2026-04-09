@@ -15,6 +15,7 @@ import ttsRouter from "./routes/tts.js";
 import exportRouter from "./routes/export.js";
 import collectionsRouter from "./routes/collections.js";
 import statsRouter from "./routes/stats.js";
+import emailRouter, { emailPublicRouter } from "./routes/email.js";
 
 const app = new Hono();
 
@@ -47,6 +48,11 @@ app.get("/health", (c) =>
 // token here on first launch to create a user row. Idempotent.
 app.route("/api", registerRouter);
 
+// Public email endpoints (status check + device token recovery).
+// These must be BEFORE authMiddleware so unauthenticated users can
+// recover their device token via email.
+app.route("/api", emailPublicRouter);
+
 // Protected API routes
 app.use("/api/*", authMiddleware);
 app.use("/api/*", apiRateLimit);
@@ -59,6 +65,7 @@ app.route("/api", ttsRouter);
 app.route("/api", exportRouter);
 app.route("/api/collections", collectionsRouter);
 app.route("/api", statsRouter);
+app.route("/api", emailRouter);
 
 // Global error handler. Hono's c.json overload requires a
 // ContentfulStatusCode literal, so we cast through `as` to our dynamic
