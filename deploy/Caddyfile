@@ -2,7 +2,10 @@
   handle /api/* {
     reverse_proxy api:3000
   }
+  handle /health {
+    reverse_proxy api:3000
+  }
   handle {
-    reverse_proxy web:8080
+    reverse_proxy web:80
   }
 }

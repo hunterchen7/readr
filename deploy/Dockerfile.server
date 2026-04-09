@@ -2,7 +2,7 @@ FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
-# Install dependencies
+# Install all workspace dependencies (including tsx, which we use to run TS directly).
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json packages/shared/
@@ -10,32 +10,17 @@ COPY packages/sync-engine/package.json packages/sync-engine/
 COPY apps/server/package.json apps/server/
 RUN pnpm install --frozen-lockfile --prod=false
 
-# Build
-FROM deps AS build
+# Ship the source directly — packages/shared and packages/sync-engine export
+# ./src/index.ts via their package.json "main"/"exports", so tsx resolves them
+# at import time without any pre-compile step. Matches `pnpm dev` behavior exactly.
+FROM deps AS production
 COPY tsconfig.base.json ./
 COPY packages/shared/ packages/shared/
 COPY packages/sync-engine/ packages/sync-engine/
 COPY apps/server/ apps/server/
-RUN pnpm --filter @readr/server build
-
-# Production
-FROM node:22-alpine AS production
-RUN corepack enable && corepack prepare pnpm@latest --activate
-WORKDIR /app
-
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
-COPY --from=deps /app/packages/sync-engine/node_modules ./packages/sync-engine/node_modules
-COPY --from=deps /app/apps/server/node_modules ./apps/server/node_modules
-COPY --from=build /app/apps/server/dist ./apps/server/dist
-COPY --from=build /app/packages/shared/src ./packages/shared/src
-COPY --from=build /app/packages/sync-engine/src ./packages/sync-engine/src
-COPY apps/server/package.json ./apps/server/
-COPY packages/shared/package.json ./packages/shared/
-COPY packages/sync-engine/package.json ./packages/sync-engine/
-COPY package.json pnpm-workspace.yaml ./
 
 ENV NODE_ENV=production
 EXPOSE 3000
 
-CMD ["node", "apps/server/dist/index.js"]
+WORKDIR /app/apps/server
+CMD ["pnpm", "exec", "tsx", "src/index.ts"]
