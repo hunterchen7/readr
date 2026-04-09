@@ -1,25 +1,32 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { and, gte, sql, desc } from "drizzle-orm";
 import { scopeToUser } from "../middleware/user-scope.js";
+import { badRequest } from "../lib/errors.js";
 
 type Variables = { userId: string };
+
+const sessionSchema = z.object({
+  bookId: z.string().uuid(),
+  startedAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
+  endedAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
+  durationMinutes: z.number().int().min(0).max(1440),
+  pagesRead: z.number().int().min(0).nullish(),
+  startPercentage: z.number().int().min(0).max(100).nullish(),
+  endPercentage: z.number().int().min(0).max(100).nullish(),
+});
 
 const statsRouter = new Hono<{ Variables: Variables }>();
 
 // POST /stats/sessions — log a reading session
 statsRouter.post("/stats/sessions", async (c) => {
   const userId = c.get("userId");
-  const body = await c.req.json() as {
-    bookId: string;
-    startedAt: string;
-    endedAt: string;
-    durationMinutes: number;
-    pagesRead?: number;
-    startPercentage?: number;
-    endPercentage?: number;
-  };
+  const raw = await c.req.json().catch(() => ({}));
+  const parsed = sessionSchema.safeParse(raw);
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? "Invalid session data");
+  const body = parsed.data;
 
   const [session] = await db
     .insert(schema.readingSessions)

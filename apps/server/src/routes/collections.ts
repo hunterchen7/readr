@@ -1,10 +1,28 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { eq, and, sql } from "drizzle-orm";
 import { scopeToUser } from "../middleware/user-scope.js";
 import { getPresignedDownloadUrl } from "../services/storage.js";
 import { notFound, badRequest } from "../lib/errors.js";
+
+const createCollectionSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(1000).nullish(),
+  color: z.string().max(50).nullish(),
+});
+
+const updateCollectionSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).nullish(),
+  color: z.string().max(50).nullish(),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+const addBookSchema = z.object({
+  bookId: z.string().uuid(),
+});
 
 type Variables = { userId: string };
 
@@ -53,21 +71,17 @@ collectionsRouter.get("/", async (c) => {
 // POST /collections
 collectionsRouter.post("/", async (c) => {
   const userId = c.get("userId");
-  const body = (await c.req.json()) as {
-    name?: string;
-    description?: string;
-    color?: string;
-  };
-  const name = body.name?.trim();
-  if (!name) throw badRequest("name is required");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = createCollectionSchema.safeParse(body);
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? "Invalid input");
 
   const [collection] = await db
     .insert(schema.collections)
     .values({
       userId,
-      name,
-      description: body.description ?? null,
-      color: body.color ?? null,
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      color: parsed.data.color ?? null,
     })
     .returning();
 
@@ -78,20 +92,17 @@ collectionsRouter.post("/", async (c) => {
 collectionsRouter.patch("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
-  const body = (await c.req.json()) as {
-    name?: string;
-    description?: string;
-    color?: string;
-    sortOrder?: number;
-  };
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = updateCollectionSchema.safeParse(body);
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? "Invalid input");
 
   const [updated] = await db
     .update(schema.collections)
     .set({
-      ...(body.name !== undefined && { name: body.name }),
-      ...(body.description !== undefined && { description: body.description }),
-      ...(body.color !== undefined && { color: body.color }),
-      ...(body.sortOrder !== undefined && { sortOrder: body.sortOrder }),
+      ...(parsed.data.name !== undefined && { name: parsed.data.name }),
+      ...(parsed.data.description !== undefined && { description: parsed.data.description }),
+      ...(parsed.data.color !== undefined && { color: parsed.data.color }),
+      ...(parsed.data.sortOrder !== undefined && { sortOrder: parsed.data.sortOrder }),
     })
     .where(and(eq(schema.collections.id, id), scopeToUser.collections(userId)))
     .returning();
@@ -124,14 +135,16 @@ collectionsRouter.delete("/:id", async (c) => {
 collectionsRouter.post("/:id/books", async (c) => {
   const userId = c.get("userId");
   const collectionId = c.req.param("id");
-  const body = (await c.req.json()) as { bookId: string };
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = addBookSchema.safeParse(body);
+  if (!parsed.success) throw badRequest("Valid bookId (UUID) required");
 
   await assertUserOwnsCollection(collectionId, userId);
-  await assertUserOwnsBook(body.bookId, userId);
+  await assertUserOwnsBook(parsed.data.bookId, userId);
 
   const [entry] = await db
     .insert(schema.bookCollections)
-    .values({ bookId: body.bookId, collectionId })
+    .values({ bookId: parsed.data.bookId, collectionId })
     .onConflictDoNothing()
     .returning();
 

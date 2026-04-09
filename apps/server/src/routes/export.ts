@@ -13,6 +13,9 @@ exportRouter.get("/export/annotations/:bookId", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("bookId");
   const format = c.req.query("format") ?? "markdown";
+  if (format !== "markdown" && format !== "json") {
+    return c.json({ error: "format must be 'markdown' or 'json'" }, 400);
+  }
 
   // Verify book belongs to user. Title/author come from the joined files
   // row (shared across users) with an optional per-user override.

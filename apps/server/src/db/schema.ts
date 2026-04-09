@@ -106,59 +106,80 @@ export const readingProgress = pgTable(
   ],
 );
 
-export const bookmarks = pgTable("bookmarks", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id")
-    .references(() => books.id, { onDelete: "cascade" })
-    .notNull(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  position: jsonb("position").notNull(),
-  label: text("label"),
-  createdAt: timestamp("created_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"),
-});
+export const bookmarks = pgTable(
+  "bookmarks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookId: uuid("book_id")
+      .references(() => books.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    position: jsonb("position").notNull(),
+    label: text("label"),
+    createdAt: timestamp("created_at").defaultNow(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("bookmarks_book_idx").on(table.bookId),
+    index("bookmarks_user_idx").on(table.userId),
+  ],
+);
 
-export const highlights = pgTable("highlights", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id")
-    .references(() => books.id, { onDelete: "cascade" })
-    .notNull(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  cfiRange: text("cfi_range").notNull(),
-  textContent: text("text_content"),
-  note: text("note"),
-  color: text("color").default("yellow"),
-  createdAt: timestamp("created_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"),
-});
+export const highlights = pgTable(
+  "highlights",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookId: uuid("book_id")
+      .references(() => books.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    cfiRange: text("cfi_range").notNull(),
+    textContent: text("text_content"),
+    note: text("note"),
+    color: text("color").default("yellow"),
+    createdAt: timestamp("created_at").defaultNow(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("highlights_book_idx").on(table.bookId),
+    index("highlights_user_idx").on(table.userId),
+  ],
+);
 
-export const notes = pgTable("notes", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id")
-    .references(() => books.id, { onDelete: "cascade" })
-    .notNull(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  position: jsonb("position").notNull(),
-  noteType: text("note_type").notNull(),
-  textContent: text("text_content"),
-  strokes: jsonb("strokes").$type<
-    {
-      points: { x: number; y: number; pressure: number }[];
-      color: string;
-      width: number;
-    }[]
-  >(),
-  penConfig: jsonb("pen_config").$type<{ color: string; width: number }>(),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"),
-});
+export const notes = pgTable(
+  "notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookId: uuid("book_id")
+      .references(() => books.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    position: jsonb("position").notNull(),
+    noteType: text("note_type").notNull(),
+    textContent: text("text_content"),
+    strokes: jsonb("strokes").$type<
+      {
+        points: { x: number; y: number; pressure: number }[];
+        color: string;
+        width: number;
+      }[]
+    >(),
+    penConfig: jsonb("pen_config").$type<{ color: string; width: number }>(),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("notes_book_idx").on(table.bookId),
+    index("notes_user_idx").on(table.userId),
+  ],
+);
 
 export const lookupProviders = pgTable("lookup_providers", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -173,27 +194,31 @@ export const lookupProviders = pgTable("lookup_providers", {
   isBuiltin: boolean("is_builtin").default(false),
 });
 
-export const ttsJobs = pgTable("tts_jobs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id")
-    .references(() => books.id, { onDelete: "cascade" })
-    .notNull(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  status: text("status").notNull().default("queued"),
-  engine: text("engine").default("chatterbox-turbo"),
-  chaptersTotal: integer("chapters_total"),
-  chaptersDone: integer("chapters_done").default(0),
-  voiceConfig: jsonb("voice_config").$type<{
-    voiceId?: string;
-    exaggeration?: number;
-    speed?: number;
-  }>(),
-  error: text("error"),
-  createdAt: timestamp("created_at").defaultNow(),
-  completedAt: timestamp("completed_at"),
-});
+export const ttsJobs = pgTable(
+  "tts_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookId: uuid("book_id")
+      .references(() => books.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    status: text("status").notNull().default("queued"),
+    engine: text("engine").default("chatterbox-turbo"),
+    chaptersTotal: integer("chapters_total"),
+    chaptersDone: integer("chapters_done").default(0),
+    voiceConfig: jsonb("voice_config").$type<{
+      voiceId?: string;
+      exaggeration?: number;
+      speed?: number;
+    }>(),
+    error: text("error"),
+    createdAt: timestamp("created_at").defaultNow(),
+    completedAt: timestamp("completed_at"),
+  },
+  (table) => [index("tts_jobs_user_idx").on(table.userId)],
+);
 
 export const ttsAudioChunks = pgTable("tts_audio_chunks", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -207,17 +232,21 @@ export const ttsAudioChunks = pgTable("tts_audio_chunks", {
 });
 
 // Collections / tags
-export const collections = pgTable("collections", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  name: text("name").notNull(),
-  description: text("description"),
-  color: text("color"),
-  sortOrder: integer("sort_order").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-});
+export const collections = pgTable(
+  "collections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    color: text("color"),
+    sortOrder: integer("sort_order").default(0),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [index("collections_user_idx").on(table.userId)],
+);
 
 export const bookCollections = pgTable(
   "book_collections",
@@ -237,21 +266,28 @@ export const bookCollections = pgTable(
 );
 
 // Reading stats
-export const readingSessions = pgTable("reading_sessions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  bookId: uuid("book_id")
-    .references(() => books.id, { onDelete: "cascade" })
-    .notNull(),
-  startedAt: timestamp("started_at").notNull(),
-  endedAt: timestamp("ended_at"),
-  durationMinutes: integer("duration_minutes"),
-  pagesRead: integer("pages_read"),
-  startPercentage: integer("start_percentage"),
-  endPercentage: integer("end_percentage"),
-});
+export const readingSessions = pgTable(
+  "reading_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    bookId: uuid("book_id")
+      .references(() => books.id, { onDelete: "cascade" })
+      .notNull(),
+    startedAt: timestamp("started_at").notNull(),
+    endedAt: timestamp("ended_at"),
+    durationMinutes: integer("duration_minutes"),
+    pagesRead: integer("pages_read"),
+    startPercentage: integer("start_percentage"),
+    endPercentage: integer("end_percentage"),
+  },
+  (table) => [
+    index("reading_sessions_user_idx").on(table.userId),
+    index("reading_sessions_user_started_idx").on(table.userId, table.startedAt),
+  ],
+);
 
 export const syncLog = pgTable(
   "sync_log",
