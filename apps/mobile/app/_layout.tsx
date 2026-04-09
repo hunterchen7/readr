@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useAuthStore } from "../lib/auth-store";
 import { DisplayProvider, useDisplayStore } from "../contexts/DisplayContext";
 import { useSyncStatus } from "../lib/sync-status";
@@ -38,21 +39,23 @@ export default function RootLayout() {
   const isEink = useDisplayStore((s) => s.settings.isEink);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <DisplayProvider>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(auth)" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen
-            name="reader/[bookId]"
-            options={{
-              headerShown: false,
-              animation: isEink ? "none" : "slide_from_right",
-            }}
-          />
-        </Stack>
-        <StatusBar style="auto" />
-      </DisplayProvider>
-    </QueryClientProvider>
+    <SafeAreaProvider>
+      <QueryClientProvider client={queryClient}>
+        <DisplayProvider>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="reader/[bookId]"
+              options={{
+                headerShown: false,
+                animation: isEink ? "none" : "slide_from_right",
+              }}
+            />
+          </Stack>
+          <StatusBar style="auto" />
+        </DisplayProvider>
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }

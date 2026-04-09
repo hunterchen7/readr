@@ -31,6 +31,8 @@ export function getReaderHtml(bookUrl: string): string {
     const BOOK_URL = ${JSON.stringify(bookUrl)};
     let view = null;
     let book = null;
+    // Whether tap-on-left/right turns the page. Flipped from setTheme.
+    let tapToTurn = true;
 
     function post(type, payload) {
       window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
@@ -95,6 +97,7 @@ export function getReaderHtml(bookUrl: string): string {
       root.style.setProperty('--bg', theme.bg || '#fff');
       root.style.setProperty('--fg', theme.fg || '#111');
       document.body.style.background = theme.bg || '#fff';
+      tapToTurn = theme.tapToTurn !== false;
 
       if (!view) return;
 
@@ -194,44 +197,53 @@ export function getReaderHtml(bookUrl: string): string {
           });
         });
 
-        // Text selection
-        view.addEventListener('draw-annotation', (e) => {
-          // foliate-js annotation drawing
-        });
-
         view.addEventListener('show-annotation', (e) => {
           post('showAnnotation', e.detail);
         });
 
-        // Handle text selection via the view's selection event
         view.addEventListener('external-link', (e) => {
           e.preventDefault();
           post('externalLink', { href: e.detail.href });
         });
 
-        // Custom selection handler
-        const doc = view.renderer?.document ?? view.shadowRoot;
-        if (doc) {
-          doc.addEventListener('selectionchange', () => {
-            const sel = doc.getSelection?.() ?? window.getSelection();
-            if (sel && sel.toString().trim()) {
-              post('selectionChanged', {
-                text: sel.toString(),
-                // CFI range will be computed when the user acts on the selection
-              });
-            } else {
-              post('selectionCleared', {});
-            }
-          });
-        }
+        // Each section is loaded into its own iframe document. Foliate
+        // emits a 'load' event with { doc, index } when that happens, so
+        // we attach our selection + tap handlers to the REAL book
+        // document (not the outer host) — otherwise selectionchange never
+        // fires and CFIs can't be computed.
+        view.addEventListener('load', (e) => {
+          const { doc, index } = e.detail;
+          if (!doc) return;
 
-        // Tap zones for page turns
-        view.addEventListener('click', (e) => {
-          const w = window.innerWidth;
-          const x = e.clientX;
-          if (x < w * 0.3) view.prev();
-          else if (x > w * 0.7) view.next();
-          else post('tapCenter', {});
+          // Selection → send CFI + text to RN so the custom menu can act on it.
+          doc.addEventListener('selectionchange', () => {
+            const sel = doc.getSelection();
+            if (!sel || sel.isCollapsed) {
+              post('selectionCleared', {});
+              return;
+            }
+            const text = sel.toString().trim();
+            if (!text) return;
+            let cfi = '';
+            try {
+              cfi = view.getCFI(index, sel.getRangeAt(0));
+            } catch {}
+            post('selectionChanged', { text, cfi });
+          });
+
+          // Tap zones for page turns (honors the tapToTurn theme flag).
+          doc.addEventListener('click', (ev) => {
+            // If the user is mid-selection, let the browser handle it.
+            const sel = doc.getSelection();
+            if (sel && !sel.isCollapsed) return;
+            const w = doc.documentElement.clientWidth || window.innerWidth;
+            const x = ev.clientX;
+            if (tapToTurn) {
+              if (x < w * 0.3) { view.prev(); return; }
+              if (x > w * 0.7) { view.next(); return; }
+            }
+            post('tapCenter', {});
+          });
         });
 
         // Report ready

@@ -3,6 +3,7 @@ import { View, Text, ActivityIndicator, StyleSheet, Pressable, FlatList, Alert }
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
 import { getBook } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
@@ -45,6 +46,7 @@ export default function ReaderScreen() {
   const webviewRef = useRef<WebView>(null);
 
   const display = useDisplay();
+  const insets = useSafeAreaInsets();
   const [showControls, setShowControls] = useState(false);
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
@@ -323,7 +325,12 @@ export default function ReaderScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      <View style={[styles.header, { backgroundColor: theme.bg }]}>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
+        ]}
+      >
         <Pressable onPress={() => router.back()} style={styles.headerButton}>
           <Text style={[styles.headerButtonText, { color: theme.fg }]}>←</Text>
         </Pressable>
@@ -358,7 +365,15 @@ export default function ReaderScreen() {
         mixedContentMode="always"
       />
 
-      <View style={[styles.progressBar, { backgroundColor: theme.bg }]}>
+      <View
+        style={[
+          styles.progressBar,
+          {
+            backgroundColor: theme.bg,
+            paddingBottom: Math.max(insets.bottom, 4),
+          },
+        ]}
+      >
         <View style={[styles.progressFill, { width: `${progress}%` }]} />
         <Text style={[styles.progressText, { color: theme.fg }]}>{progress}%</Text>
       </View>

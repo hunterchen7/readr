@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, Modal, FlatList, TextInput, ScrollView } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, FlatList, TextInput, ScrollView, Switch } from "react-native";
 import { useState } from "react";
 import { useDisplay } from "../../contexts/DisplayContext";
 
@@ -10,6 +10,8 @@ export interface ReaderTheme {
   fontFamily: string;
   /** Page edge margin in pixels (passed through to foliate-js renderer). */
   margin: number;
+  /** Tap left/right edges to turn pages. When false, tap anywhere opens the controls. */
+  tapToTurn: boolean;
 }
 
 export const DEFAULT_THEME: ReaderTheme = {
@@ -19,6 +21,7 @@ export const DEFAULT_THEME: ReaderTheme = {
   lineHeight: 1.6,
   fontFamily: "Georgia, serif",
   margin: 48,
+  tapToTurn: true,
 };
 
 /** Generous defaults tuned for the Supernote A5X 7.8" e-ink panel. */
@@ -29,6 +32,7 @@ export const EINK_THEME: ReaderTheme = {
   lineHeight: 1.7,
   fontFamily: "Georgia, serif",
   margin: 72,
+  tapToTurn: true,
 };
 
 const THEME_PRESETS = [
@@ -241,6 +245,19 @@ export function ReaderControls({
               </Pressable>
             </View>
 
+            <View style={styles.toggleRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.toggleLabel}>Tap to turn pages</Text>
+                <Text style={styles.toggleHint}>
+                  Tap the left/right edges of the page. Center tap opens this panel.
+                </Text>
+              </View>
+              <Switch
+                value={theme.tapToTurn}
+                onValueChange={(v) => onThemeChange({ ...theme, tapToTurn: v })}
+              />
+            </View>
+
             <Text style={styles.progressText}>{progress}% read</Text>
           </ScrollView>
         ) : tab === "toc" ? (
@@ -376,6 +393,15 @@ const styles = StyleSheet.create({
   tocList: { maxHeight: 400 },
   tocItem: { paddingVertical: 12, paddingRight: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
   tocLabel: { fontSize: 15 },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 12,
+    paddingVertical: 4,
+  },
+  toggleLabel: { fontSize: 14, color: "#111" },
+  toggleHint: { fontSize: 11, color: "#888", marginTop: 2 },
   searchPane: { paddingHorizontal: 16, paddingTop: 16, flex: 1 },
   searchRow: { flexDirection: "row", gap: 8 },
   searchInput: {

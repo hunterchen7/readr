@@ -13,6 +13,7 @@ import {
 import { router } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { listBooks, uploadBook } from "../../lib/api";
 import { getProgress } from "../../lib/local-db";
 import { useSyncStatus } from "../../lib/sync-status";
@@ -45,6 +46,7 @@ export default function LibraryScreen() {
   const syncLastAt = useSyncStatus((s) => s.lastSyncAt);
   const syncLastError = useSyncStatus((s) => s.lastError);
   const runSyncNow = useSyncStatus((s) => s.sync);
+  const insets = useSafeAreaInsets();
 
   // Hydrate each book with its locally-stored progress percentage.
   // Runs whenever the server list changes.
@@ -105,7 +107,7 @@ export default function LibraryScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.topBar}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Text style={styles.heading}>Library</Text>
         <View style={styles.topBarActions}>
           <Pressable
