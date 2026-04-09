@@ -11,39 +11,37 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { useAuthStore } from "../../lib/auth-store";
+import { generateToken } from "../../lib/api";
 
 export default function LoginScreen() {
-  const [isRegister, setIsRegister] = useState(false);
   const [serverUrl, setServerUrlLocal] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const [token, setTokenLocal] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const authStore = useAuthStore();
+
+  function handleGenerate() {
+    setTokenLocal(generateToken());
+  }
 
   async function handleSubmit() {
     if (!serverUrl.trim()) {
       setError("Server URL is required");
       return;
     }
-
+    if (!token.trim()) {
+      setError("Paste an existing token or tap Generate");
+      return;
+    }
     setError("");
     setLoading(true);
-
     try {
       await authStore.setServerUrl(serverUrl.trim());
-
-      if (isRegister) {
-        await authStore.signUp(email, password, name);
-      } else {
-        await authStore.signIn(email, password);
-      }
-
+      await authStore.saveToken(token.trim());
       router.replace("/(tabs)/library");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
+      setError(err instanceof Error ? err.message : "Sign-in failed");
     } finally {
       setLoading(false);
     }
@@ -56,14 +54,13 @@ export default function LoginScreen() {
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Readr</Text>
-        <Text style={styles.subtitle}>
-          {isRegister ? "Create Account" : "Sign In"}
-        </Text>
+        <Text style={styles.subtitle}>Sign in with a device token</Text>
 
         <View style={styles.form}>
+          <Text style={styles.label}>Server URL</Text>
           <TextInput
             style={styles.input}
-            placeholder="Server URL (e.g. https://my-server.ts.net)"
+            placeholder="https://reader.example.com"
             value={serverUrl}
             onChangeText={setServerUrlLocal}
             autoCapitalize="none"
@@ -71,31 +68,24 @@ export default function LoginScreen() {
             keyboardType="url"
           />
 
-          {isRegister ? (
-            <TextInput
-              style={styles.input}
-              placeholder="Name"
-              value={name}
-              onChangeText={setName}
-            />
-          ) : null}
-
+          <Text style={styles.label}>Device token</Text>
           <TextInput
-            style={styles.input}
-            placeholder="Email"
-            value={email}
-            onChangeText={setEmail}
+            style={[styles.input, styles.tokenInput]}
+            placeholder="Paste an existing token or tap Generate"
+            value={token}
+            onChangeText={setTokenLocal}
             autoCapitalize="none"
-            keyboardType="email-address"
+            autoCorrect={false}
+            multiline
           />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
+          <Pressable onPress={handleGenerate}>
+            <Text style={styles.generate}>Generate new token</Text>
+          </Pressable>
+          <Text style={styles.helper}>
+            Your token is a long random string kept in SecureStore. Treat it
+            like a password — anyone who has it can read and write your
+            library. Paste the same token on another device to share.
+          </Text>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -105,13 +95,7 @@ export default function LoginScreen() {
             disabled={loading}
           >
             <Text style={styles.buttonText}>
-              {loading ? "Loading..." : isRegister ? "Register" : "Sign In"}
-            </Text>
-          </Pressable>
-
-          <Pressable onPress={() => setIsRegister(!isRegister)}>
-            <Text style={styles.toggle}>
-              {isRegister ? "Already have an account? Sign In" : "Need an account? Register"}
+              {loading ? "Connecting..." : "Sign in"}
             </Text>
           </Pressable>
         </View>
@@ -125,7 +109,8 @@ const styles = StyleSheet.create({
   scroll: { flexGrow: 1, justifyContent: "center", padding: 24 },
   title: { fontSize: 32, fontWeight: "bold", textAlign: "center", marginBottom: 4 },
   subtitle: { fontSize: 16, color: "#666", textAlign: "center", marginBottom: 32 },
-  form: { gap: 12 },
+  form: { gap: 8 },
+  label: { fontSize: 13, color: "#666", marginTop: 8 },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -133,15 +118,20 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
   },
-  error: { color: "#dc2626", fontSize: 14 },
+  tokenInput: {
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+    minHeight: 60,
+  },
+  generate: { color: "#2563eb", fontSize: 14, marginTop: 4 },
+  helper: { color: "#888", fontSize: 12, marginTop: 8, lineHeight: 18 },
+  error: { color: "#dc2626", fontSize: 14, marginTop: 8 },
   button: {
     backgroundColor: "#111",
     borderRadius: 8,
     padding: 14,
     alignItems: "center",
-    marginTop: 4,
+    marginTop: 12,
   },
   buttonDisabled: { opacity: 0.5 },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  toggle: { color: "#111", textAlign: "center", marginTop: 16, fontSize: 14 },
 });

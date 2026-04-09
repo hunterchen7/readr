@@ -6,6 +6,11 @@ const envSchema = z.object({
   TTS_WORKER_URL: z.string().url().optional(),
 
   S3_ENDPOINT: z.string().url(),
+  // Public-facing endpoint used ONLY when rewriting presigned URLs that
+  // clients (mobile/web) will hit directly. In local dev this is the
+  // host alias the Android emulator can reach (http://10.0.2.2:9000);
+  // in production this is the R2 public host. If unset, S3_ENDPOINT is used.
+  S3_PUBLIC_ENDPOINT: z.string().url().optional(),
   S3_BUCKET: z.string().min(1),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
@@ -15,13 +20,7 @@ const envSchema = z.object({
     .transform((v) => v === "true")
     .default("true"),
 
-  BETTER_AUTH_SECRET: z.string().min(16),
-  BETTER_AUTH_URL: z.string().url().default("http://localhost:3000"),
   PUBLIC_URL: z.string().url().optional(),
-  BETTER_AUTH_TRUSTED_ORIGINS: z
-    .string()
-    .transform((v) => v.split(",").map((s) => s.trim()))
-    .default("http://localhost,http://localhost:8080"),
 
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),

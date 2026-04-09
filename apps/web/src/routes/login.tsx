@@ -1,6 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
-import { signIn, signUp } from "@/lib/api";
+import { useState, useEffect } from "react";
+import {
+  generateToken,
+  getServerUrl,
+  getToken,
+  registerToken,
+  setServerUrl,
+  setToken,
+} from "@/lib/api";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,
@@ -8,27 +15,38 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const [isRegister, setIsRegister] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const [serverUrlInput, setServerUrlInput] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Prefill with whatever's already in localStorage so this screen also
+  // works as "edit my connection settings".
+  useEffect(() => {
+    setServerUrlInput(getServerUrl() || window.location.origin);
+    setTokenInput(getToken());
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (!serverUrlInput.trim()) {
+      setError("Server URL is required");
+      return;
+    }
+    if (tokenInput.trim().length < 16) {
+      setError("Token must be at least 16 characters — tap Generate if needed");
+      return;
+    }
     setLoading(true);
-
     try {
-      if (isRegister) {
-        await signUp(email, password, name);
-      } else {
-        await signIn(email, password);
-      }
+      const cleanedUrl = serverUrlInput.trim().replace(/\/$/, "");
+      await registerToken(cleanedUrl, tokenInput.trim());
+      setServerUrl(cleanedUrl);
+      setToken(tokenInput.trim());
       navigate({ to: "/library" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
+      setError(err instanceof Error ? err.message : "Sign-in failed");
     } finally {
       setLoading(false);
     }
@@ -36,64 +54,64 @@ function LoginPage() {
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
-      <div className="w-full max-w-sm">
-        <h1 className="mb-6 text-center text-2xl font-bold">
-          {isRegister ? "Create Account" : "Sign In"}
-        </h1>
+      <div className="w-full max-w-md">
+        <h1 className="mb-2 text-center text-2xl font-bold">Readr</h1>
+        <p className="mb-6 text-center text-sm text-gray-600">
+          Sign in with a device token
+        </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {isRegister ? (
+          <div>
+            <label className="mb-1 block text-xs uppercase text-gray-500">
+              Server URL
+            </label>
             <input
-              type="text"
-              placeholder="Name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              type="url"
+              placeholder="https://reader.example.com"
+              value={serverUrlInput}
+              onChange={(e) => setServerUrlInput(e.target.value)}
               className="w-full rounded-md border px-3 py-2"
               required
             />
-          ) : null}
+          </div>
 
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border px-3 py-2"
-            required
-          />
+          <div>
+            <label className="mb-1 block text-xs uppercase text-gray-500">
+              Device token
+            </label>
+            <textarea
+              placeholder="Paste an existing token or tap Generate"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              className="w-full rounded-md border px-3 py-2 font-mono text-sm"
+              rows={3}
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setTokenInput(generateToken())}
+              className="mt-1 text-sm text-blue-600 hover:underline"
+            >
+              Generate new token
+            </button>
+            <p className="mt-2 text-xs text-gray-500">
+              The token is a long random string stored in your browser.
+              Treat it like a password — anyone who has it can read and
+              write your library. Paste the same token on another device
+              to share.
+            </p>
+          </div>
 
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border px-3 py-2"
-            required
-            minLength={8}
-          />
-
-          {error ? (
-            <p className="text-sm text-red-600">{error}</p>
-          ) : null}
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
           <button
             type="submit"
             disabled={loading}
             className="w-full rounded-md bg-gray-900 px-4 py-2 text-white hover:bg-gray-800 disabled:opacity-50"
           >
-            {loading ? "Loading..." : isRegister ? "Register" : "Sign In"}
+            {loading ? "Connecting..." : "Sign in"}
           </button>
         </form>
-
-        <p className="mt-4 text-center text-sm text-gray-600">
-          {isRegister ? "Already have an account?" : "Need an account?"}{" "}
-          <button
-            onClick={() => setIsRegister(!isRegister)}
-            className="font-medium text-gray-900 hover:underline"
-          >
-            {isRegister ? "Sign In" : "Register"}
-          </button>
-        </p>
       </div>
     </div>
   );

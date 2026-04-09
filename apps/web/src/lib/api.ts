@@ -1,16 +1,56 @@
 import type { Book } from "@readr/shared";
 
+const SERVER_URL_KEY = "readr:serverUrl";
+const TOKEN_KEY = "readr:token";
+
+export function getServerUrl(): string {
+  return localStorage.getItem(SERVER_URL_KEY) ?? "";
+}
+
+export function setServerUrl(url: string): void {
+  localStorage.setItem(SERVER_URL_KEY, url.replace(/\/$/, ""));
+}
+
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearAuth(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Generate a URL-safe 32+ char random token for first-time setup.
+ * Uses the web Crypto API.
+ */
+export function generateToken(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (const b of bytes) out += alphabet[b % 62];
+  return out + "_" + Date.now().toString(36);
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    credentials: "include",
-    headers: {
-      ...init?.headers,
-      ...(init?.body && !(init.body instanceof FormData)
-        ? { "Content-Type": "application/json" }
-        : {}),
-    },
-  });
+  const serverUrl = getServerUrl();
+  if (!serverUrl) throw new Error("Server URL not configured");
+  const token = getToken();
+
+  const headers: Record<string, string> = {
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (init?.body && !(init.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const res = await fetch(`${serverUrl}${path}`, { ...init, headers });
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
@@ -20,27 +60,23 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// Auth
-export function signUp(email: string, password: string, name: string) {
-  return apiFetch("/api/auth/sign-up/email", {
+/**
+ * Create or confirm the user row for a given token. Idempotent.
+ */
+export async function registerToken(
+  serverUrl: string,
+  token: string,
+): Promise<{ user: { id: string; name: string | null }; created: boolean }> {
+  const res = await fetch(`${serverUrl}/api/register`, {
     method: "POST",
-    body: JSON.stringify({ email, password, name }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
   });
-}
-
-export function signIn(email: string, password: string) {
-  return apiFetch("/api/auth/sign-in/email", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-}
-
-export function signOut() {
-  return apiFetch("/api/auth/sign-out", { method: "POST" });
-}
-
-export function getSession() {
-  return apiFetch<{ session: unknown; user: unknown }>("/api/auth/get-session");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? `Register failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 // Books

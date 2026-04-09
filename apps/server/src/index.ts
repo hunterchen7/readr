@@ -4,9 +4,9 @@ import { logger } from "hono/logger";
 import { serve } from "@hono/node-server";
 import { env } from "./lib/env.js";
 import { AppError } from "./lib/errors.js";
-import { auth } from "./routes/auth.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { apiRateLimit } from "./middleware/rate-limit.js";
+import registerRouter from "./routes/register.js";
 import booksRouter from "./routes/books.js";
 import annotationsRouter from "./routes/annotations.js";
 import progressRouter from "./routes/progress.js";
@@ -21,12 +21,16 @@ const app = new Hono();
 // Request logging
 app.use("*", logger());
 
-// CORS
+// CORS — wildcard is fine because the client sends a bearer token, not a
+// cookie, so there's no ambient authority to worry about. Credentials
+// are no longer needed.
 app.use(
   "/api/*",
   cors({
-    origin: env.BETTER_AUTH_TRUSTED_ORIGINS,
-    credentials: true,
+    origin: (origin) => origin ?? "*",
+    allowHeaders: ["Authorization", "Content-Type"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    credentials: false,
   }),
 );
 
@@ -39,8 +43,9 @@ app.get("/health", (c) =>
   }),
 );
 
-// Auth routes (handled by better-auth)
-app.on(["POST", "GET"], "/api/auth/**", (c) => auth.handler(c.req.raw));
+// Public registration endpoint — mobile/web POSTs a freshly-generated
+// token here on first launch to create a user row. Idempotent.
+app.route("/api", registerRouter);
 
 // Protected API routes
 app.use("/api/*", authMiddleware);

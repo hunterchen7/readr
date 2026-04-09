@@ -13,59 +13,27 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
+  // The id IS the bearer token — a long random string generated on the
+  // client on first launch. There are no passwords, no sessions.
   id: text("id").primaryKey(),
-  email: text("email").unique().notNull(),
+  // Optional metadata the user can set (shown on the Settings screen).
   name: text("name"),
-  emailVerified: boolean("email_verified").default(false),
-  image: text("image"),
   storageQuotaMb: integer("storage_quota_mb").default(1024),
   storageUsedMb: integer("storage_used_mb").default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// better-auth session and account tables
-export const sessions = pgTable("sessions", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  token: text("token").unique().notNull(),
-  expiresAt: timestamp("expires_at").notNull(),
-  ipAddress: text("ip_address"),
-  userAgent: text("user_agent"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-export const accounts = pgTable("accounts", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  accountId: text("account_id").notNull(),
-  providerId: text("provider_id").notNull(),
-  accessToken: text("access_token"),
-  refreshToken: text("refresh_token"),
-  accessTokenExpiresAt: timestamp("access_token_expires_at"),
-  refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
-  scope: text("scope"),
-  idToken: text("id_token"),
-  password: text("password"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-export const verifications = pgTable("verifications", {
-  id: text("id").primaryKey(),
-  identifier: text("identifier").notNull(),
-  value: text("value").notNull(),
-  expiresAt: timestamp("expires_at").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Content-addressable file storage
+// Content-addressable file storage.
+//
+// A `files` row represents one physical EPUB/PDF identified by its content
+// hash. Metadata (title/author/language/cover) is extracted once on first
+// upload and stored here so every user that uploads the same file shares
+// the same metadata — no duplication, no inconsistency.
+//
+// The hash is SHA-256. When the user referred to "md5", they meant
+// "content hash" colloquially; SHA-256 is stronger and already plumbed
+// through, so we stick with it.
 export const files = pgTable("files", {
   id: uuid("id").primaryKey().defaultRandom(),
   sha256: text("sha256").unique().notNull(),
@@ -74,9 +42,20 @@ export const files = pgTable("files", {
   size: bigint("size", { mode: "number" }).notNull(),
   format: text("format").notNull(), // 'epub' | 'pdf'
   refCount: integer("ref_count").default(1),
+
+  // Extracted metadata — shared across users.
+  title: text("title"),
+  author: text("author"),
+  language: text("language"),
+  totalChapters: integer("total_chapters"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// A `books` row is a user's reference to a file. All user-specific state
+// (progress, highlights, notes, collections) hangs off the book id. User-
+// facing title/author come from the joined files row.
 export const books = pgTable(
   "books",
   {
@@ -87,11 +66,10 @@ export const books = pgTable(
     fileId: uuid("file_id")
       .references(() => files.id)
       .notNull(),
-    title: text("title"),
-    author: text("author"),
-    language: text("language"),
-    totalChapters: integer("total_chapters"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    // Optional per-user overrides. Null = inherit from files.*.
+    // Useful if the user wants to rename a book in their own library.
+    titleOverride: text("title_override"),
+    authorOverride: text("author_override"),
     uploadedAt: timestamp("uploaded_at").defaultNow(),
   },
   (table) => [

@@ -14,24 +14,27 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@readr/shared": "workspace:*",
-    "@readr/sync-engine": "workspace:*",
-    "hono": "^4",
-    "@hono/node-server": "^1",
-    "better-auth": "^1",
-    "drizzle-orm": "^0.41",
-    "postgres": "^3",
     "@aws-sdk/client-s3": "^3",
     "@aws-sdk/s3-request-presigner": "^3",
-    "zod": "^3",
-    "sharp": "^0.33",
+    "@hono/node-server": "^1",
+    "@readr/shared": "workspace:*",
+    "@readr/sync-engine": "workspace:*",
     "bullmq": "^5",
-    "ioredis": "^5"
+    "drizzle-orm": "^0.41",
+    "fast-xml-parser": "^5.5.11",
+    "hono": "^4",
+    "ioredis": "^5",
+    "jszip": "^3.10.1",
+    "pdf-parse": "^2.4.5",
+    "postgres": "^3",
+    "sharp": "^0.33",
+    "zod": "^3"
   },
   "devDependencies": {
+    "@types/node": "^22",
+    "@types/pdf-parse": "^1.1.5",
     "drizzle-kit": "^0.31",
     "tsx": "^4",
-    "typescript": "~5.6",
-    "@types/node": "^22"
+    "typescript": "~5.6"
   }
 }

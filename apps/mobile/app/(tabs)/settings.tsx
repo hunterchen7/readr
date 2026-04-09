@@ -1,10 +1,10 @@
-import { View, Text, Pressable, StyleSheet, Alert, Switch } from "react-native";
+import { View, Text, Pressable, StyleSheet, Alert, Switch, Platform } from "react-native";
 import { router } from "expo-router";
 import { useAuthStore } from "../../lib/auth-store";
 import { useDisplayStore } from "../../contexts/DisplayContext";
 
 export default function SettingsScreen() {
-  const { serverUrl, signOut } = useAuthStore();
+  const { serverUrl, token, signOut } = useAuthStore();
   const { settings, toggleEink } = useDisplayStore();
 
   async function handleSignOut() {
@@ -26,6 +26,16 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.label}>Server</Text>
         <Text style={styles.value}>{serverUrl || "Not configured"}</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Device token</Text>
+        <Text style={styles.token} selectable>
+          {token || "Not configured"}
+        </Text>
+        <Text style={styles.hint}>
+          Paste this on another device to share your library.
+        </Text>
       </View>
 
       <View style={styles.section}>
@@ -64,4 +74,9 @@ const styles = StyleSheet.create({
     marginTop: "auto",
   },
   signOutText: { color: "#dc2626", fontSize: 16, fontWeight: "600" },
+  token: {
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+    fontSize: 13,
+    color: "#333",
+  },
 });

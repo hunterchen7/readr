@@ -1,7 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import type { SyncLogEntry, SyncConflict } from "@readr/shared";
 import { deduplicateQueue } from "@readr/sync-engine";
-import { getServerUrl } from "./api";
+import { getServerUrl, getToken } from "./api";
 import { getSyncQueue, clearSyncQueue, getDb } from "./local-db";
 
 const LAST_SYNC_KEY = "lastSyncTimestamp";
@@ -31,7 +31,8 @@ interface PushResponse {
  */
 async function pullChanges(): Promise<PullResponse | null> {
   const serverUrl = await getServerUrl();
-  if (!serverUrl) return null;
+  const token = await getToken();
+  if (!serverUrl || !token) return null;
 
   const since = await getLastSyncTimestamp();
   const deviceId = "mobile-default";
@@ -39,7 +40,7 @@ async function pullChanges(): Promise<PullResponse | null> {
 
   try {
     const res = await fetch(`${serverUrl}/api/sync/changes?${params}`, {
-      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) return null;
     return res.json();
@@ -53,13 +54,16 @@ async function pullChanges(): Promise<PullResponse | null> {
  */
 async function pushChanges(changes: SyncLogEntry[]): Promise<PushResponse | null> {
   const serverUrl = await getServerUrl();
-  if (!serverUrl) return null;
+  const token = await getToken();
+  if (!serverUrl || !token) return null;
 
   try {
     const res = await fetch(`${serverUrl}/api/sync/push`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ changes }),
     });
     if (!res.ok) return null;

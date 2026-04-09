@@ -5,50 +5,51 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
   serverUrl: string;
+  token: string;
   setServerUrl: (url: string) => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, name: string) => Promise<void>;
+  /** Store a token (existing or freshly generated) and register it server-side. */
+  saveToken: (token: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Called on app launch. Populates state from SecureStore + probes the server. */
   checkSession: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: false,
   isLoading: true,
   serverUrl: "",
+  token: "",
 
   setServerUrl: async (url: string) => {
-    await api.setServerUrl(url.replace(/\/$/, ""));
-    set({ serverUrl: url });
+    const cleaned = url.replace(/\/$/, "");
+    await api.setServerUrl(cleaned);
+    set({ serverUrl: cleaned });
   },
 
-  signIn: async (email: string, password: string) => {
-    await api.signIn(email, password);
-    set({ isAuthenticated: true });
-  },
-
-  signUp: async (email: string, password: string, name: string) => {
-    await api.signUp(email, password, name);
-    set({ isAuthenticated: true });
+  saveToken: async (token: string) => {
+    const { serverUrl } = get();
+    if (!serverUrl) throw new Error("Set the server URL first");
+    if (token.length < 16) throw new Error("Token must be at least 16 characters");
+    // Register server-side (idempotent). Sets the user row if missing.
+    await api.registerToken(serverUrl, token);
+    await api.setToken(token);
+    set({ token, isAuthenticated: true });
   },
 
   signOut: async () => {
-    await api.signOut();
-    set({ isAuthenticated: false });
+    await api.clearToken();
+    set({ isAuthenticated: false, token: "" });
   },
 
   checkSession: async () => {
-    try {
-      const serverUrl = await api.getServerUrl();
-      if (!serverUrl) {
-        set({ isAuthenticated: false, isLoading: false, serverUrl: "" });
-        return;
-      }
-      set({ serverUrl });
-      await api.getSession();
-      set({ isAuthenticated: true, isLoading: false });
-    } catch {
+    const serverUrl = (await api.getServerUrl()) ?? "";
+    const token = (await api.getToken()) ?? "";
+    set({ serverUrl, token });
+    if (!serverUrl || !token) {
       set({ isAuthenticated: false, isLoading: false });
+      return;
     }
+    const ok = await api.checkToken();
+    set({ isAuthenticated: ok, isLoading: false });
   },
 }));
