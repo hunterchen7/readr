@@ -49,6 +49,9 @@ interface TocItem {
 export default function ReaderScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const webviewRef = useRef<WebView>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const display = useDisplay();
   const insets = useSafeAreaInsets();
@@ -342,8 +345,9 @@ export default function ReaderScreen() {
           }
           ttsSpeak(text, {
             onDone: () => {
+              if (!mountedRef.current) return;
               sendToWebView("nextPage", {});
-              setTimeout(requestPageText, 250);
+              setTimeout(() => { if (mountedRef.current) requestPageText(); }, 250);
             },
           });
           break;
@@ -358,22 +362,30 @@ export default function ReaderScreen() {
 
   async function handleHighlight(color: HighlightColor) {
     if (!bookId || !selectionCfi) return;
-    const newHighlight = await createHighlight(
-      bookId,
-      selectionCfi,
-      color,
-      selectedText,
-    );
-    setHighlights((prev) => [newHighlight, ...prev]);
-    sendToWebView("addHighlight", { cfi: selectionCfi, color });
+    try {
+      const newHighlight = await createHighlight(
+        bookId,
+        selectionCfi,
+        color,
+        selectedText,
+      );
+      setHighlights((prev) => [newHighlight, ...prev]);
+      sendToWebView("addHighlight", { cfi: selectionCfi, color });
+    } catch {
+      Alert.alert("Error", "Failed to save highlight");
+    }
     setContextMenuVisible(false);
   }
 
   async function handleBookmarkFromMenu() {
     if (!bookId || !currentPosition) return;
-    const label = selectedText.slice(0, 60) || undefined;
-    const bm = await createBookmark(bookId, currentPosition, label);
-    setBookmarks((prev) => [bm, ...prev]);
+    try {
+      const label = selectedText.slice(0, 60) || undefined;
+      const bm = await createBookmark(bookId, currentPosition, label);
+      setBookmarks((prev) => [bm, ...prev]);
+    } catch {
+      Alert.alert("Error", "Failed to save bookmark");
+    }
     setContextMenuVisible(false);
   }
 
@@ -399,29 +411,45 @@ export default function ReaderScreen() {
 
   async function handleSaveTypedNote(text: string) {
     if (!bookId || !currentPosition) return;
-    const n = await createNote(bookId, currentPosition, "typed", text);
-    setNotes((prev) => [n, ...prev]);
-    setShowTypedNote(false);
+    try {
+      const n = await createNote(bookId, currentPosition, "typed", text);
+      setNotes((prev) => [n, ...prev]);
+      setShowTypedNote(false);
+    } catch {
+      Alert.alert("Error", "Failed to save note");
+    }
   }
 
   async function handleSaveHandwriting(strokes: import("@readr/shared").Stroke[], penConfig: import("@readr/shared").PenConfig) {
     if (!bookId || !currentPosition) return;
-    const n = await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
-    setNotes((prev) => [n, ...prev]);
-    setShowHandwriting(false);
+    try {
+      const n = await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
+      setNotes((prev) => [n, ...prev]);
+      setShowHandwriting(false);
+    } catch {
+      Alert.alert("Error", "Failed to save note");
+    }
   }
 
   // ─── Bookmark handlers ────────────────────────────────────────────
 
   async function handleCreateBookmark() {
     if (!bookId || !currentPosition) return;
-    const bm = await createBookmark(bookId, currentPosition);
-    setBookmarks((prev) => [bm, ...prev]);
+    try {
+      const bm = await createBookmark(bookId, currentPosition);
+      setBookmarks((prev) => [bm, ...prev]);
+    } catch {
+      Alert.alert("Error", "Failed to save bookmark");
+    }
   }
 
   async function handleDeleteBookmark(bmId: string) {
-    await deleteBookmark(bmId);
-    setBookmarks((prev) => prev.filter((b) => b.id !== bmId));
+    try {
+      await deleteBookmark(bmId);
+      setBookmarks((prev) => prev.filter((b) => b.id !== bmId));
+    } catch {
+      Alert.alert("Error", "Failed to delete bookmark");
+    }
   }
 
   function handleGoToBookmark(bm: Bookmark) {
