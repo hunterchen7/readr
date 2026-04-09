@@ -294,6 +294,7 @@ export default function LibraryScreen() {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filterRow}
+        style={{ flexGrow: 0 }}
       >
         <Pressable style={styles.sortPill} onPress={cycleSort}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
