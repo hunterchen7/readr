@@ -27,7 +27,7 @@
     "expo-secure-store": "~15",
     "expo-sharing": "^55.0.17",
     "expo-speech": "~13",
-    "expo-sqlite": "~16",
+    "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3",
     "lucide-react-native": "^1.8.0",
     "react": "19.1.0",
