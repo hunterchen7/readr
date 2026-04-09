@@ -21,6 +21,11 @@ function UploadPage() {
         setError("Only .epub and .pdf files are supported");
         return;
       }
+      const MAX_SIZE_MB = 500;
+      if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+        setError(`File is too large (max ${MAX_SIZE_MB} MB)`);
+        return;
+      }
 
       setError("");
       setUploading(true);

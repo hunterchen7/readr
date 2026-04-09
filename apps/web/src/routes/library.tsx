@@ -17,6 +17,7 @@ function LibraryPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteBook,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
+    onError: (err: Error) => alert(`Failed to delete: ${err.message}`),
   });
 
   if (isLoading) return <p className="text-gray-500">Loading library...</p>;
@@ -50,6 +51,7 @@ function LibraryPage() {
               key={book.id}
               book={book}
               onDelete={() => deleteMutation.mutate(book.id)}
+              isDeleting={deleteMutation.isPending && deleteMutation.variables === book.id}
             />
           ))}
         </div>
@@ -58,9 +60,17 @@ function LibraryPage() {
   );
 }
 
-function BookCard({ book, onDelete }: { book: Book; onDelete: () => void }) {
+function BookCard({
+  book,
+  onDelete,
+  isDeleting,
+}: {
+  book: Book;
+  onDelete: () => void;
+  isDeleting: boolean;
+}) {
   return (
-    <div className="group relative overflow-hidden rounded-lg border bg-white">
+    <div className={`group relative overflow-hidden rounded-lg border bg-white ${isDeleting ? "opacity-50 pointer-events-none" : ""}`}>
       <Link to="/book/$bookId" params={{ bookId: book.id }} className="block">
         <div className="aspect-[2/3] bg-gray-100">
           {book.coverUrl ? (
@@ -92,9 +102,11 @@ function BookCard({ book, onDelete }: { book: Book; onDelete: () => void }) {
               e.preventDefault();
               if (confirm("Delete this book?")) onDelete();
             }}
-            className="text-xs text-red-400 opacity-0 hover:text-red-600 group-hover:opacity-100"
+            disabled={isDeleting}
+            className="text-xs text-red-400 opacity-0 hover:text-red-600 group-hover:opacity-100 disabled:opacity-50"
+            aria-label={`Delete ${book.title ?? "book"}`}
           >
-            Delete
+            {isDeleting ? "Deleting..." : "Delete"}
           </button>
         </div>
       </div>

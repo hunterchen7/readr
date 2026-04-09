@@ -12,7 +12,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 function RootLayout() {
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="border-b bg-white px-6 py-3">
+      <nav aria-label="Main navigation" className="border-b bg-white px-6 py-3">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <Link to="/" className="text-xl font-bold text-gray-900">
             Readr

@@ -65,10 +65,11 @@ function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1 block text-xs uppercase text-gray-500">
+            <label htmlFor="server-url" className="mb-1 block text-xs uppercase text-gray-500">
               Server URL
             </label>
             <input
+              id="server-url"
               type="url"
               placeholder="https://reader.example.com"
               value={serverUrlInput}
@@ -79,10 +80,11 @@ function LoginPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-xs uppercase text-gray-500">
+            <label htmlFor="device-token" className="mb-1 block text-xs uppercase text-gray-500">
               Device token
             </label>
             <textarea
+              id="device-token"
               placeholder="Paste an existing token or tap Generate"
               value={tokenInput}
               onChange={(e) => setTokenInput(e.target.value)}
