@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite";
+import * as SecureStore from "expo-secure-store";
 import type {
   BookPosition,
   ReadingProgress,
@@ -106,9 +107,22 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+let cachedDeviceId: string | null = null;
+
 function getDeviceId(): string {
-  // Simple device identifier — will be improved with expo-device later
-  return "mobile-default";
+  if (cachedDeviceId) return cachedDeviceId;
+  // Synchronous — read from cache. The async init sets it on app start.
+  return cachedDeviceId ?? "mobile-default";
+}
+
+/** Call once on app startup to load or generate a persistent device ID. */
+export async function initDeviceId(): Promise<void> {
+  let id = await SecureStore.getItemAsync("deviceId");
+  if (!id) {
+    id = `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    await SecureStore.setItemAsync("deviceId", id);
+  }
+  cachedDeviceId = id;
 }
 
 // ─── Reading Progress ────────────────────────────────────────────────────

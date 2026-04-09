@@ -7,6 +7,7 @@ import { useAuthStore } from "../lib/auth-store";
 import { DisplayProvider, useDisplayStore } from "../contexts/DisplayContext";
 import { useSyncStatus } from "../lib/sync-status";
 import { useLibraryPrefs } from "../lib/library-prefs";
+import { initDeviceId } from "../lib/local-db";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,6 +25,7 @@ export default function RootLayout() {
 
   const hydrateLibraryPrefs = useLibraryPrefs((s) => s.hydrate);
   useEffect(() => {
+    initDeviceId().catch(() => {});
     checkSession();
     hydrateLibraryPrefs();
   }, [checkSession, hydrateLibraryPrefs]);

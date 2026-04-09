@@ -2,6 +2,8 @@ import { createRootRouteWithContext, Outlet, Link, useLocation, useNavigate } fr
 import { useState } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { getToken, getServerUrl, clearAuth } from "@/lib/api";
+import { ToastProvider } from "@/components/Toast";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -27,10 +29,17 @@ function RootLayout() {
 
   // Reader page gets no chrome — full screen
   if (isReaderPage && isAuthed) {
-    return <Outlet />;
+    return (
+      <ToastProvider>
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
+      </ToastProvider>
+    );
   }
 
   return (
+    <ToastProvider>
     <div className="min-h-screen bg-gray-50">
       {!isLoginPage && isAuthed ? (
         <nav aria-label="Main navigation" className="border-b bg-white px-6 py-3">
@@ -88,8 +97,11 @@ function RootLayout() {
         </nav>
       ) : null}
       <main className={isLoginPage ? "" : "mx-auto max-w-6xl px-6 py-8"}>
-        <Outlet />
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
+    </ToastProvider>
   );
 }

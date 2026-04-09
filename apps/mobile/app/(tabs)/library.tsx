@@ -12,6 +12,7 @@ import {
   TextInput,
   ScrollView,
   Platform,
+  useWindowDimensions,
 } from "react-native";
 import { router } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -71,6 +72,9 @@ export default function LibraryScreen() {
   const setSort = useLibraryPrefs((s) => s.setSort);
   const setFilter = useLibraryPrefs((s) => s.setFilter);
   const setView = useLibraryPrefs((s) => s.setView);
+
+  const { width: screenWidth } = useWindowDimensions();
+  const numColumns = Math.max(2, Math.floor(screenWidth / 180));
 
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -351,11 +355,11 @@ export default function LibraryScreen() {
       ) : view === "grid" ? (
         <FlatList
           data={visibleBooks}
-          numColumns={3}
+          numColumns={numColumns}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={styles.row}
-          key="grid"
+          key={`grid-${numColumns}`}
           refreshControl={
             <RefreshControl
               refreshing={isRefetching}
@@ -560,7 +564,7 @@ const styles = StyleSheet.create({
   // Grid view
   grid: { padding: 12 },
   row: { gap: 12 },
-  card: { flex: 1, maxWidth: "33%", marginBottom: 16 },
+  card: { flex: 1, marginBottom: 16 },
   cover: {
     aspectRatio: 2 / 3,
     backgroundColor: "#f3f4f6",

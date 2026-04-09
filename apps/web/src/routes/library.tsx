@@ -2,6 +2,7 @@ import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listBooks, deleteBook, uploadBook, getToken } from "@/lib/api";
+import { useToast } from "@/components/Toast";
 import type { Book } from "@readr/shared";
 
 type BookWithProgress = Book & { progressPct?: number };
@@ -13,6 +14,7 @@ export const Route = createFileRoute("/library")({
 function LibraryPage() {
   if (!getToken()) return <Navigate to="/login" />;
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -24,17 +26,17 @@ function LibraryPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteBook,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
-    onError: (err: Error) => alert(`Failed to delete: ${err.message}`),
+    onError: (err: Error) => toast(err.message, "error"),
   });
 
   const handleFile = useCallback(async (file: File) => {
     const ext = file.name.split(".").pop()?.toLowerCase();
     if (ext !== "epub" && ext !== "pdf") {
-      alert("Only .epub and .pdf files are supported");
+      toast("Only .epub and .pdf files are supported", "error");
       return;
     }
     if (file.size > 500 * 1024 * 1024) {
-      alert("File is too large (max 500 MB)");
+      toast("File is too large (max 500 MB)", "error");
       return;
     }
     setUploading(true);
@@ -42,7 +44,7 @@ function LibraryPage() {
       await uploadBook(file);
       await queryClient.invalidateQueries({ queryKey: ["books"] });
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Upload failed");
+      toast(err instanceof Error ? err.message : "Upload failed", "error");
     } finally {
       setUploading(false);
     }

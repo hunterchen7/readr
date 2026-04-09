@@ -14,6 +14,7 @@ import { router } from "expo-router";
 import Constants from "expo-constants";
 import { useAuthStore } from "../../lib/auth-store";
 import * as api from "../../lib/api";
+import { colors, spacing, fontSize } from "../../lib/theme";
 
 const DEFAULT_SERVER_URL =
   (Constants.expoConfig?.extra?.defaultServerUrl as string | undefined) ?? "";
@@ -160,17 +161,17 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  scroll: { flexGrow: 1, justifyContent: "center", padding: 24 },
-  title: { fontSize: 28, fontWeight: "bold", textAlign: "center", marginBottom: 24 },
-  form: { gap: 12 },
-  label: { fontSize: 13, color: "#666" },
+  container: { flex: 1, backgroundColor: colors.background },
+  scroll: { flexGrow: 1, justifyContent: "center", padding: spacing.xxl },
+  title: { fontSize: fontSize.title, fontWeight: "bold", textAlign: "center", marginBottom: spacing.xxl },
+  form: { gap: spacing.md },
+  label: { fontSize: fontSize.sm, color: colors.textSecondary },
   input: {
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: colors.border,
     borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
+    padding: spacing.md,
+    fontSize: fontSize.lg,
   },
   codeInput: {
     fontSize: 24,
@@ -178,16 +179,16 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontWeight: "600",
   },
-  helper: { color: "#666", fontSize: 14, lineHeight: 20 },
-  error: { color: "#dc2626", fontSize: 14 },
+  helper: { color: colors.textSecondary, fontSize: fontSize.md, lineHeight: 20 },
+  error: { color: colors.error, fontSize: fontSize.md },
   button: {
-    backgroundColor: "#111",
+    backgroundColor: colors.primary,
     borderRadius: 8,
-    padding: 14,
+    padding: fontSize.md,
     alignItems: "center",
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   buttonDisabled: { opacity: 0.5 },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  backLink: { color: "#666", fontSize: 14, textAlign: "center", marginTop: 8 },
+  buttonText: { color: colors.primaryFg, fontSize: fontSize.lg, fontWeight: "600" },
+  backLink: { color: colors.textSecondary, fontSize: fontSize.md, textAlign: "center", marginTop: spacing.sm },
 });
