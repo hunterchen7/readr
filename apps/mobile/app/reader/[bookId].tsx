@@ -92,13 +92,14 @@ export default function ReaderScreen() {
   const [searchLoading, setSearchLoading] = useState(false);
 
   // Apply the theme's brightness override while the reader is mounted.
-  // null = honor the system setting; we restore the device's brightness
-  // on unmount either way.
+  // Only uses brightness if permission is already granted — never requests
+  // on reader open (requestPermissionsAsync navigates to system settings
+  // on Android, breaking the reader flow).
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const { status } = await Brightness.requestPermissionsAsync();
+        const { status } = await Brightness.getPermissionsAsync();
         if (!active || status !== "granted") return;
         if (theme.brightness != null) {
           await Brightness.setBrightnessAsync(theme.brightness);
@@ -280,6 +281,12 @@ export default function ReaderScreen() {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
       switch (msg.type) {
+        case "debug":
+          console.log("[WebView]", msg.payload?.msg);
+          break;
+        case "error":
+          console.error("[WebView Error]", msg.payload?.message);
+          break;
         case "ready":
           sendToWebView("setTheme", themeForWebView);
           // Replay saved highlights so they're visible when reopening.
