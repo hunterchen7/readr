@@ -33,6 +33,10 @@ export function getReaderHtml(bookUrl: string): string {
     let book = null;
     // Whether tap-on-left/right turns the page. Flipped from setTheme.
     let tapToTurn = true;
+    // The most recently-loaded section document (foliate loads each
+    // EPUB section into its own iframe). Used by the getPageText
+    // handler to scrape text for TTS playback.
+    let currentSectionDoc = null;
 
     function post(type, payload) {
       window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
@@ -64,6 +68,13 @@ export function getReaderHtml(bookUrl: string): string {
         case 'clearSearch':
           if (view.clearSearch) view.clearSearch();
           break;
+        case 'getPageText': {
+          // Return the visible section's plain text for TTS. We fall
+          // back to an empty string if the section hasn't loaded yet.
+          const text = currentSectionDoc?.body?.innerText?.trim() ?? '';
+          post('pageText', { text });
+          break;
+        }
         case 'addHighlight': {
           // RN sends either { cfi } (live selection) or { cfiRange } (replay).
           const cfi = data.payload.cfi || data.payload.cfiRange;
@@ -222,6 +233,13 @@ export function getReaderHtml(bookUrl: string): string {
 
         view.addEventListener('show-annotation', (e) => {
           post('showAnnotation', e.detail);
+        });
+
+        // Remember the latest loaded section doc so the TTS handler
+        // can scrape its text. Foliate fires 'load' with { doc, index }
+        // for every newly-loaded section.
+        view.addEventListener('load', (e) => {
+          if (e.detail?.doc) currentSectionDoc = e.detail.doc;
         });
 
         // Handle text selection via the view's selection event

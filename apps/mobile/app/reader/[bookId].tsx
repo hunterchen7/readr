@@ -18,6 +18,8 @@ import { useDisplay } from "../../contexts/DisplayContext";
 import { ContextMenu } from "../../components/reader/ContextMenu";
 import { NotesPanel } from "../../components/reader/NotesPanel";
 import { GotoDialog } from "../../components/reader/GotoDialog";
+import { TtsBar } from "../../components/reader/TtsBar";
+import { useTtsStore } from "../../lib/tts-store";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
 import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
 import {
@@ -116,6 +118,12 @@ export default function ReaderScreen() {
   const [currentPage, setCurrentPage] = useState<number | null>(null);
   const [totalPages, setTotalPages] = useState<number | null>(null);
   const [showGotoDialog, setShowGotoDialog] = useState(false);
+
+  // TTS — state lives in the zustand store; handlers below (after
+  // sendToWebView is declared).
+  const ttsState = useTtsStore((s) => s.state);
+  const ttsSpeak = useTtsStore((s) => s.speak);
+  const ttsStop = useTtsStore((s) => s.stop);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],
@@ -216,6 +224,21 @@ export default function ReaderScreen() {
     sendToWebView("goToLocation", { cfi });
   }
 
+  // TTS flow: tap 🔊 → request text → speak → on done, advance a
+  // page → request next page text → speak → ...
+  function requestPageText() {
+    sendToWebView("getPageText", {});
+  }
+  function handleStartTts() {
+    requestPageText();
+  }
+  function handleStopTts() {
+    ttsStop();
+  }
+  function handleTtsAdvance() {
+    sendToWebView("nextPage", {});
+  }
+
   function handleMessage(event: { nativeEvent: { data: string } }) {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
@@ -273,6 +296,24 @@ export default function ReaderScreen() {
           setSearchResults(msg.payload.results ?? []);
           setSearchLoading(false);
           break;
+        case "pageText": {
+          // TTS: speak what we got back from the WebView. When the
+          // speech runs dry, auto-advance a page and request the
+          // next chunk of text — gives a "read the whole book"
+          // experience with no extra UI state.
+          const text = msg.payload.text ?? "";
+          if (!text) {
+            ttsStop();
+            break;
+          }
+          ttsSpeak(text, {
+            onDone: () => {
+              sendToWebView("nextPage", {});
+              setTimeout(requestPageText, 250);
+            },
+          });
+          break;
+        }
       }
     } catch {
       // Ignore non-JSON messages
@@ -421,6 +462,14 @@ export default function ReaderScreen() {
           <Pressable onPress={() => setShowNotesPanel(true)} style={styles.headerButton}>
             <Text style={[styles.headerButtonText, { color: theme.fg }]}>📝</Text>
           </Pressable>
+          <Pressable
+            onPress={ttsState === "idle" ? handleStartTts : handleStopTts}
+            style={styles.headerButton}
+          >
+            <Text style={[styles.headerButtonText, { color: theme.fg }]}>
+              {ttsState === "idle" ? "🔊" : "🔇"}
+            </Text>
+          </Pressable>
           <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
             <Text style={[styles.headerButtonText, { color: theme.fg }]}>⚙</Text>
           </Pressable>
@@ -527,6 +576,12 @@ export default function ReaderScreen() {
         onGoToFraction={(frac) => {
           sendToWebView("goToLocation", { fraction: frac });
         }}
+      />
+
+      <TtsBar
+        onRequestPageText={requestPageText}
+        onNextPage={handleTtsAdvance}
+        onStop={handleStopTts}
       />
 
       {/* Bookmarks panel */}
