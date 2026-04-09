@@ -406,6 +406,9 @@ function getEpubReaderHtml(bookUrl: string): string {
         await el.open(book);
         view = el;
 
+        // Navigate to the first section so content renders immediately
+        try { await el.goTo(book.toc?.[0]?.href ?? book.sections?.[0]?.id ?? 0); } catch {};
+
         loading.style.display = 'none';
         viewer.style.display = 'block';
 

@@ -218,6 +218,10 @@ export function getReaderHtml(bookUrl: string): string {
 
         await view.open(book);
 
+        // Navigate to the first section so content renders immediately.
+        // Without this, foliate shows a blank page until the user navigates.
+        try { await view.goTo(book.toc?.[0]?.href ?? book.sections?.[0]?.id ?? 0); } catch {};
+
         // Relay location changes. pageItem carries foliate's computed
         // {current, total} page count across the whole book — surface it
         // so the reader can render "12 / 345".
