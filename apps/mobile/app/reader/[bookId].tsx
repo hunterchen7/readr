@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
-import { ArrowLeft, Bookmark as BookmarkIcon, List, StickyNote, Volume2, VolumeX, Settings } from "lucide-react-native";
+import { ArrowLeft, Bookmark as BookmarkIcon, BookOpen, List, StickyNote, Volume2, VolumeX, Settings } from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -57,6 +57,7 @@ export default function ReaderScreen() {
   const display = useDisplay();
   const insets = useSafeAreaInsets();
   const [showControls, setShowControls] = useState(false);
+  const [showHeader, setShowHeader] = useState(true);
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
   );
@@ -308,9 +309,13 @@ export default function ReaderScreen() {
             sendToWebView("goToLocation", { cfi: currentPosition.cfi });
           }
           break;
+        case "tapCenter":
+          setShowHeader((h) => !h);
+          break;
         case "progressUpdated": {
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
+          setShowHeader(false);
           const position: BookPosition = {
             percentage: pct,
             cfi: msg.payload.cfi,
@@ -505,6 +510,7 @@ export default function ReaderScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
+      {showHeader ? (
       <View
         style={[
           styles.header,
@@ -518,26 +524,18 @@ export default function ReaderScreen() {
           {book.title ?? "Reading"}
         </Text>
         <View style={styles.headerActions}>
+          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
+            <BookOpen size={20} color={theme.fg} />
+          </Pressable>
           <Pressable onPress={handleCreateBookmark} style={styles.headerButton}>
             <BookmarkIcon size={20} color={theme.fg} />
-          </Pressable>
-          <Pressable onPress={() => setShowBookmarks(true)} style={styles.headerButton}>
-            <List size={20} color={theme.fg} />
-          </Pressable>
-          <Pressable onPress={() => setShowNotesPanel(true)} style={styles.headerButton}>
-            <StickyNote size={20} color={theme.fg} />
-          </Pressable>
-          <Pressable
-            onPress={ttsState === "idle" ? handleStartTts : handleStopTts}
-            style={styles.headerButton}
-          >
-            {ttsState === "idle" ? <Volume2 size={20} color={theme.fg} /> : <VolumeX size={20} color={theme.fg} />}
           </Pressable>
           <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
             <Settings size={20} color={theme.fg} />
           </Pressable>
         </View>
       </View>
+      ) : null}
 
       <WebView
         ref={webviewRef}
@@ -553,23 +551,25 @@ export default function ReaderScreen() {
         mixedContentMode="always"
       />
 
-      <Pressable
-        onPress={() => setShowGotoDialog(true)}
-        style={[
-          styles.progressBar,
-          {
-            backgroundColor: theme.bg,
-            paddingBottom: Math.max(insets.bottom, 4),
-          },
-        ]}
-      >
-        <View style={[styles.progressFill, { width: `${progress}%` }]} />
-        <Text style={[styles.progressText, { color: theme.fg }]}>
-          {currentPage != null && totalPages != null
-            ? `${currentPage} / ${totalPages}  ·  ${progress}%`
-            : `${progress}%`}
-        </Text>
-      </Pressable>
+      {showHeader ? (
+        <Pressable
+          onPress={() => setShowGotoDialog(true)}
+          style={[
+            styles.progressBar,
+            {
+              backgroundColor: theme.bg,
+              paddingBottom: Math.max(insets.bottom, 4),
+            },
+          ]}
+        >
+          <View style={[styles.progressFill, { width: `${progress}%` }]} />
+          <Text style={[styles.progressText, { color: theme.fg }]}>
+            {currentPage != null && totalPages != null
+              ? `${currentPage} / ${totalPages}  ·  ${progress}%`
+              : `${progress}%`}
+          </Text>
+        </Pressable>
+      ) : null}
 
       <ReaderControls
         visible={showControls}
