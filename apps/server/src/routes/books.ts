@@ -3,10 +3,7 @@ import { eq, and, desc, asc, ilike, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { scopeToUser } from "../middleware/user-scope.js";
-import {
-  listBooksQuerySchema,
-  updateBookMetadataSchema,
-} from "@readr/shared";
+import { listBooksQuerySchema, updateBookMetadataSchema } from "@readr/shared";
 import {
   uploadFile,
   getPresignedDownloadUrl,
@@ -25,21 +22,38 @@ type Variables = { userId: string };
 
 const app = new Hono<{ Variables: Variables }>();
 
-// GET /api/books — List user's books
+/** Effective title = per-user override, else shared files.title. */
+const effectiveTitle = sql<string | null>`coalesce(${schema.books.titleOverride}, ${schema.files.title})`;
+const effectiveAuthor = sql<string | null>`coalesce(${schema.books.authorOverride}, ${schema.files.author})`;
+
+// GET /api/books — list the user's library
 app.get("/", async (c) => {
   const userId = c.get("userId");
   const query = listBooksQuerySchema.parse(c.req.query());
+
+  const conditions = [scopeToUser.books(userId)];
+  if (query.search) {
+    const pattern = `%${query.search}%`;
+    conditions.push(
+      or(
+        ilike(schema.files.title, pattern),
+        ilike(schema.files.author, pattern),
+        ilike(schema.books.titleOverride, pattern),
+        ilike(schema.books.authorOverride, pattern),
+      )!,
+    );
+  }
 
   let qb = db
     .select({
       id: schema.books.id,
       userId: schema.books.userId,
       fileId: schema.books.fileId,
-      title: schema.books.title,
-      author: schema.books.author,
-      language: schema.books.language,
-      totalChapters: schema.books.totalChapters,
-      metadata: schema.books.metadata,
+      title: effectiveTitle,
+      author: effectiveAuthor,
+      language: schema.files.language,
+      totalChapters: schema.files.totalChapters,
+      metadata: schema.files.metadata,
       uploadedAt: schema.books.uploadedAt,
       format: schema.files.format,
       fileSize: schema.files.size,
@@ -47,27 +61,15 @@ app.get("/", async (c) => {
     })
     .from(schema.books)
     .innerJoin(schema.files, eq(schema.books.fileId, schema.files.id))
-    .where(scopeToUser.books(userId))
+    .where(and(...conditions))
     .$dynamic();
-
-  if (query.search) {
-    qb = qb.where(
-      and(
-        scopeToUser.books(userId),
-        or(
-          ilike(schema.books.title, `%${query.search}%`),
-          ilike(schema.books.author, `%${query.search}%`),
-        ),
-      ),
-    );
-  }
 
   switch (query.sort) {
     case "title":
-      qb = qb.orderBy(asc(schema.books.title));
+      qb = qb.orderBy(asc(effectiveTitle));
       break;
     case "author":
-      qb = qb.orderBy(asc(schema.books.author));
+      qb = qb.orderBy(asc(effectiveAuthor));
       break;
     case "recent":
     default:
@@ -89,7 +91,7 @@ app.get("/", async (c) => {
   return c.json({ books });
 });
 
-// POST /api/books — Upload new book
+// POST /api/books — upload a new book (content-addressable, dedup across users)
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const formData = await c.req.formData();
@@ -113,7 +115,7 @@ app.post("/", async (c) => {
     );
   }
 
-  // Check storage quota
+  // Storage quota
   const [user] = await db
     .select({
       storageQuotaMb: schema.users.storageQuotaMb,
@@ -129,9 +131,9 @@ app.post("/", async (c) => {
     throw payloadTooLarge("Storage quota exceeded");
   }
 
-  // Content-addressable dedup
+  // Content-addressable dedup. Every upload of the same bytes collapses
+  // onto a single files row; metadata is extracted ONCE on first upload.
   const sha256 = computeSha256(buffer);
-  const s3Key = `files/${sha256}.${format}`;
 
   const [existingFile] = await db
     .select()
@@ -141,9 +143,9 @@ app.post("/", async (c) => {
   let fileId: string;
 
   if (existingFile) {
-    // Check if this user already has this book
+    // Refuse if this user already has the book in their library.
     const [existingBook] = await db
-      .select()
+      .select({ id: schema.books.id })
       .from(schema.books)
       .where(
         and(
@@ -151,52 +153,54 @@ app.post("/", async (c) => {
           eq(schema.books.fileId, existingFile.id),
         ),
       );
-
     if (existingBook) {
       throw conflict("You already have this book in your library");
     }
 
-    // Increment refCount
+    // Reuse existing file row + its metadata.
     await db
       .update(schema.files)
       .set({ refCount: sql`${schema.files.refCount} + 1` })
       .where(eq(schema.files.id, existingFile.id));
-
     fileId = existingFile.id;
   } else {
-    // Upload to S3
+    // First time we see this file anywhere — upload, extract, persist.
+    const s3Key = `files/${sha256}.${format}`;
     await uploadFile(s3Key, buffer, getContentType(format));
+
+    const metadata = await extractMetadata(buffer, format, file.name);
+
+    let coverKey: string | null = null;
+    if (metadata.cover) {
+      coverKey = `covers/${sha256}.jpg`;
+      await uploadFile(coverKey, metadata.cover, "image/jpeg");
+    }
 
     const [newFile] = await db
       .insert(schema.files)
       .values({
         sha256,
         s3Key,
+        coverKey,
         size: buffer.length,
         format,
+        title: metadata.title,
+        author: metadata.author,
+        language: metadata.language,
+        totalChapters: metadata.totalChapters,
       })
       .returning();
 
     fileId = newFile.id;
   }
 
-  // Extract metadata
-  const metadata = await extractMetadata(buffer, format, file.name);
-
-  // Create book record
+  // Per-user books row. No title/author — those come from the joined files
+  // row via the effective* expressions above.
   const [book] = await db
     .insert(schema.books)
-    .values({
-      userId,
-      fileId,
-      title: metadata.title,
-      author: metadata.author,
-      language: metadata.language,
-      totalChapters: metadata.totalChapters,
-    })
+    .values({ userId, fileId })
     .returning();
 
-  // Update storage used
   await db
     .update(schema.users)
     .set({
@@ -207,7 +211,7 @@ app.post("/", async (c) => {
   return c.json({ book }, 201);
 });
 
-// GET /api/books/:id — Get book with download URL
+// GET /api/books/:id — book detail + signed download/cover URLs
 app.get("/:id", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
@@ -217,11 +221,11 @@ app.get("/:id", async (c) => {
       id: schema.books.id,
       userId: schema.books.userId,
       fileId: schema.books.fileId,
-      title: schema.books.title,
-      author: schema.books.author,
-      language: schema.books.language,
-      totalChapters: schema.books.totalChapters,
-      metadata: schema.books.metadata,
+      title: effectiveTitle,
+      author: effectiveAuthor,
+      language: schema.files.language,
+      totalChapters: schema.files.totalChapters,
+      metadata: schema.files.metadata,
       uploadedAt: schema.books.uploadedAt,
       s3Key: schema.files.s3Key,
       coverKey: schema.files.coverKey,
@@ -258,7 +262,7 @@ app.get("/:id", async (c) => {
   });
 });
 
-// PATCH /api/books/:id/metadata — Update book metadata
+// PATCH /api/books/:id/metadata — per-user rename (stored as titleOverride)
 app.patch("/:id/metadata", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
@@ -266,45 +270,39 @@ app.patch("/:id/metadata", async (c) => {
 
   const [book] = await db
     .update(schema.books)
-    .set(body)
+    .set({
+      titleOverride: body.title ?? undefined,
+      authorOverride: body.author ?? undefined,
+    })
     .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)))
     .returning();
 
   if (!book) throw notFound("Book not found");
-
   return c.json({ book });
 });
 
-// DELETE /api/books/:id — Delete book
+// DELETE /api/books/:id — remove from user's library; drop file if last ref
 app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
 
   const [book] = await db
-    .select({
-      id: schema.books.id,
-      fileId: schema.books.fileId,
-    })
+    .select({ id: schema.books.id, fileId: schema.books.fileId })
     .from(schema.books)
     .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)));
 
   if (!book) throw notFound("Book not found");
 
-  // Get file info for storage accounting
   const [file] = await db
     .select()
     .from(schema.files)
     .where(eq(schema.files.id, book.fileId));
 
-  // Delete the book record (cascades to progress, annotations)
   await db.delete(schema.books).where(eq(schema.books.id, bookId));
 
-  // Decrement file refCount
   if (file) {
     const newRefCount = (file.refCount ?? 1) - 1;
-
     if (newRefCount <= 0) {
-      // Delete from S3 and DB
       await Promise.all([
         deleteFile(file.s3Key),
         file.coverKey ? deleteFile(file.coverKey) : Promise.resolve(),
@@ -317,7 +315,6 @@ app.delete("/:id", async (c) => {
         .where(eq(schema.files.id, file.id));
     }
 
-    // Update storage used
     const fileSizeMb = Math.ceil(file.size / (1024 * 1024));
     await db
       .update(schema.users)

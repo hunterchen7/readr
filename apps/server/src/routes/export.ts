@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import { scopeToUser } from "../middleware/user-scope.js";
 
 type Variables = { userId: string };
@@ -14,10 +14,16 @@ exportRouter.get("/export/annotations/:bookId", async (c) => {
   const bookId = c.req.param("bookId");
   const format = c.req.query("format") ?? "markdown";
 
-  // Verify book belongs to user
+  // Verify book belongs to user. Title/author come from the joined files
+  // row (shared across users) with an optional per-user override.
   const [book] = await db
-    .select()
+    .select({
+      id: schema.books.id,
+      title: sql<string | null>`coalesce(${schema.books.titleOverride}, ${schema.files.title})`,
+      author: sql<string | null>`coalesce(${schema.books.authorOverride}, ${schema.files.author})`,
+    })
     .from(schema.books)
+    .innerJoin(schema.files, eq(schema.books.fileId, schema.files.id))
     .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)))
     .limit(1);
 
