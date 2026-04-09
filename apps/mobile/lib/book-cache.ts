@@ -151,3 +151,18 @@ export async function deleteDownloadedBook(bookId: string): Promise<void> {
     bookId,
   ]);
 }
+
+/** Remove all offline book files and clear the downloads database. */
+export async function clearAllDownloads(): Promise<number> {
+  const database = await getDb();
+  const rows = await database.getAllAsync<{ local_path: string }>(
+    "SELECT local_path FROM downloaded_books",
+  );
+  await Promise.all(
+    rows.map((r) =>
+      FileSystem.deleteAsync(r.local_path, { idempotent: true }),
+    ),
+  );
+  await database.runAsync("DELETE FROM downloaded_books");
+  return rows.length;
+}
