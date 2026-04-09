@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
-import { getBook } from "../../lib/api";
+import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
 import {
@@ -118,6 +118,40 @@ export default function ReaderScreen() {
   const [currentPage, setCurrentPage] = useState<number | null>(null);
   const [totalPages, setTotalPages] = useState<number | null>(null);
   const [showGotoDialog, setShowGotoDialog] = useState(false);
+
+  // Reading session tracking — we log a session to the server whenever
+  // the user leaves the reader, so the stats screen has data to show.
+  // The refs never trigger re-renders; only the unmount effect reads them.
+  const sessionStartRef = useRef<{ at: number; pct: number }>({
+    at: Date.now(),
+    pct: 0,
+  });
+  const latestPctRef = useRef(0);
+  useEffect(() => {
+    sessionStartRef.current = { at: Date.now(), pct: progress };
+    latestPctRef.current = progress;
+  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    latestPctRef.current = progress;
+  }, [progress]);
+  useEffect(() => {
+    return () => {
+      const start = sessionStartRef.current;
+      const durationMs = Date.now() - start.at;
+      const durationMinutes = Math.round(durationMs / 60_000);
+      if (!bookId || durationMinutes < 1) return;
+      logReadingSession({
+        bookId,
+        startedAt: new Date(start.at).toISOString(),
+        endedAt: new Date().toISOString(),
+        durationMinutes,
+        startPercentage: Math.round(start.pct),
+        endPercentage: Math.round(latestPctRef.current),
+      }).catch(() => {
+        // Non-fatal — we'd rather drop a session than crash on exit.
+      });
+    };
+  }, [bookId]);
 
   // TTS — state lives in the zustand store; handlers below (after
   // sendToWebView is declared).

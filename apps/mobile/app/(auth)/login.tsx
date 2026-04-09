@@ -10,11 +10,19 @@ import {
   ScrollView,
 } from "react-native";
 import { router } from "expo-router";
+import Constants from "expo-constants";
 import { useAuthStore } from "../../lib/auth-store";
 import { generateToken } from "../../lib/api";
 
+const DEFAULT_SERVER_URL =
+  (Constants.expoConfig?.extra?.defaultServerUrl as string | undefined) ?? "";
+
 export default function LoginScreen() {
-  const [serverUrl, setServerUrlLocal] = useState("");
+  // Pre-fill from the EXPO_PUBLIC_DEFAULT_SERVER_URL build-time extra so
+  // opinionated distributions (e.g. a Readr build shipped to a friend
+  // aimed at a specific Olares/Cloudflare tunnel) don't have to type
+  // the URL on first launch.
+  const [serverUrl, setServerUrlLocal] = useState(DEFAULT_SERVER_URL);
   const [token, setTokenLocal] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);

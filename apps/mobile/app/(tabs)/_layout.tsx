@@ -13,11 +13,17 @@ export default function TabLayout() {
       <Tabs.Screen
         name="library"
         options={{
-          // Title is rendered inside the library screen itself next to the
-          // upload button, so hide the default stack header.
           headerShown: false,
           title: "Library",
           tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 20 }}>📚</Text>,
+        }}
+      />
+      <Tabs.Screen
+        name="stats"
+        options={{
+          headerShown: false,
+          title: "Reading",
+          tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 20 }}>📊</Text>,
         }}
       />
       <Tabs.Screen

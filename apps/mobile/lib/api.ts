@@ -129,3 +129,36 @@ export function uploadBook(file: { uri: string; name: string; type: string }) {
     body: form,
   });
 }
+
+// === Reading stats ===
+export interface StatsSummary {
+  totalBooks: number;
+  totalReadingMinutes: number;
+  totalSessions: number;
+  currentStreak: number;
+  weeklyMinutes: number;
+}
+
+export function getStatsSummary() {
+  return apiFetch<StatsSummary>(`/api/stats/summary`);
+}
+
+export function getStatsDaily() {
+  return apiFetch<{ daily: { date: string; minutes: number }[] }>(
+    `/api/stats/daily`,
+  );
+}
+
+export function logReadingSession(session: {
+  bookId: string;
+  startedAt: string;
+  endedAt: string;
+  durationMinutes: number;
+  startPercentage?: number;
+  endPercentage?: number;
+}) {
+  return apiFetch(`/api/stats/sessions`, {
+    method: "POST",
+    body: JSON.stringify(session),
+  });
+}
