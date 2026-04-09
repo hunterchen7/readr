@@ -1,4 +1,4 @@
-export { lwwMerge, type LWWEntry, type LWWResult } from "./lww.js";
+export { lwwMerge, type LWWEntry, type LWWResult } from "./lww";
 export {
   setMerge,
   processBatch,
@@ -6,5 +6,5 @@ export {
   type SetMergeInput,
   type ExistingEntity,
   type SetMergeResult,
-} from "./set.js";
-export { deduplicateQueue, partitionByType, type QueuedChange } from "./queue.js";
+} from "./set";
+export { deduplicateQueue, partitionByType, type QueuedChange } from "./queue";
