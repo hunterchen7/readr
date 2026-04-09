@@ -65,8 +65,7 @@ export function getReaderHtml(bookUrl: string): string {
           if (view.clearSearch) view.clearSearch();
           break;
         case 'addHighlight': {
-          // RN sends either { cfi } (live selection) or { cfiRange } (replay);
-          // foliate's addAnnotation wants the CFI range as its first arg.
+          // RN sends either { cfi } (live selection) or { cfiRange } (replay).
           const cfi = data.payload.cfi || data.payload.cfiRange;
           if (!cfi) break;
           if (view.addAnnotation) {
@@ -121,9 +120,8 @@ export function getReaderHtml(bookUrl: string): string {
           'body { font-family: inherit; }',
           'p { line-height: inherit; }',
           'img { max-width: 100%; height: auto; }',
-          // e-ink overrides: force full-contrast text everywhere and kill
-          // grayscale-washed colored links/headings that become illegible
-          // after the device-level daltonizer desaturates them.
+          // e-ink overrides: force full-contrast text and kill colored
+          // headings that look washed out after the daltonizer.
           eink
             ? [
                 'html, body, h1, h2, h3, h4, h5, h6, p, li, blockquote,',
@@ -132,8 +130,6 @@ export function getReaderHtml(bookUrl: string): string {
                 'code, kbd, pre, samp { color: #000 !important; background: #eee !important; }',
                 'blockquote { border-left: 3px solid #000 !important; }',
                 'hr { border-color: #000 !important; }',
-                // e-ink displays render images as grayscale anyway — force
-                // a small contrast bump so they don\\'t muddy out.
                 'img { filter: grayscale(100%) contrast(1.15); }',
                 '* { text-shadow: none !important; box-shadow: none !important; }',
               ].join('\\n')
@@ -160,17 +156,33 @@ export function getReaderHtml(bookUrl: string): string {
       }
     }
 
+    function base64ToBytes(b64) {
+      const bin = atob(b64);
+      const len = bin.length;
+      const out = new Uint8Array(len);
+      for (let i = 0; i < len; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+
     async function init() {
       try {
         const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
 
-        const res = await fetch(BOOK_URL);
-        if (!res.ok) throw new Error('Failed to download book');
-        const blob = await res.blob();
-        // foliate-js's makeBook() dispatches on file.name.endsWith() to pick
-        // a parser (EPUB vs CBZ vs FB2 etc.), so a bare Blob (no .name) crashes.
-        // Wrap it in a File with an explicit .epub name and mime.
-        const file = new File([blob], 'book.epub', { type: 'application/epub+zip' });
+        // Prefer the locally-injected book bytes when available (set by
+        // the host RN app via injectedJavaScriptBeforeContentLoaded for
+        // downloaded books). Otherwise fetch the presigned URL.
+        let file;
+        if (window.__READR_BOOK_B64__) {
+          const bytes = base64ToBytes(window.__READR_BOOK_B64__);
+          const mime = window.__READR_BOOK_MIME__ || 'application/epub+zip';
+          file = new File([bytes], 'book.epub', { type: mime });
+          window.__READR_BOOK_B64__ = null;
+        } else {
+          const res = await fetch(BOOK_URL);
+          if (!res.ok) throw new Error('Failed to download book');
+          const blob = await res.blob();
+          file = new File([blob], 'book.epub', { type: 'application/epub+zip' });
+        }
 
         book = await makeBook(file);
         document.getElementById('loading').style.display = 'none';
@@ -197,53 +209,46 @@ export function getReaderHtml(bookUrl: string): string {
           });
         });
 
+        // Text selection
+        view.addEventListener('draw-annotation', (e) => {
+          // foliate-js annotation drawing
+        });
+
         view.addEventListener('show-annotation', (e) => {
           post('showAnnotation', e.detail);
         });
 
+        // Handle text selection via the view's selection event
         view.addEventListener('external-link', (e) => {
           e.preventDefault();
           post('externalLink', { href: e.detail.href });
         });
 
-        // Each section is loaded into its own iframe document. Foliate
-        // emits a 'load' event with { doc, index } when that happens, so
-        // we attach our selection + tap handlers to the REAL book
-        // document (not the outer host) — otherwise selectionchange never
-        // fires and CFIs can't be computed.
-        view.addEventListener('load', (e) => {
-          const { doc, index } = e.detail;
-          if (!doc) return;
-
-          // Selection → send CFI + text to RN so the custom menu can act on it.
+        // Custom selection handler
+        const doc = view.renderer?.document ?? view.shadowRoot;
+        if (doc) {
           doc.addEventListener('selectionchange', () => {
-            const sel = doc.getSelection();
-            if (!sel || sel.isCollapsed) {
+            const sel = doc.getSelection?.() ?? window.getSelection();
+            if (sel && sel.toString().trim()) {
+              post('selectionChanged', {
+                text: sel.toString(),
+                // CFI range will be computed when the user acts on the selection
+              });
+            } else {
               post('selectionCleared', {});
-              return;
             }
-            const text = sel.toString().trim();
-            if (!text) return;
-            let cfi = '';
-            try {
-              cfi = view.getCFI(index, sel.getRangeAt(0));
-            } catch {}
-            post('selectionChanged', { text, cfi });
           });
+        }
 
-          // Tap zones for page turns (honors the tapToTurn theme flag).
-          doc.addEventListener('click', (ev) => {
-            // If the user is mid-selection, let the browser handle it.
-            const sel = doc.getSelection();
-            if (sel && !sel.isCollapsed) return;
-            const w = doc.documentElement.clientWidth || window.innerWidth;
-            const x = ev.clientX;
-            if (tapToTurn) {
-              if (x < w * 0.3) { view.prev(); return; }
-              if (x > w * 0.7) { view.next(); return; }
-            }
-            post('tapCenter', {});
-          });
+        // Tap zones for page turns (honors the tapToTurn theme flag).
+        view.addEventListener('click', (e) => {
+          const w = window.innerWidth;
+          const x = e.clientX;
+          if (tapToTurn) {
+            if (x < w * 0.3) { view.prev(); return; }
+            if (x > w * 0.7) { view.next(); return; }
+          }
+          post('tapCenter', {});
         });
 
         // Report ready

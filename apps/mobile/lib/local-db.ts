@@ -78,6 +78,19 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
       timestamp TEXT NOT NULL
     );
 
+    -- Locally-cached book binaries. The server returns a presigned URL
+    -- for a given bookId; when the user taps Download we fetch it into
+    -- the app's document directory and record the local path here. The
+    -- reader prefers the local file if present.
+    CREATE TABLE IF NOT EXISTS downloaded_books (
+      book_id TEXT PRIMARY KEY,
+      file_id TEXT NOT NULL,
+      format TEXT NOT NULL,
+      local_path TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      downloaded_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_progress_book ON reading_progress(book_id);
     CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
     CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id);

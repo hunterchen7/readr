@@ -16,10 +16,16 @@ import * as DocumentPicker from "expo-document-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { listBooks, uploadBook } from "../../lib/api";
 import { getProgress } from "../../lib/local-db";
+import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { useSyncStatus } from "../../lib/sync-status";
 import type { Book } from "@readr/shared";
 
-type BookWithProgress = Book & { progressPct: number };
+type BookWithProgress = Book & {
+  progressPct: number;
+  downloaded: boolean;
+  /** 0..1 when a download is in flight, null when idle or done. */
+  downloadProgress: number | null;
+};
 
 function formatRelative(ts: number): string {
   const ago = Math.max(0, Date.now() - ts);
@@ -48,8 +54,8 @@ export default function LibraryScreen() {
   const runSyncNow = useSyncStatus((s) => s.sync);
   const insets = useSafeAreaInsets();
 
-  // Hydrate each book with its locally-stored progress percentage.
-  // Runs whenever the server list changes.
+  // Hydrate each book with its locally-stored progress percentage and
+  // downloaded status. Runs whenever the server list changes.
   useEffect(() => {
     if (rawBooks.length === 0) {
       setBooksWithProgress([]);
@@ -57,10 +63,16 @@ export default function LibraryScreen() {
     }
     let cancelled = false;
     (async () => {
+      const downloadedSet = await getDownloadedBookIds();
       const results = await Promise.all(
         rawBooks.map(async (b): Promise<BookWithProgress> => {
           const p = await getProgress(b.id);
-          return { ...b, progressPct: Math.round(p?.position.percentage ?? 0) };
+          return {
+            ...b,
+            progressPct: Math.round(p?.position.percentage ?? 0),
+            downloaded: downloadedSet.has(b.id),
+            downloadProgress: null,
+          };
         }),
       );
       if (!cancelled) setBooksWithProgress(results);
@@ -70,7 +82,39 @@ export default function LibraryScreen() {
     };
   }, [rawBooks]);
 
-  function handleBookPress(book: Book) {
+  async function handleDownload(bookId: string) {
+    setBooksWithProgress((prev) =>
+      prev.map((b) => (b.id === bookId ? { ...b, downloadProgress: 0 } : b)),
+    );
+    try {
+      await downloadBook(bookId, (frac) => {
+        setBooksWithProgress((prev) =>
+          prev.map((b) => (b.id === bookId ? { ...b, downloadProgress: frac } : b)),
+        );
+      });
+      setBooksWithProgress((prev) =>
+        prev.map((b) =>
+          b.id === bookId ? { ...b, downloaded: true, downloadProgress: null } : b,
+        ),
+      );
+    } catch (err) {
+      setBooksWithProgress((prev) =>
+        prev.map((b) => (b.id === bookId ? { ...b, downloadProgress: null } : b)),
+      );
+      Alert.alert(
+        "Download failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  function handleBookPress(book: BookWithProgress) {
+    if (!book.downloaded) {
+      // Tapping an un-downloaded book prompts the download; user has to
+      // tap again to actually open it.
+      handleDownload(book.id);
+      return;
+    }
     router.push(`/reader/${book.id}`);
   }
 
@@ -165,35 +209,57 @@ export default function LibraryScreen() {
               onRefresh={() => queryClient.invalidateQueries({ queryKey: ["books"] })}
             />
           }
-          renderItem={({ item }) => (
-            <Pressable style={styles.card} onPress={() => handleBookPress(item)}>
-              <View style={styles.cover}>
-                {item.coverUrl ? (
-                  <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
-                ) : (
-                  <Text style={styles.coverText} numberOfLines={3}>
-                    {item.title ?? "Untitled"}
-                  </Text>
-                )}
-                {item.progressPct > 0 ? (
-                  <View style={styles.progressTrack}>
-                    <View
-                      style={[
-                        styles.progressFill,
-                        { width: `${Math.min(100, item.progressPct)}%` },
-                      ]}
-                    />
-                  </View>
-                ) : null}
-              </View>
-              <Text style={styles.bookTitle} numberOfLines={1}>
-                {item.title ?? "Untitled"}
-              </Text>
-              <Text style={styles.bookAuthor} numberOfLines={1}>
-                {item.author ?? "Unknown"}
-              </Text>
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const downloading = item.downloadProgress !== null;
+            return (
+              <Pressable style={styles.card} onPress={() => handleBookPress(item)}>
+                <View
+                  style={[
+                    styles.cover,
+                    !item.downloaded && styles.coverDimmed,
+                  ]}
+                >
+                  {item.coverUrl ? (
+                    <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
+                  ) : (
+                    <Text style={styles.coverText} numberOfLines={3}>
+                      {item.title ?? "Untitled"}
+                    </Text>
+                  )}
+                  {/* Badge: reading progress on downloaded books, cloud icon otherwise */}
+                  {item.downloaded ? (
+                    item.progressPct > 0 ? (
+                      <View style={styles.progressTrack}>
+                        <View
+                          style={[
+                            styles.progressFill,
+                            { width: `${Math.min(100, item.progressPct)}%` },
+                          ]}
+                        />
+                      </View>
+                    ) : null
+                  ) : downloading ? (
+                    <View style={styles.downloadOverlay}>
+                      <ActivityIndicator color="#fff" />
+                      <Text style={styles.downloadOverlayText}>
+                        {Math.round((item.downloadProgress ?? 0) * 100)}%
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={styles.cloudBadge}>
+                      <Text style={styles.cloudBadgeText}>☁ Tap to download</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.bookTitle} numberOfLines={1}>
+                  {item.title ?? "Untitled"}
+                </Text>
+                <Text style={styles.bookAuthor} numberOfLines={1}>
+                  {item.author ?? "Unknown"}
+                </Text>
+              </Pressable>
+            );
+          }}
         />
       )}
     </View>
@@ -259,6 +325,25 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.12)",
   },
   progressFill: { height: "100%", backgroundColor: "#111" },
+  coverDimmed: { opacity: 0.55 },
+  cloudBadge: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(17,17,17,0.75)",
+    paddingVertical: 4,
+    alignItems: "center",
+  },
+  cloudBadgeText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+  downloadOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(17,17,17,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  downloadOverlayText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   bookTitle: { fontSize: 12, fontWeight: "600", marginTop: 4 },
   bookAuthor: { fontSize: 11, color: "#666" },
 });
