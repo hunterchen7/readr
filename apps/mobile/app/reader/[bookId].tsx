@@ -481,6 +481,21 @@ export default function ReaderScreen() {
   const readerHtml =
     format === "pdf" ? getPdfReaderHtml(sourceUrl) : getReaderHtml(sourceUrl);
 
+  // Write the reader HTML to a temp file so the WebView loads from file://
+  // origin, which allows fetch("file://...") for local books.
+  const [readerHtmlUri, setReaderHtmlUri] = useState<string | null>(null);
+  useEffect(() => {
+    if (!readerHtml) return;
+    let cancelled = false;
+    (async () => {
+      const FileSystem = await import("expo-file-system/legacy");
+      const path = FileSystem.cacheDirectory + "reader.html";
+      await FileSystem.writeAsStringAsync(path, readerHtml);
+      if (!cancelled) setReaderHtmlUri(path);
+    })();
+    return () => { cancelled = true; };
+  }, [readerHtml]);
+
   const lookupProviders = DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
     name: p.name,
     icon: p.icon ?? "🔍",
@@ -529,7 +544,7 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={styles.webview}
         originWhitelist={["*"]}
-        source={{ html: readerHtml }}
+        source={readerHtmlUri ? { uri: readerHtmlUri } : { html: "<p>Loading reader...</p>" }}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs
