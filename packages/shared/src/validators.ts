@@ -10,14 +10,20 @@ export const bookPositionSchema = z.object({
 
 // === Books ===
 export const listBooksQuerySchema = z.object({
-  sort: z.enum(["recent", "title", "author"]).default("recent"),
+  sort: z
+    .enum(["recent", "title", "author", "lastRead"])
+    .default("recent"),
   search: z.string().optional(),
+  format: z.enum(["epub", "pdf"]).optional(),
 });
 
+// Per-user overrides only. The file-level metadata (language, chapter
+// count, cover) is immutable from the client's perspective because it's
+// shared across every user that uploads the same bytes. Clients can only
+// rename their own copy via title_override / author_override.
 export const updateBookMetadataSchema = z.object({
-  title: z.string().min(1).optional(),
-  author: z.string().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  title: z.string().min(1).max(500).nullable().optional(),
+  author: z.string().min(1).max(500).nullable().optional(),
 });
 
 // === Reading Progress ===

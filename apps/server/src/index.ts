@@ -60,10 +60,14 @@ app.route("/api", exportRouter);
 app.route("/api/collections", collectionsRouter);
 app.route("/api", statsRouter);
 
-// Global error handler
+// Global error handler. Hono's c.json overload requires a
+// ContentfulStatusCode literal, so we cast through `as` to our dynamic
+// AppError.statusCode. This now actually honors the real status
+// (the previous `as 400` silently pinned everything to 400).
 app.onError((err, c) => {
   if (err instanceof AppError) {
-    return c.json({ error: err.message }, err.statusCode as 400);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return c.json({ error: err.message }, err.statusCode as any);
   }
 
   console.error("Unhandled error:", err);

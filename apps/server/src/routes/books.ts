@@ -43,6 +43,9 @@ app.get("/", async (c) => {
       )!,
     );
   }
+  if (query.format) {
+    conditions.push(eq(schema.files.format, query.format));
+  }
 
   let qb = db
     .select({
@@ -71,6 +74,23 @@ app.get("/", async (c) => {
     case "author":
       qb = qb.orderBy(asc(effectiveAuthor));
       break;
+    case "lastRead": {
+      // Sort by latest reading_progress.updated_at for this user.
+      // Books with no progress yet fall to the end.
+      const lastRead = db
+        .select({
+          bookId: schema.readingProgress.bookId,
+          latest: sql`max(${schema.readingProgress.updatedAt})`.as("latest"),
+        })
+        .from(schema.readingProgress)
+        .where(eq(schema.readingProgress.userId, userId))
+        .groupBy(schema.readingProgress.bookId)
+        .as("lp");
+      qb = qb
+        .leftJoin(lastRead, eq(lastRead.bookId, schema.books.id))
+        .orderBy(sql`${lastRead.latest} desc nulls last`);
+      break;
+    }
     case "recent":
     default:
       qb = qb.orderBy(desc(schema.books.uploadedAt));
@@ -165,41 +185,53 @@ app.post("/", async (c) => {
     fileId = existingFile.id;
   } else {
     // First time we see this file anywhere — upload, extract, persist.
+    // Keep S3 writes in order so a mid-flight failure never leaves the
+    // DB pointing at a non-existent key. Best-effort compensating
+    // cleanup on error; full atomicity would require a transactional
+    // outbox but this gets 95% of the benefit.
     const s3Key = `files/${sha256}.${format}`;
-    await uploadFile(s3Key, buffer, getContentType(format));
-
+    let coverKey: string | null = null;
     const metadata = await extractMetadata(buffer, format, file.name);
 
-    let coverKey: string | null = null;
-    if (metadata.cover) {
-      coverKey = `covers/${sha256}.jpg`;
-      await uploadFile(coverKey, metadata.cover, "image/jpeg");
+    try {
+      await uploadFile(s3Key, buffer, getContentType(format));
+      if (metadata.cover) {
+        coverKey = `covers/${sha256}.jpg`;
+        await uploadFile(coverKey, metadata.cover, "image/jpeg");
+      }
+
+      const [newFile] = await db
+        .insert(schema.files)
+        .values({
+          sha256,
+          s3Key,
+          coverKey,
+          size: buffer.length,
+          format,
+          title: metadata.title,
+          author: metadata.author,
+          language: metadata.language,
+          totalChapters: metadata.totalChapters,
+        })
+        .returning();
+
+      fileId = newFile.id;
+    } catch (err) {
+      // Compensating cleanup: delete whatever we already wrote.
+      await Promise.allSettled([
+        deleteFile(s3Key),
+        coverKey ? deleteFile(coverKey) : Promise.resolve(),
+      ]);
+      throw err;
     }
-
-    const [newFile] = await db
-      .insert(schema.files)
-      .values({
-        sha256,
-        s3Key,
-        coverKey,
-        size: buffer.length,
-        format,
-        title: metadata.title,
-        author: metadata.author,
-        language: metadata.language,
-        totalChapters: metadata.totalChapters,
-      })
-      .returning();
-
-    fileId = newFile.id;
   }
 
   // Per-user books row. No title/author — those come from the joined files
   // row via the effective* expressions above.
-  const [book] = await db
+  const [inserted] = await db
     .insert(schema.books)
     .values({ userId, fileId })
-    .returning();
+    .returning({ id: schema.books.id });
 
   await db
     .update(schema.users)
@@ -208,14 +240,20 @@ app.post("/", async (c) => {
     })
     .where(eq(schema.users.id, userId));
 
-  return c.json({ book }, 201);
+  // Return the full joined book shape so clients don't have to follow up
+  // with a GET /books/:id to find out the title, cover URL, or
+  // downloadUrl they just uploaded.
+  const full = await fetchBookById(inserted.id, userId);
+  if (!full) throw notFound("Book not found after insert");
+  return c.json({ book: full }, 201);
 });
 
-// GET /api/books/:id — book detail + signed download/cover URLs
-app.get("/:id", async (c) => {
-  const userId = c.get("userId");
-  const bookId = c.req.param("id");
-
+/**
+ * Shared helper that returns the full joined Book shape used by
+ * GET /api/books/:id. Both POST and PATCH call this so they return a
+ * consistent object.
+ */
+async function fetchBookById(bookId: string, userId: string) {
   const [row] = await db
     .select({
       id: schema.books.id,
@@ -236,47 +274,58 @@ app.get("/:id", async (c) => {
     .innerJoin(schema.files, eq(schema.books.fileId, schema.files.id))
     .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)));
 
-  if (!row) throw notFound("Book not found");
+  if (!row) return null;
 
   const [downloadUrl, coverUrl] = await Promise.all([
     getPresignedDownloadUrl(row.s3Key),
     row.coverKey ? getPresignedDownloadUrl(row.coverKey) : null,
   ]);
 
-  return c.json({
-    book: {
-      id: row.id,
-      userId: row.userId,
-      fileId: row.fileId,
-      title: row.title,
-      author: row.author,
-      language: row.language,
-      totalChapters: row.totalChapters,
-      metadata: row.metadata,
-      uploadedAt: row.uploadedAt,
-      format: row.format,
-      fileSize: row.fileSize,
-      downloadUrl,
-      coverUrl,
-    },
-  });
+  return {
+    id: row.id,
+    userId: row.userId,
+    fileId: row.fileId,
+    title: row.title,
+    author: row.author,
+    language: row.language,
+    totalChapters: row.totalChapters,
+    metadata: row.metadata,
+    uploadedAt: row.uploadedAt,
+    format: row.format,
+    fileSize: row.fileSize,
+    downloadUrl,
+    coverUrl,
+  };
+}
+
+// GET /api/books/:id — book detail + signed download/cover URLs
+app.get("/:id", async (c) => {
+  const userId = c.get("userId");
+  const bookId = c.req.param("id");
+  const book = await fetchBookById(bookId, userId);
+  if (!book) throw notFound("Book not found");
+  return c.json({ book });
 });
 
-// PATCH /api/books/:id/metadata — per-user rename (stored as titleOverride)
+// PATCH /api/books/:id/metadata — per-user rename (stored as titleOverride).
+// Returns the full joined Book shape so callers can update state without
+// a follow-up GET.
 app.patch("/:id/metadata", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
   const body = updateBookMetadataSchema.parse(await c.req.json());
 
-  const [book] = await db
+  const [updated] = await db
     .update(schema.books)
     .set({
       titleOverride: body.title ?? undefined,
       authorOverride: body.author ?? undefined,
     })
     .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)))
-    .returning();
+    .returning({ id: schema.books.id });
 
+  if (!updated) throw notFound("Book not found");
+  const book = await fetchBookById(updated.id, userId);
   if (!book) throw notFound("Book not found");
   return c.json({ book });
 });

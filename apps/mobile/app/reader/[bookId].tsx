@@ -468,7 +468,12 @@ export default function ReaderScreen() {
 
       {/* Bookmarks panel */}
       {showBookmarks ? (
-        <View style={styles.bookmarksPanel}>
+        <View
+          style={[
+            styles.bookmarksPanel,
+            { top: insets.top + 52 },
+          ]}
+        >
           <View style={styles.bookmarksPanelHeader}>
             <Text style={styles.bookmarksPanelTitle}>
               Bookmarks ({bookmarks.length})
@@ -525,7 +530,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 8,
-    paddingTop: 48,
+    // Top padding is applied inline at the call site via insets.top + 8.
     paddingBottom: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#e0e0e0",
@@ -553,7 +558,8 @@ const styles = StyleSheet.create({
   progressText: { fontSize: 11, opacity: 0.5 },
   bookmarksPanel: {
     position: "absolute",
-    top: 92,
+    // top is computed inline from insets.top + header height at the
+    // call site so it slides in below the header on notched devices.
     right: 8,
     width: 280,
     maxHeight: 400,

@@ -1,36 +1,71 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { scopeToUser } from "../middleware/user-scope.js";
+import { getPresignedDownloadUrl } from "../services/storage.js";
+import { notFound, badRequest } from "../lib/errors.js";
 
 type Variables = { userId: string };
 
 const collectionsRouter = new Hono<{ Variables: Variables }>();
 
+const effectiveTitle = sql<string | null>`coalesce(${schema.books.titleOverride}, ${schema.files.title})`;
+const effectiveAuthor = sql<string | null>`coalesce(${schema.books.authorOverride}, ${schema.files.author})`;
+
+async function assertUserOwnsCollection(
+  collectionId: string,
+  userId: string,
+): Promise<void> {
+  const [row] = await db
+    .select({ id: schema.collections.id })
+    .from(schema.collections)
+    .where(
+      and(eq(schema.collections.id, collectionId), scopeToUser.collections(userId)),
+    )
+    .limit(1);
+  if (!row) throw notFound("Collection not found");
+}
+
+async function assertUserOwnsBook(
+  bookId: string,
+  userId: string,
+): Promise<void> {
+  const [row] = await db
+    .select({ id: schema.books.id })
+    .from(schema.books)
+    .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)))
+    .limit(1);
+  if (!row) throw notFound("Book not found");
+}
+
 // GET /collections
 collectionsRouter.get("/", async (c) => {
   const userId = c.get("userId");
-
   const result = await db
     .select()
     .from(schema.collections)
     .where(scopeToUser.collections(userId))
     .orderBy(schema.collections.sortOrder);
-
   return c.json({ collections: result });
 });
 
 // POST /collections
 collectionsRouter.post("/", async (c) => {
   const userId = c.get("userId");
-  const body = await c.req.json() as { name: string; description?: string; color?: string };
+  const body = (await c.req.json()) as {
+    name?: string;
+    description?: string;
+    color?: string;
+  };
+  const name = body.name?.trim();
+  if (!name) throw badRequest("name is required");
 
   const [collection] = await db
     .insert(schema.collections)
     .values({
       userId,
-      name: body.name,
+      name,
       description: body.description ?? null,
       color: body.color ?? null,
     })
@@ -43,7 +78,12 @@ collectionsRouter.post("/", async (c) => {
 collectionsRouter.patch("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
-  const body = await c.req.json() as { name?: string; description?: string; color?: string; sortOrder?: number };
+  const body = (await c.req.json()) as {
+    name?: string;
+    description?: string;
+    color?: string;
+    sortOrder?: number;
+  };
 
   const [updated] = await db
     .update(schema.collections)
@@ -56,25 +96,27 @@ collectionsRouter.patch("/:id", async (c) => {
     .where(and(eq(schema.collections.id, id), scopeToUser.collections(userId)))
     .returning();
 
-  if (!updated) return c.json({ error: "Not found" }, 404);
+  if (!updated) throw notFound("Collection not found");
   return c.json({ collection: updated });
 });
 
 // DELETE /collections/:id
+// Ownership check runs BEFORE the cascade delete so a stray call with an
+// id from someone else can't drop their bookCollections rows.
 collectionsRouter.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
 
+  await assertUserOwnsCollection(id, userId);
+
+  // Drop join rows first, then the collection itself.
   await db
     .delete(schema.bookCollections)
     .where(eq(schema.bookCollections.collectionId, id));
-
-  const deleted = await db
+  await db
     .delete(schema.collections)
-    .where(and(eq(schema.collections.id, id), scopeToUser.collections(userId)))
-    .returning();
+    .where(and(eq(schema.collections.id, id), scopeToUser.collections(userId)));
 
-  if (deleted.length === 0) return c.json({ error: "Not found" }, 404);
   return c.json({ deleted: true });
 });
 
@@ -82,16 +124,10 @@ collectionsRouter.delete("/:id", async (c) => {
 collectionsRouter.post("/:id/books", async (c) => {
   const userId = c.get("userId");
   const collectionId = c.req.param("id");
-  const body = await c.req.json() as { bookId: string };
+  const body = (await c.req.json()) as { bookId: string };
 
-  // Verify collection belongs to user
-  const [collection] = await db
-    .select()
-    .from(schema.collections)
-    .where(and(eq(schema.collections.id, collectionId), scopeToUser.collections(userId)))
-    .limit(1);
-
-  if (!collection) return c.json({ error: "Collection not found" }, 404);
+  await assertUserOwnsCollection(collectionId, userId);
+  await assertUserOwnsBook(body.bookId, userId);
 
   const [entry] = await db
     .insert(schema.bookCollections)
@@ -102,10 +138,16 @@ collectionsRouter.post("/:id/books", async (c) => {
   return c.json({ added: !!entry }, 201);
 });
 
-// DELETE /collections/:id/books/:bookId — remove a book from a collection
+// DELETE /collections/:id/books/:bookId — remove a book from a collection.
+// Previously this was completely unauthenticated: any bearer token could
+// rip any book from any collection. Now both sides must belong to the caller.
 collectionsRouter.delete("/:id/books/:bookId", async (c) => {
+  const userId = c.get("userId");
   const collectionId = c.req.param("id");
   const bookId = c.req.param("bookId");
+
+  await assertUserOwnsCollection(collectionId, userId);
+  await assertUserOwnsBook(bookId, userId);
 
   await db
     .delete(schema.bookCollections)
@@ -119,18 +161,34 @@ collectionsRouter.delete("/:id/books/:bookId", async (c) => {
   return c.json({ removed: true });
 });
 
-// GET /collections/:id/books — list books in a collection
+// GET /collections/:id/books — list books in a collection.
+// Ownership-gated on the collection itself (previously anyone could view
+// any collection's book list as long as they queried the right UUID).
 collectionsRouter.get("/:id/books", async (c) => {
   const userId = c.get("userId");
   const collectionId = c.req.param("id");
 
-  const result = await db
+  await assertUserOwnsCollection(collectionId, userId);
+
+  const rows = await db
     .select({
-      book: schema.books,
+      id: schema.books.id,
+      userId: schema.books.userId,
+      fileId: schema.books.fileId,
+      title: effectiveTitle,
+      author: effectiveAuthor,
+      language: schema.files.language,
+      totalChapters: schema.files.totalChapters,
+      metadata: schema.files.metadata,
+      uploadedAt: schema.books.uploadedAt,
+      format: schema.files.format,
+      fileSize: schema.files.size,
+      coverKey: schema.files.coverKey,
       addedAt: schema.bookCollections.addedAt,
     })
     .from(schema.bookCollections)
     .innerJoin(schema.books, eq(schema.bookCollections.bookId, schema.books.id))
+    .innerJoin(schema.files, eq(schema.books.fileId, schema.files.id))
     .where(
       and(
         eq(schema.bookCollections.collectionId, collectionId),
@@ -139,7 +197,14 @@ collectionsRouter.get("/:id/books", async (c) => {
     )
     .orderBy(schema.bookCollections.addedAt);
 
-  return c.json({ books: result.map((r) => r.book) });
+  const books = await Promise.all(
+    rows.map(async (row) => ({
+      ...row,
+      coverUrl: row.coverKey ? await getPresignedDownloadUrl(row.coverKey) : null,
+    })),
+  );
+
+  return c.json({ books });
 });
 
 export default collectionsRouter;
