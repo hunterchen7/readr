@@ -15,6 +15,7 @@ import {
 } from "../../components/reader/ReaderControls";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { ContextMenu } from "../../components/reader/ContextMenu";
+import { NotesPanel } from "../../components/reader/NotesPanel";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
 import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
 import {
@@ -26,8 +27,9 @@ import {
   createHighlight,
   getHighlights,
   createNote,
+  getNotes,
 } from "../../lib/local-db";
-import type { Highlight } from "@readr/shared";
+import type { Highlight, Note } from "@readr/shared";
 import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
 import { DEFAULT_LOOKUP_PROVIDERS } from "@readr/shared";
 import * as Linking from "expo-linking";
@@ -66,10 +68,12 @@ export default function ReaderScreen() {
   const [showTypedNote, setShowTypedNote] = useState(false);
   const [showHandwriting, setShowHandwriting] = useState(false);
 
-  // Bookmarks + highlights state
+  // Bookmarks + highlights + notes state
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
+  const [showNotesPanel, setShowNotesPanel] = useState(false);
 
   // In-book search state
   const [searchResults, setSearchResults] = useState<
@@ -85,23 +89,30 @@ export default function ReaderScreen() {
 
   const book = data?.book;
 
-  // Load saved progress, bookmarks, highlights, and reader prefs on mount
+  // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
   useEffect(() => {
     if (!bookId) return;
     async function load() {
-      const [savedProgress, savedBookmarks, savedHighlights, savedPrefs] =
-        await Promise.all([
-          getProgress(bookId!),
-          getBookmarks(bookId!),
-          getHighlights(bookId!),
-          loadReaderPrefs(),
-        ]);
+      const [
+        savedProgress,
+        savedBookmarks,
+        savedHighlights,
+        savedNotes,
+        savedPrefs,
+      ] = await Promise.all([
+        getProgress(bookId!),
+        getBookmarks(bookId!),
+        getHighlights(bookId!),
+        getNotes(bookId!),
+        loadReaderPrefs(),
+      ]);
       if (savedProgress) {
         setProgress(Math.round(savedProgress.position.percentage));
         setCurrentPosition(savedProgress.position);
       }
       setBookmarks(savedBookmarks);
       setHighlights(savedHighlights);
+      setNotes(savedNotes);
       if (savedPrefs?.theme) {
         setTheme(savedPrefs.theme);
       }
@@ -203,7 +214,13 @@ export default function ReaderScreen() {
 
   async function handleHighlight(color: HighlightColor) {
     if (!bookId || !selectionCfi) return;
-    await createHighlight(bookId, selectionCfi, color, selectedText);
+    const newHighlight = await createHighlight(
+      bookId,
+      selectionCfi,
+      color,
+      selectedText,
+    );
+    setHighlights((prev) => [newHighlight, ...prev]);
     sendToWebView("addHighlight", { cfi: selectionCfi, color });
     setContextMenuVisible(false);
   }
@@ -238,13 +255,15 @@ export default function ReaderScreen() {
 
   async function handleSaveTypedNote(text: string) {
     if (!bookId || !currentPosition) return;
-    await createNote(bookId, currentPosition, "typed", text);
+    const n = await createNote(bookId, currentPosition, "typed", text);
+    setNotes((prev) => [n, ...prev]);
     setShowTypedNote(false);
   }
 
   async function handleSaveHandwriting(strokes: import("@readr/shared").Stroke[], penConfig: import("@readr/shared").PenConfig) {
     if (!bookId || !currentPosition) return;
-    await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
+    const n = await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
+    setNotes((prev) => [n, ...prev]);
     setShowHandwriting(false);
   }
 
@@ -318,6 +337,9 @@ export default function ReaderScreen() {
           <Pressable onPress={() => setShowBookmarks(true)} style={styles.headerButton}>
             <Text style={[styles.headerButtonText, { color: theme.fg }]}>☰</Text>
           </Pressable>
+          <Pressable onPress={() => setShowNotesPanel(true)} style={styles.headerButton}>
+            <Text style={[styles.headerButtonText, { color: theme.fg }]}>📝</Text>
+          </Pressable>
           <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
             <Text style={[styles.headerButtonText, { color: theme.fg }]}>⚙</Text>
           </Pressable>
@@ -377,6 +399,20 @@ export default function ReaderScreen() {
         visible={showHandwriting}
         onSave={handleSaveHandwriting}
         onCancel={() => setShowHandwriting(false)}
+      />
+
+      <NotesPanel
+        visible={showNotesPanel}
+        notes={notes}
+        highlights={highlights}
+        onClose={() => setShowNotesPanel(false)}
+        onJumpTo={(target) => {
+          if ("cfi" in target && target.cfi) {
+            sendToWebView("goToLocation", { cfi: target.cfi });
+          } else if ("percentage" in target) {
+            sendToWebView("goToLocation", { fraction: target.percentage / 100 });
+          }
+        }}
       />
 
       {/* Bookmarks panel */}
