@@ -15,9 +15,20 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import { listBooks, uploadBook } from "../../lib/api";
 import { getProgress } from "../../lib/local-db";
+import { useSyncStatus } from "../../lib/sync-status";
 import type { Book } from "@readr/shared";
 
 type BookWithProgress = Book & { progressPct: number };
+
+function formatRelative(ts: number): string {
+  const ago = Math.max(0, Date.now() - ts);
+  const mins = Math.floor(ago / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 export default function LibraryScreen() {
   const queryClient = useQueryClient();
@@ -29,6 +40,11 @@ export default function LibraryScreen() {
   const rawBooks = data?.books ?? [];
   const [booksWithProgress, setBooksWithProgress] = useState<BookWithProgress[]>([]);
   const [uploading, setUploading] = useState(false);
+
+  const syncPhase = useSyncStatus((s) => s.phase);
+  const syncLastAt = useSyncStatus((s) => s.lastSyncAt);
+  const syncLastError = useSyncStatus((s) => s.lastError);
+  const runSyncNow = useSyncStatus((s) => s.sync);
 
   // Hydrate each book with its locally-stored progress percentage.
   // Runs whenever the server list changes.
@@ -91,17 +107,38 @@ export default function LibraryScreen() {
     <View style={styles.container}>
       <View style={styles.topBar}>
         <Text style={styles.heading}>Library</Text>
-        <Pressable
-          style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
-          onPress={handleUpload}
-          disabled={uploading}
-        >
-          {uploading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.uploadButtonText}>+ Upload</Text>
-          )}
-        </Pressable>
+        <View style={styles.topBarActions}>
+          <Pressable
+            style={styles.syncChip}
+            onPress={async () => {
+              await runSyncNow();
+              queryClient.invalidateQueries({ queryKey: ["books"] });
+            }}
+          >
+            {syncPhase === "running" ? (
+              <ActivityIndicator size="small" color="#111" />
+            ) : (
+              <Text style={styles.syncChipText}>
+                {syncLastError
+                  ? "⚠ Sync error"
+                  : syncLastAt
+                    ? `Synced ${formatRelative(syncLastAt)}`
+                    : "Sync"}
+              </Text>
+            )}
+          </Pressable>
+          <Pressable
+            style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
+            onPress={handleUpload}
+            disabled={uploading}
+          >
+            {uploading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.uploadButtonText}>+ Upload</Text>
+            )}
+          </Pressable>
+        </View>
       </View>
 
       {isLoading ? (
@@ -174,6 +211,16 @@ const styles = StyleSheet.create({
     borderBottomColor: "#f0f0f0",
   },
   heading: { fontSize: 22, fontWeight: "700" },
+  topBarActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  syncChip: {
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    minWidth: 96,
+    alignItems: "center",
+  },
+  syncChipText: { fontSize: 12, color: "#333" },
   uploadButton: {
     backgroundColor: "#111",
     paddingHorizontal: 16,

@@ -4,7 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useAuthStore } from "../lib/auth-store";
 import { DisplayProvider, useDisplayStore } from "../contexts/DisplayContext";
-import { runSync } from "../lib/sync";
+import { useSyncStatus } from "../lib/sync-status";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,14 +24,16 @@ export default function RootLayout() {
     checkSession();
   }, [checkSession]);
 
-  // Run sync on app open when authenticated
+  // Run sync on app open when authenticated (routes through the sync-status
+  // store so the library header chip reflects the result).
+  const runSyncNow = useSyncStatus((s) => s.sync);
   useEffect(() => {
     if (isAuthenticated) {
-      runSync().catch(() => {
+      runSyncNow().catch(() => {
         // Sync failure is non-fatal — offline mode still works
       });
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, runSyncNow]);
 
   const isEink = useDisplayStore((s) => s.settings.isEink);
 
