@@ -34,6 +34,7 @@ import {
 import type { Highlight, Note } from "@readr/shared";
 import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
 import { getDownloadedBook } from "../../lib/book-cache";
+import * as Brightness from "expo-brightness";
 import { DEFAULT_LOOKUP_PROVIDERS } from "@readr/shared";
 import * as Linking from "expo-linking";
 
@@ -84,6 +85,30 @@ export default function ReaderScreen() {
     { cfi: string; excerpt: string; section?: string | null }[]
   >([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // Apply the theme's brightness override while the reader is mounted.
+  // null = honor the system setting; we restore the device's brightness
+  // on unmount either way.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const { status } = await Brightness.requestPermissionsAsync();
+        if (!active || status !== "granted") return;
+        if (theme.brightness != null) {
+          await Brightness.setBrightnessAsync(theme.brightness);
+        } else {
+          await Brightness.restoreSystemBrightnessAsync();
+        }
+      } catch {
+        // No brightness permission (or no module on this platform) — silent.
+      }
+    })();
+    return () => {
+      active = false;
+      Brightness.restoreSystemBrightnessAsync().catch(() => {});
+    };
+  }, [theme.brightness]);
 
   // Page count — foliate-js reports {current, total} on every relocate.
   // Null until the first page renders; stays null if the book has no
@@ -473,8 +498,11 @@ export default function ReaderScreen() {
 
       <NotesPanel
         visible={showNotesPanel}
+        bookTitle={book.title ?? "Untitled"}
+        bookAuthor={book.author}
         notes={notes}
         highlights={highlights}
+        bookmarks={bookmarks}
         onClose={() => setShowNotesPanel(false)}
         onJumpTo={(target) => {
           if ("cfi" in target && target.cfi) {

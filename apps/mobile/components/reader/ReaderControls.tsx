@@ -12,6 +12,13 @@ export interface ReaderTheme {
   margin: number;
   /** Tap left/right edges to turn pages. When false, tap anywhere opens the controls. */
   tapToTurn: boolean;
+  /** 100 = normal weight. 300 = light, 700 = bold. Applied via CSS font-weight. */
+  fontWeight: number;
+  /**
+   * Screen brightness 0..1, mirrored into the Android screen backlight
+   * via expo-brightness. null = honor the system setting.
+   */
+  brightness: number | null;
 }
 
 export const DEFAULT_THEME: ReaderTheme = {
@@ -22,6 +29,8 @@ export const DEFAULT_THEME: ReaderTheme = {
   fontFamily: "Georgia, serif",
   margin: 48,
   tapToTurn: true,
+  fontWeight: 400,
+  brightness: null,
 };
 
 /** Generous defaults tuned for the Supernote A5X 7.8" e-ink panel. */
@@ -33,6 +42,8 @@ export const EINK_THEME: ReaderTheme = {
   fontFamily: "Georgia, serif",
   margin: 72,
   tapToTurn: true,
+  fontWeight: 500,
+  brightness: null,
 };
 
 const THEME_PRESETS = [
@@ -244,6 +255,78 @@ export function ReaderControls({
                 <Text style={styles.sizeButtonText}>+</Text>
               </Pressable>
             </View>
+
+            <Text style={styles.sectionLabel}>Weight</Text>
+            <View style={styles.presetRow}>
+              {(
+                [
+                  { label: "Light", value: 300 },
+                  { label: "Regular", value: 400 },
+                  { label: "Medium", value: 500 },
+                  { label: "Bold", value: 700 },
+                ] as const
+              ).map((w) => {
+                const active = theme.fontWeight === w.value;
+                return (
+                  <Pressable
+                    key={w.value}
+                    style={[styles.fontButton, active && styles.fontButtonActive]}
+                    onPress={() => onThemeChange({ ...theme, fontWeight: w.value })}
+                  >
+                    <Text
+                      style={[
+                        styles.fontButtonText,
+                        active && styles.fontButtonTextActive,
+                        { fontWeight: String(w.value) as "400" | "500" | "300" | "700" },
+                      ]}
+                    >
+                      {w.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {display.isEink ? null : (
+              <>
+                <Text style={styles.sectionLabel}>
+                  Brightness{" "}
+                  {theme.brightness == null
+                    ? "(system)"
+                    : `${Math.round(theme.brightness * 100)}%`}
+                </Text>
+                <View style={styles.sizeRow}>
+                  <Pressable
+                    style={styles.sizeButton}
+                    onPress={() =>
+                      onThemeChange({
+                        ...theme,
+                        brightness: clamp((theme.brightness ?? 0.5) - 0.1, 0.1, 1),
+                      })
+                    }
+                  >
+                    <Text style={styles.sizeButtonText}>☀−</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.sizeButton}
+                    onPress={() =>
+                      onThemeChange({
+                        ...theme,
+                        brightness: clamp((theme.brightness ?? 0.5) + 0.1, 0.1, 1),
+                      })
+                    }
+                  >
+                    <Text style={styles.sizeButtonText}>☀+</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.sizeButton}
+                    onPress={() => onThemeChange({ ...theme, brightness: null })}
+                  >
+                    <Text style={styles.sizeButtonText}>Auto</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
 
             <View style={styles.toggleRow}>
               <View style={{ flex: 1 }}>

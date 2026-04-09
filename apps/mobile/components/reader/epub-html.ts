@@ -95,6 +95,7 @@ export function getReaderHtml(bookUrl: string): string {
       const root = document.documentElement;
       root.style.setProperty('--bg', theme.bg || '#fff');
       root.style.setProperty('--fg', theme.fg || '#111');
+      root.style.setProperty('--font-weight', String(theme.fontWeight || 400));
       document.body.style.background = theme.bg || '#fff';
       tapToTurn = theme.tapToTurn !== false;
 
@@ -115,9 +116,10 @@ export function getReaderHtml(bookUrl: string): string {
           '  color: var(--fg);',
           '  font-size: ' + (theme.fontSize || 16) + 'px;',
           '  line-height: ' + (theme.lineHeight || 1.6) + ';',
+          '  font-weight: ' + (theme.fontWeight || 400) + ';',
           theme.fontFamily ? '  font-family: ' + theme.fontFamily + ';' : '',
           '}',
-          'body { font-family: inherit; }',
+          'body { font-family: inherit; font-weight: inherit; }',
           'p { line-height: inherit; }',
           'img { max-width: 100%; height: auto; }',
           // e-ink overrides: force full-contrast text and kill colored

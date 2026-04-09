@@ -1,10 +1,14 @@
-import { Modal, View, Text, FlatList, Pressable, StyleSheet } from "react-native";
-import type { Note, Highlight, BookPosition } from "@readr/shared";
+import { Modal, View, Text, FlatList, Pressable, StyleSheet, Alert } from "react-native";
+import type { Note, Highlight, Bookmark, BookPosition } from "@readr/shared";
+import { exportAnnotations } from "../../lib/export-annotations";
 
 interface NotesPanelProps {
   visible: boolean;
+  bookTitle: string;
+  bookAuthor: string | null;
   notes: Note[];
   highlights: Highlight[];
+  bookmarks: Bookmark[];
   onClose: () => void;
   onJumpTo: (position: BookPosition | { cfi: string }) => void;
 }
@@ -17,11 +21,31 @@ interface NotesPanelProps {
  */
 export function NotesPanel({
   visible,
+  bookTitle,
+  bookAuthor,
   notes,
   highlights,
+  bookmarks,
   onClose,
   onJumpTo,
 }: NotesPanelProps) {
+  async function handleExport(format: "markdown" | "json") {
+    try {
+      await exportAnnotations({
+        bookTitle,
+        bookAuthor,
+        highlights,
+        notes,
+        bookmarks,
+        format,
+      });
+    } catch (err) {
+      Alert.alert(
+        "Export failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
   // Merge and tag so a single list covers both.
   type Row =
     | {
@@ -68,9 +92,25 @@ export function NotesPanel({
       <View style={styles.panel}>
         <View style={styles.header}>
           <Text style={styles.title}>Notes & Highlights</Text>
-          <Pressable onPress={onClose} hitSlop={16}>
-            <Text style={styles.close}>✕</Text>
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              style={styles.exportBtn}
+              onPress={() => handleExport("markdown")}
+              disabled={highlights.length + notes.length + bookmarks.length === 0}
+            >
+              <Text style={styles.exportBtnText}>Export MD</Text>
+            </Pressable>
+            <Pressable
+              style={styles.exportBtn}
+              onPress={() => handleExport("json")}
+              disabled={highlights.length + notes.length + bookmarks.length === 0}
+            >
+              <Text style={styles.exportBtnText}>JSON</Text>
+            </Pressable>
+            <Pressable onPress={onClose} hitSlop={16}>
+              <Text style={styles.close}>✕</Text>
+            </Pressable>
+          </View>
         </View>
         {rows.length === 0 ? (
           <View style={styles.empty}>
@@ -151,7 +191,15 @@ const styles = StyleSheet.create({
     borderBottomColor: "#eee",
   },
   title: { fontSize: 16, fontWeight: "700" },
-  close: { fontSize: 20, color: "#666" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  exportBtn: {
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  exportBtnText: { fontSize: 12, color: "#333", fontWeight: "600" },
+  close: { fontSize: 20, color: "#666", marginLeft: 4 },
   empty: { padding: 32, alignItems: "center" },
   emptyText: { fontSize: 15, color: "#333" },
   emptyHint: { fontSize: 12, color: "#999", marginTop: 6, textAlign: "center" },
