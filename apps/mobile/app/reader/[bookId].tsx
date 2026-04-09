@@ -169,6 +169,24 @@ export default function ReaderScreen() {
     enabled: !!bookId,
   });
 
+  // Write reader HTML to a temp file so WebView loads from file:// origin,
+  // allowing fetch("file://...") for locally downloaded books.
+  const [readerHtmlUri, setReaderHtmlUri] = useState<string | null>(null);
+  const readerHtmlRef = useRef("");  // updated below, used by the effect
+  useEffect(() => {
+    if (!localFileUrl && !data?.book?.downloadUrl) return;
+    let cancelled = false;
+    (async () => {
+      const html = readerHtmlRef.current;
+      if (!html) return;
+      const FileSystem = await import("expo-file-system/legacy");
+      const path = FileSystem.cacheDirectory + "reader.html";
+      await FileSystem.writeAsStringAsync(path, html);
+      if (!cancelled) setReaderHtmlUri(path);
+    })();
+    return () => { cancelled = true; };
+  }, [localFileUrl, data?.book?.downloadUrl]);
+
   const book = data?.book;
 
   // Resolve the local file path for downloaded books so the WebView
@@ -475,26 +493,11 @@ export default function ReaderScreen() {
     );
   }
 
-  const format = book.format ?? "epub";
-  // Use local file if downloaded, otherwise fall back to server URL
-  const sourceUrl = localFileUrl ?? book.downloadUrl ?? "";
+  const format = book?.format ?? "epub";
+  const sourceUrl = localFileUrl ?? book?.downloadUrl ?? "";
   const readerHtml =
     format === "pdf" ? getPdfReaderHtml(sourceUrl) : getReaderHtml(sourceUrl);
-
-  // Write the reader HTML to a temp file so the WebView loads from file://
-  // origin, which allows fetch("file://...") for local books.
-  const [readerHtmlUri, setReaderHtmlUri] = useState<string | null>(null);
-  useEffect(() => {
-    if (!readerHtml) return;
-    let cancelled = false;
-    (async () => {
-      const FileSystem = await import("expo-file-system/legacy");
-      const path = FileSystem.cacheDirectory + "reader.html";
-      await FileSystem.writeAsStringAsync(path, readerHtml);
-      if (!cancelled) setReaderHtmlUri(path);
-    })();
-    return () => { cancelled = true; };
-  }, [readerHtml]);
+  readerHtmlRef.current = readerHtml;
 
   const lookupProviders = DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
     name: p.name,
