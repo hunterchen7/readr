@@ -92,8 +92,13 @@ services:
       echo 'MinIO bucket reader-dev ready.'
       "
 
+  # Caddy is optional — only started with `--profile public` so deployments
+  # that expose the stack via cloudflared tunnel (no port 80/443 needed)
+  # can skip it. On the Olares box in particular ports 80/443 are owned
+  # by the host, so we never start Caddy there.
   caddy:
     image: caddy:2-alpine
+    profiles: [public]
     depends_on:
       - api
       - web
