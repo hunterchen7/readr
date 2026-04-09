@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBook, getToken } from "@/lib/api";
 
 export const Route = createFileRoute("/book/$bookId")({
@@ -9,16 +9,31 @@ export const Route = createFileRoute("/book/$bookId")({
 function BookDetailPage() {
   if (!getToken()) return <Navigate to="/login" />;
   const { bookId } = Route.useParams();
+  const queryClient = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],
     queryFn: () => getBook(bookId),
   });
 
-  if (isLoading) return <p className="text-gray-500">Loading...</p>;
-  if (error) return <p className="text-red-600">{error.message}</p>;
+  if (isLoading) return (
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+    </div>
+  );
+  if (error) return (
+    <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3">
+      <p className="text-red-600">{error.message}</p>
+      <button onClick={() => queryClient.invalidateQueries({ queryKey: ["book", bookId] })} className="rounded-md border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50">Retry</button>
+    </div>
+  );
 
   const book = data?.book;
-  if (!book) return <p className="text-red-600">Book not found</p>;
+  if (!book) return (
+    <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3">
+      <p className="text-red-600">Book not found</p>
+      <Link to="/library" className="rounded-md border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50">Back to Library</Link>
+    </div>
+  );
 
   return (
     <div>
@@ -60,9 +75,9 @@ function BookDetailPage() {
             <Link
               to="/reader/$bookId"
               params={{ bookId }}
-              className="inline-block rounded-md bg-gray-900 px-4 py-2 text-sm text-white hover:bg-gray-800"
+              className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-gray-800"
             >
-              Read
+              Read Now
             </Link>
             {book.downloadUrl ? (
               <a

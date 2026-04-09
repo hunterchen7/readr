@@ -41,23 +41,28 @@ function RootLayout() {
             <div className="flex items-center gap-4">
               <Link
                 to="/library"
-                className="text-gray-600 hover:text-gray-900 [&.active]:font-semibold [&.active]:text-gray-900"
+                className="text-sm text-gray-600 hover:text-gray-900 sm:text-base [&.active]:font-semibold [&.active]:text-gray-900"
               >
                 Library
               </Link>
               <Link
                 to="/upload"
-                className="text-gray-600 hover:text-gray-900 [&.active]:font-semibold [&.active]:text-gray-900"
+                className="text-sm text-gray-600 hover:text-gray-900 sm:text-base [&.active]:font-semibold [&.active]:text-gray-900"
               >
                 Upload
               </Link>
               <div className="relative">
                 <button
                   onClick={() => setMenuOpen((o) => !o)}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-300"
+                  className="flex items-center gap-2 rounded-full bg-gray-200 py-1 pl-3 pr-1 text-sm text-gray-600 hover:bg-gray-300 sm:pl-3 sm:pr-2"
                   aria-label="User menu"
                 >
-                  U
+                  <span className="hidden max-w-[120px] truncate text-xs text-gray-500 sm:inline">
+                    {getServerUrl()?.replace(/^https?:\/\//, "") ?? ""}
+                  </span>
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-300 text-xs font-medium">
+                    U
+                  </span>
                 </button>
                 {menuOpen ? (
                   <>

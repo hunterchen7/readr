@@ -133,8 +133,9 @@ function WebReaderPage() {
   }
   if (error || !book) {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <div className="flex h-screen flex-col items-center justify-center gap-3">
         <p className="text-red-600">{error?.message ?? "Book not found"}</p>
+        <Link to="/library" className="rounded-md border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50">Back to Library</Link>
       </div>
     );
   }

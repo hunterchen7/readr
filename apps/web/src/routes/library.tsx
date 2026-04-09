@@ -55,8 +55,17 @@ function LibraryPage() {
     for (const file of files) handleFile(file);
   }
 
-  if (isLoading) return <p className="text-gray-500">Loading library...</p>;
-  if (error) return <p className="text-red-600">Failed to load library: {error.message}</p>;
+  if (isLoading) return (
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+    </div>
+  );
+  if (error) return (
+    <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3">
+      <p className="text-red-600">{error.message}</p>
+      <button onClick={() => queryClient.invalidateQueries({ queryKey: ["books"] })} className="rounded-md border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50">Retry</button>
+    </div>
+  );
 
   const books = (data?.books ?? []) as BookWithProgress[];
 

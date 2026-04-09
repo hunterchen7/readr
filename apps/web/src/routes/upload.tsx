@@ -12,6 +12,8 @@ function UploadPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [selectedFileName, setSelectedFileName] = useState("");
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
@@ -29,16 +31,31 @@ function UploadPage() {
       }
 
       setError("");
+      setSelectedFileName(file.name);
       setUploading(true);
+      setUploadProgress(0);
+
+      // Simulate progress since uploadBook doesn't expose real progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress((prev) => {
+          if (prev >= 90) return prev;
+          return prev + Math.random() * 15;
+        });
+      }, 300);
 
       try {
         await uploadBook(file);
+        setUploadProgress(100);
+        clearInterval(progressInterval);
         await queryClient.invalidateQueries({ queryKey: ["books"] });
         navigate({ to: "/library" });
       } catch (err) {
+        clearInterval(progressInterval);
         setError(err instanceof Error ? err.message : "Upload failed");
       } finally {
         setUploading(false);
+        setSelectedFileName("");
+        setUploadProgress(0);
       }
     },
     [navigate, queryClient],
@@ -72,7 +89,19 @@ function UploadPage() {
         }`}
       >
         {uploading ? (
-          <p className="text-gray-500">Uploading...</p>
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+            <p className="text-sm font-medium text-gray-700">{selectedFileName}</p>
+            <div className="w-64">
+              <div className="h-1.5 w-full rounded-full bg-gray-200">
+                <div
+                  className="h-1.5 rounded-full bg-gray-900 transition-all duration-300"
+                  style={{ width: `${Math.round(uploadProgress)}%` }}
+                />
+              </div>
+              <p className="mt-1 text-center text-xs text-gray-400">{Math.round(uploadProgress)}%</p>
+            </div>
+          </div>
         ) : (
           <>
             <p className="mb-2 text-gray-600">

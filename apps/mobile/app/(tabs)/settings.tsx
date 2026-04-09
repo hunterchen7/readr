@@ -4,6 +4,7 @@ import Constants from "expo-constants";
 import { useAuthStore } from "../../lib/auth-store";
 import { useDisplayStore } from "../../contexts/DisplayContext";
 import { clearAllDownloads } from "../../lib/book-cache";
+import { colors, spacing, fontSize } from "../../lib/theme";
 
 export default function SettingsScreen() {
   const { serverUrl, signOut } = useAuthStore();
@@ -83,30 +84,30 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  content: { padding: 20, paddingBottom: 40 },
-  section: { marginBottom: 20 },
-  label: { fontSize: 12, color: "#999", marginBottom: 6, textTransform: "uppercase" },
+  container: { flex: 1, backgroundColor: colors.background },
+  content: { padding: spacing.xl, paddingBottom: 40 },
+  section: { marginBottom: spacing.xl },
+  label: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: 6, textTransform: "uppercase" },
   value: { fontSize: 15 },
-  hint: { fontSize: 13, color: "#999", marginTop: 4 },
+  hint: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: spacing.xs },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   actionButton: {
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: colors.border,
     alignSelf: "flex-start",
   },
-  actionButtonText: { fontSize: 14, color: "#333" },
+  actionButtonText: { fontSize: fontSize.md, color: colors.text },
   signOutButton: {
     borderWidth: 1,
-    borderColor: "#dc2626",
+    borderColor: colors.error,
     borderRadius: 8,
     padding: 14,
     alignItems: "center",
-    marginTop: 12,
+    marginTop: spacing.md,
   },
-  signOutText: { color: "#dc2626", fontSize: 16, fontWeight: "600" },
-  version: { textAlign: "center", color: "#bbb", fontSize: 12, marginTop: 20 },
+  signOutText: { color: colors.error, fontSize: fontSize.lg, fontWeight: "600" },
+  version: { textAlign: "center", color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xl },
 });
