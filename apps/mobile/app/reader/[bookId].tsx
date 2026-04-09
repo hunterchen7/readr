@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
+import { ArrowLeft, Bookmark as BookmarkIcon, List, StickyNote, Volume2, VolumeX, Settings } from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -172,8 +173,7 @@ export default function ReaderScreen() {
 
   const book = data?.book;
 
-  // Resolve the local file path for downloaded books so the WebView
-  // fetches from disk (file://) rather than the network.
+  // Resolve the local file path for downloaded books.
   const [localFileUrl, setLocalFileUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!bookId) return;
@@ -184,6 +184,25 @@ export default function ReaderScreen() {
     })();
     return () => { cancelled = true; };
   }, [bookId]);
+
+  // Write reader HTML to a temp file so WebView loads from file:// origin.
+  const [readerHtmlUri, setReaderHtmlUri] = useState<string | null>(null);
+  const _format = data?.book?.format ?? "epub";
+  const _sourceUrl = localFileUrl ?? data?.book?.downloadUrl ?? "";
+  const _readerHtml = _sourceUrl
+    ? (_format === "pdf" ? getPdfReaderHtml(_sourceUrl) : getReaderHtml(_sourceUrl))
+    : "";
+  useEffect(() => {
+    if (!_readerHtml) return;
+    let cancelled = false;
+    (async () => {
+      const FileSystem = await import("expo-file-system/legacy");
+      const path = FileSystem.cacheDirectory + "reader.html";
+      await FileSystem.writeAsStringAsync(path, _readerHtml);
+      if (!cancelled) setReaderHtmlUri(path);
+    })();
+    return () => { cancelled = true; };
+  }, [_readerHtml]);
 
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
   useEffect(() => {
@@ -477,9 +496,6 @@ export default function ReaderScreen() {
   }
 
   const format = book?.format ?? "epub";
-  const sourceUrl = localFileUrl ?? book?.downloadUrl ?? "";
-  const readerHtml =
-    format === "pdf" ? getPdfReaderHtml(sourceUrl) : getReaderHtml(sourceUrl);
 
   const lookupProviders = DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
     name: p.name,
@@ -496,31 +512,29 @@ export default function ReaderScreen() {
         ]}
       >
         <Pressable onPress={() => router.back()} style={styles.headerButton}>
-          <Text style={[styles.headerButtonText, { color: theme.fg }]}>←</Text>
+          <ArrowLeft size={20} color={theme.fg} />
         </Pressable>
         <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
           {book.title ?? "Reading"}
         </Text>
         <View style={styles.headerActions}>
           <Pressable onPress={handleCreateBookmark} style={styles.headerButton}>
-            <Text style={[styles.headerButtonText, { color: theme.fg }]}>🔖</Text>
+            <BookmarkIcon size={20} color={theme.fg} />
           </Pressable>
           <Pressable onPress={() => setShowBookmarks(true)} style={styles.headerButton}>
-            <Text style={[styles.headerButtonText, { color: theme.fg }]}>☰</Text>
+            <List size={20} color={theme.fg} />
           </Pressable>
           <Pressable onPress={() => setShowNotesPanel(true)} style={styles.headerButton}>
-            <Text style={[styles.headerButtonText, { color: theme.fg }]}>📝</Text>
+            <StickyNote size={20} color={theme.fg} />
           </Pressable>
           <Pressable
             onPress={ttsState === "idle" ? handleStartTts : handleStopTts}
             style={styles.headerButton}
           >
-            <Text style={[styles.headerButtonText, { color: theme.fg }]}>
-              {ttsState === "idle" ? "🔊" : "🔇"}
-            </Text>
+            {ttsState === "idle" ? <Volume2 size={20} color={theme.fg} /> : <VolumeX size={20} color={theme.fg} />}
           </Pressable>
           <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
-            <Text style={[styles.headerButtonText, { color: theme.fg }]}>⚙</Text>
+            <Settings size={20} color={theme.fg} />
           </Pressable>
         </View>
       </View>
@@ -529,14 +543,13 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={styles.webview}
         originWhitelist={["*"]}
-        source={{ html: readerHtml }}
+        source={readerHtmlUri ? { uri: readerHtmlUri } : { html: "<html><body><p style='text-align:center;padding:48px;color:#999'>Preparing reader...</p></body></html>" }}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs
         onMessage={handleMessage}
         javaScriptEnabled
         domStorageEnabled
-        allowFileAccess
         mixedContentMode="always"
       />
 

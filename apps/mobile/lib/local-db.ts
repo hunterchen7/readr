@@ -14,7 +14,10 @@ let db: SQLite.SQLiteDatabase | null = null;
 
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
-  db = await SQLite.openDatabaseAsync("readr.db");
+  // Use sync open — openDatabaseAsync + prepareAsync NPEs on Android 16 (API 36).
+  // openDatabaseSync returns the same SQLiteDatabase type and the async
+  // methods (execAsync, runAsync, getAllAsync) work fine on the sync handle.
+  db = SQLite.openDatabaseSync("readr.db");
   await db.execAsync(`PRAGMA journal_mode = WAL;`);
   await runMigrations(db);
   return db;
