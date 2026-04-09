@@ -1,0 +1,11 @@
+# Cloudflare Pages header rules.
+# Hashed assets from Vite's build are immutable — cache them forever.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Never cache the SPA shell; if the user leaves the tab open for a day,
+# the next reload should pull the latest bundle manifest.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate

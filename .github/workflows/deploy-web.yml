@@ -1,0 +1,51 @@
+name: Deploy web dashboard to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/shared/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+# Cancel older in-flight deploys of the same branch so we never race.
+concurrency:
+  group: cf-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build web dashboard
+        working-directory: apps/web
+        env:
+          # Optional — set this GitHub repo secret to pre-fill the login
+          # screen with your backend URL. Leave unset and users will see
+          # the blank field and enter their own.
+          VITE_DEFAULT_SERVER_URL: ${{ secrets.READR_DEFAULT_SERVER_URL }}
+        run: pnpm build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Creates the project on first run if it doesn't already exist.
+          command: pages deploy apps/web/dist --project-name=readr --branch=${{ github.ref_name }}

@@ -3,8 +3,17 @@ import type { Book } from "@readr/shared";
 const SERVER_URL_KEY = "readr:serverUrl";
 const TOKEN_KEY = "readr:token";
 
+/**
+ * Optional build-time default URL pulled from the Vite env. Set
+ * VITE_DEFAULT_SERVER_URL at build time to ship a version of the web
+ * dashboard that automatically talks to a specific backend (e.g. a
+ * Cloudflare-tunneled Olares box) without the user having to enter it.
+ */
+export const DEFAULT_SERVER_URL: string =
+  (import.meta.env.VITE_DEFAULT_SERVER_URL as string | undefined) ?? "";
+
 export function getServerUrl(): string {
-  return localStorage.getItem(SERVER_URL_KEY) ?? "";
+  return localStorage.getItem(SERVER_URL_KEY) ?? DEFAULT_SERVER_URL;
 }
 
 export function setServerUrl(url: string): void {

@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import {
+  DEFAULT_SERVER_URL,
   generateToken,
   getServerUrl,
   getToken,
@@ -20,10 +21,12 @@ function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Prefill with whatever's already in localStorage so this screen also
-  // works as "edit my connection settings".
+  // Prefill from (in order of preference): existing localStorage value,
+  // VITE_DEFAULT_SERVER_URL build-time env, then the current origin.
   useEffect(() => {
-    setServerUrlInput(getServerUrl() || window.location.origin);
+    setServerUrlInput(
+      getServerUrl() || DEFAULT_SERVER_URL || window.location.origin,
+    );
     setTokenInput(getToken());
   }, []);
 
