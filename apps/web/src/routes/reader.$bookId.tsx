@@ -64,7 +64,7 @@ function WebReaderPage() {
             applyTheme(themeRef.current);
             // Restore saved position
             if (savedCfiRef.current) {
-              sendToReader("goToChapter", { href: savedCfiRef.current });
+              sendToReader("goToLocation", { cfi: savedCfiRef.current });
             }
             break;
           case "progressUpdated": {
@@ -245,6 +245,9 @@ function getEpubReaderHtml(bookUrl: string): string {
         case 'goToChapter':
           if (view) view.goTo(payload.href);
           break;
+        case 'goToLocation':
+          if (view && payload.cfi) view.goTo(payload.cfi);
+          break;
         case 'prevPage':
           if (view) view.goLeft();
           break;
@@ -261,11 +264,14 @@ function getEpubReaderHtml(bookUrl: string): string {
         const blob = await res.blob();
         const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
 
-        const el = document.createElement('foliate-view');
-        el.setAttribute('flow', 'paginated');
-        viewer.appendChild(el);
+        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
+        const book = await makeBook(file);
 
-        await el.open(file);
+        const el = document.createElement('foliate-view');
+        viewer.appendChild(el);
+        el.setAttribute('flow', 'paginated');
+
+        await el.open(book);
         view = el;
 
         loading.style.display = 'none';

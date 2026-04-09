@@ -179,7 +179,15 @@ export function getReaderHtml(bookUrl: string): string {
 
     async function init() {
       try {
-        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
+        let makeBook;
+        try {
+          const mod = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
+          makeBook = mod.makeBook;
+        } catch (importErr) {
+          document.getElementById('loading').textContent = 'Import error: ' + importErr.message;
+          post('error', { message: 'foliate import failed: ' + importErr.message });
+          return;
+        }
 
         // Prefer the locally-injected book bytes when available (set by
         // the host RN app via injectedJavaScriptBeforeContentLoaded for
