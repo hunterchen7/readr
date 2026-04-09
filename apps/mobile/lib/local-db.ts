@@ -177,6 +177,33 @@ export async function upsertProgress(
   });
 }
 
+export async function getAllProgress(): Promise<Map<string, ReadingProgress>> {
+  const database = await getDb();
+  const deviceId = getDeviceId();
+  const rows = await database.getAllAsync<{
+    id: string;
+    book_id: string;
+    device_id: string;
+    position: string;
+    updated_at: string;
+  }>(
+    "SELECT * FROM reading_progress WHERE device_id = ?",
+    [deviceId],
+  );
+  const map = new Map<string, ReadingProgress>();
+  for (const row of rows) {
+    map.set(row.book_id, {
+      id: row.id,
+      bookId: row.book_id,
+      userId: "",
+      deviceId: row.device_id,
+      position: JSON.parse(row.position) as BookPosition,
+      updatedAt: row.updated_at,
+    });
+  }
+  return map;
+}
+
 // ─── Bookmarks ───────────────────────────────────────────────────────────
 
 export async function getBookmarks(bookId: string): Promise<Bookmark[]> {
