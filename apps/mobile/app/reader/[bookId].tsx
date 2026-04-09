@@ -17,6 +17,7 @@ import {
 import { useDisplay } from "../../contexts/DisplayContext";
 import { ContextMenu } from "../../components/reader/ContextMenu";
 import { NotesPanel } from "../../components/reader/NotesPanel";
+import { GotoDialog } from "../../components/reader/GotoDialog";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
 import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
 import {
@@ -83,6 +84,13 @@ export default function ReaderScreen() {
     { cfi: string; excerpt: string; section?: string | null }[]
   >([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // Page count — foliate-js reports {current, total} on every relocate.
+  // Null until the first page renders; stays null if the book has no
+  // estimable page count (e.g. very short EPUBs).
+  const [currentPage, setCurrentPage] = useState<number | null>(null);
+  const [totalPages, setTotalPages] = useState<number | null>(null);
+  const [showGotoDialog, setShowGotoDialog] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],
@@ -209,9 +217,15 @@ export default function ReaderScreen() {
             percentage: pct,
             cfi: msg.payload.cfi,
             chapter: msg.payload.chapter,
-            page: msg.payload.page,
+            page: msg.payload.currentPage ?? msg.payload.page,
           };
           setCurrentPosition(position);
+          if (typeof msg.payload.currentPage === "number") {
+            setCurrentPage(msg.payload.currentPage);
+          }
+          if (typeof msg.payload.totalPages === "number") {
+            setTotalPages(msg.payload.totalPages);
+          }
           if (bookId) {
             upsertProgress(bookId, position);
           }
@@ -401,7 +415,8 @@ export default function ReaderScreen() {
         mixedContentMode="always"
       />
 
-      <View
+      <Pressable
+        onPress={() => setShowGotoDialog(true)}
         style={[
           styles.progressBar,
           {
@@ -411,8 +426,12 @@ export default function ReaderScreen() {
         ]}
       >
         <View style={[styles.progressFill, { width: `${progress}%` }]} />
-        <Text style={[styles.progressText, { color: theme.fg }]}>{progress}%</Text>
-      </View>
+        <Text style={[styles.progressText, { color: theme.fg }]}>
+          {currentPage != null && totalPages != null
+            ? `${currentPage} / ${totalPages}  ·  ${progress}%`
+            : `${progress}%`}
+        </Text>
+      </Pressable>
 
       <ReaderControls
         visible={showControls}
@@ -463,6 +482,22 @@ export default function ReaderScreen() {
           } else if ("percentage" in target) {
             sendToWebView("goToLocation", { fraction: target.percentage / 100 });
           }
+        }}
+      />
+
+      <GotoDialog
+        visible={showGotoDialog}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        progressPct={progress}
+        onClose={() => setShowGotoDialog(false)}
+        onGoToPage={(page) => {
+          if (totalPages && totalPages > 0) {
+            sendToWebView("goToLocation", { fraction: page / totalPages });
+          }
+        }}
+        onGoToFraction={(frac) => {
+          sendToWebView("goToLocation", { fraction: frac });
         }}
       />
 

@@ -197,7 +197,9 @@ export function getReaderHtml(bookUrl: string): string {
 
         await view.open(book);
 
-        // Relay location changes
+        // Relay location changes. pageItem carries foliate's computed
+        // {current, total} page count across the whole book — surface it
+        // so the reader can render "12 / 345".
         view.addEventListener('relocate', (e) => {
           const d = e.detail;
           post('progressUpdated', {
@@ -206,6 +208,8 @@ export function getReaderHtml(bookUrl: string): string {
             chapter: d.tocItem?.label,
             chapterHref: d.tocItem?.href,
             sectionIndex: d.index,
+            currentPage: d.pageItem?.current ?? null,
+            totalPages: d.pageItem?.total ?? null,
           });
         });
 

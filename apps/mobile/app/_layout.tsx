@@ -6,6 +6,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useAuthStore } from "../lib/auth-store";
 import { DisplayProvider, useDisplayStore } from "../contexts/DisplayContext";
 import { useSyncStatus } from "../lib/sync-status";
+import { useLibraryPrefs } from "../lib/library-prefs";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,9 +22,11 @@ export default function RootLayout() {
 
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
+  const hydrateLibraryPrefs = useLibraryPrefs((s) => s.hydrate);
   useEffect(() => {
     checkSession();
-  }, [checkSession]);
+    hydrateLibraryPrefs();
+  }, [checkSession, hydrateLibraryPrefs]);
 
   // Run sync on app open when authenticated (routes through the sync-status
   // store so the library header chip reflects the result).
