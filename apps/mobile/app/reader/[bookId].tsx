@@ -185,24 +185,11 @@ export default function ReaderScreen() {
     return () => { cancelled = true; };
   }, [bookId]);
 
-  // Write reader HTML to a temp file so WebView loads from file:// origin.
-  const [readerHtmlUri, setReaderHtmlUri] = useState<string | null>(null);
   const _format = data?.book?.format ?? "epub";
   const _sourceUrl = localFileUrl ?? data?.book?.downloadUrl ?? "";
   const _readerHtml = _sourceUrl
     ? (_format === "pdf" ? getPdfReaderHtml(_sourceUrl) : getReaderHtml(_sourceUrl))
     : "";
-  useEffect(() => {
-    if (!_readerHtml) return;
-    let cancelled = false;
-    (async () => {
-      const FileSystem = await import("expo-file-system/legacy");
-      const path = FileSystem.cacheDirectory + "reader.html";
-      await FileSystem.writeAsStringAsync(path, _readerHtml);
-      if (!cancelled) setReaderHtmlUri(path);
-    })();
-    return () => { cancelled = true; };
-  }, [_readerHtml]);
 
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
   useEffect(() => {
@@ -534,7 +521,7 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={styles.webview}
         originWhitelist={["*"]}
-        source={readerHtmlUri ? { uri: readerHtmlUri } : { html: "<html><body><p style='text-align:center;padding:48px;color:#999'>Preparing reader...</p></body></html>" }}
+        source={{ html: _readerHtml || "<html><body><p style='text-align:center;padding:48px;color:#999'>Loading...</p></body></html>", baseUrl: localFileUrl ? localFileUrl.replace(/\/[^/]+$/, "/") : "" }}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs

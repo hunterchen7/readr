@@ -109,9 +109,12 @@ export default function LibraryScreen() {
       ]);
       const results: BookWithProgress[] = rawBooks.map((b) => {
         const p = progressMap.get(b.id);
+        // Use local progress if available, fall back to server's progressPct
+        const localPct = p ? Math.round(p.position.percentage ?? 0) : null;
+        const serverPct = (b as any).progressPct ?? 0;
         return {
           ...b,
-          progressPct: Math.round(p?.position.percentage ?? 0),
+          progressPct: localPct ?? serverPct,
           downloaded: downloadedSet.has(b.id),
           downloadProgress: null,
         };
@@ -178,11 +181,7 @@ export default function LibraryScreen() {
   }
 
   function handleBookPress(book: BookWithProgress) {
-    if (!book.downloaded) {
-      handleDownload(book.id);
-      return;
-    }
-    router.push(`/reader/${book.id}`);
+    router.push(`/book/${book.id}`);
   }
 
   async function handleUpload() {
@@ -541,6 +540,7 @@ const styles = StyleSheet.create({
     gap: 6,
     flexDirection: "row",
     alignItems: "center",
+    flexGrow: 1,
   },
   sortPill: {
     backgroundColor: colors.primary,
