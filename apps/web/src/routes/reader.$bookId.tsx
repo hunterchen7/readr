@@ -16,10 +16,13 @@ interface TocItem {
 function WebReaderPage() {
   const { bookId } = Route.useParams();
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [showSidebar, setShowSidebar] = useState(false);
+  const [showToc, setShowToc] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [progress, setProgress] = useState(0);
+  const [chapter, setChapter] = useState("");
   const [theme, setTheme] = useState<"light" | "sepia" | "dark">("light");
+  const [fontSize, setFontSize] = useState(18);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],
@@ -38,13 +41,13 @@ function WebReaderPage() {
     [],
   );
 
-  // Use refs to track latest values so the message handler never goes stale.
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   const savedCfiRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load saved progress on mount
   useEffect(() => {
     getProgress(bookId).then(({ positions }) => {
       if (positions.length > 0) {
@@ -61,8 +64,7 @@ function WebReaderPage() {
         const msg = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
         switch (msg.type) {
           case "ready":
-            applyTheme(themeRef.current);
-            // Restore saved position
+            applyTheme(themeRef.current, fontSizeRef.current);
             if (savedCfiRef.current) {
               sendToReader("goToLocation", { cfi: savedCfiRef.current });
             }
@@ -71,7 +73,7 @@ function WebReaderPage() {
             const pct = msg.payload.percentage ?? 0;
             const cfi = msg.payload.cfi;
             setProgress(pct);
-            // Debounced save — every 3 seconds max
+            if (msg.payload.chapter) setChapter(msg.payload.chapter);
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
             saveTimerRef.current = setTimeout(() => {
               saveProgress(bookId, { percentage: pct, cfi }).catch(() => {});
@@ -82,9 +84,7 @@ function WebReaderPage() {
             setToc(msg.payload.chapters ?? []);
             break;
         }
-      } catch {
-        // Ignore non-JSON messages
-      }
+      } catch {}
     }
 
     window.addEventListener("message", handleMessage);
@@ -94,86 +94,201 @@ function WebReaderPage() {
     };
   }, [bookId]);
 
-  function applyTheme(t: string) {
-    const themes: Record<string, { bg: string; fg: string; fontSize: number }> = {
-      light: { bg: "#ffffff", fg: "#111111", fontSize: 18 },
-      sepia: { bg: "#f4ecd8", fg: "#5c4b37", fontSize: 18 },
-      dark: { bg: "#1a1a2e", fg: "#e0e0e0", fontSize: 18 },
+  function applyTheme(t: string, fs: number) {
+    const themes: Record<string, { bg: string; fg: string }> = {
+      light: { bg: "#ffffff", fg: "#111111" },
+      sepia: { bg: "#f4ecd8", fg: "#5c4b37" },
+      dark: { bg: "#1a1a2e", fg: "#e0e0e0" },
     };
-    sendToReader("setTheme", themes[t] ?? themes.light);
+    const th = themes[t] ?? themes.light;
+    sendToReader("setTheme", { ...th, fontSize: fs });
   }
 
   function handleThemeChange(t: "light" | "sepia" | "dark") {
     setTheme(t);
-    applyTheme(t);
+    applyTheme(t, fontSize);
   }
 
-  if (isLoading) return <p className="p-8 text-gray-500">Loading...</p>;
-  if (error) return <p className="p-8 text-red-600">{error.message}</p>;
-  if (!book) return <p className="p-8 text-red-600">Book not found</p>;
+  function handleFontSize(delta: number) {
+    const next = Math.max(12, Math.min(32, fontSize + delta));
+    setFontSize(next);
+    applyTheme(theme, next);
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <p className="text-gray-400">Loading...</p>
+      </div>
+    );
+  }
+  if (error || !book) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <p className="text-red-600">{error?.message ?? "Book not found"}</p>
+      </div>
+    );
+  }
 
   const format = book.format ?? "epub";
   const readerHtml = format === "pdf"
     ? getPdfReaderHtml(book.downloadUrl!)
     : getEpubReaderHtml(book.downloadUrl!);
 
+  const themeBg = theme === "dark" ? "#1a1a2e" : theme === "sepia" ? "#f4ecd8" : "#ffffff";
+  const themeFg = theme === "dark" ? "#e0e0e0" : theme === "sepia" ? "#5c4b37" : "#111111";
+
   return (
-    <div className="flex h-screen flex-col bg-white">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-4 py-2">
+    <div className="flex h-screen flex-col" style={{ backgroundColor: themeBg, color: themeFg }}>
+      {/* Header — minimal, blends with theme */}
+      <div
+        className="flex items-center justify-between px-4 py-2"
+        style={{ borderBottom: `1px solid ${theme === "dark" ? "#333" : "#e5e5e5"}` }}
+      >
         <Link
-          to="/book/$bookId"
-          params={{ bookId }}
-          className="text-sm text-gray-500 hover:text-gray-900"
+          to="/library"
+          className="rounded-md px-2 py-1 text-sm opacity-60 transition-opacity hover:opacity-100"
+          style={{ color: themeFg }}
         >
-          &larr; Back
+          ← Library
         </Link>
-        <h1 className="max-w-md truncate text-sm font-medium">
-          {book.title ?? "Reading"}
-        </h1>
-        <div className="flex gap-2">
+        <div className="flex flex-col items-center">
+          <span className="max-w-xs truncate text-sm font-medium">{book.title ?? "Reading"}</span>
+          {chapter ? <span className="text-[11px] opacity-50">{chapter}</span> : null}
+        </div>
+        <div className="flex items-center gap-1">
           <button
-            onClick={() => setShowSidebar(!showSidebar)}
-            className="rounded px-2 py-1 text-sm text-gray-500 hover:bg-gray-100"
+            onClick={() => { setShowToc((o) => !o); setShowSettings(false); }}
+            className={`rounded-md px-2 py-1 text-sm transition-colors ${showToc ? "bg-black/10" : "opacity-60 hover:opacity-100"}`}
+            style={{ color: themeFg }}
           >
-            TOC
+            ☰
           </button>
-          {(["light", "sepia", "dark"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => handleThemeChange(t)}
-              className={`rounded px-2 py-1 text-xs capitalize ${
-                theme === t ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
+          <button
+            onClick={() => { setShowSettings((o) => !o); setShowToc(false); }}
+            className={`rounded-md px-2 py-1 text-sm transition-colors ${showSettings ? "bg-black/10" : "opacity-60 hover:opacity-100"}`}
+            style={{ color: themeFg }}
+          >
+            Aa
+          </button>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        {showSidebar ? (
-          <div className="w-64 overflow-y-auto border-r bg-gray-50 p-4">
-            <h2 className="mb-3 text-sm font-semibold text-gray-600">
-              Table of Contents
+      <div className="relative flex flex-1 overflow-hidden">
+        {/* TOC sidebar */}
+        {showToc ? (
+          <div
+            className="w-72 overflow-y-auto border-r p-4"
+            style={{
+              backgroundColor: theme === "dark" ? "#111" : "#fafafa",
+              borderColor: theme === "dark" ? "#333" : "#e5e5e5",
+            }}
+          >
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider opacity-50">
+              Contents
             </h2>
-            {toc.map((item, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  sendToReader("goToChapter", { href: item.href });
-                  setShowSidebar(false);
-                }}
-                className="block w-full truncate py-1.5 text-left text-sm text-gray-700 hover:text-gray-900"
-                style={{ paddingLeft: `${item.depth * 16}px` }}
-              >
-                {item.label}
-              </button>
-            ))}
+            {toc.length === 0 ? (
+              <p className="text-sm opacity-40">No table of contents</p>
+            ) : (
+              toc.map((item, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    sendToReader("goToChapter", { href: item.href });
+                    setShowToc(false);
+                  }}
+                  className="block w-full truncate py-1.5 text-left text-sm opacity-70 transition-opacity hover:opacity-100"
+                  style={{ paddingLeft: `${8 + item.depth * 16}px`, color: themeFg }}
+                >
+                  {item.label}
+                </button>
+              ))
+            )}
           </div>
         ) : null}
+
+        {/* Settings panel */}
+        {showSettings ? (
+          <div
+            className="absolute right-0 top-0 z-10 w-64 border-l p-4 shadow-lg"
+            style={{
+              backgroundColor: theme === "dark" ? "#111" : "#fff",
+              borderColor: theme === "dark" ? "#333" : "#e5e5e5",
+              height: "100%",
+            }}
+          >
+            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider opacity-50">
+              Settings
+            </h2>
+
+            {/* Font size */}
+            <div className="mb-4">
+              <label className="mb-2 block text-xs opacity-50">Font size</label>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleFontSize(-2)}
+                  className="flex h-8 w-8 items-center justify-center rounded border text-sm"
+                  style={{ borderColor: theme === "dark" ? "#444" : "#ddd", color: themeFg }}
+                >
+                  A-
+                </button>
+                <span className="min-w-[3ch] text-center text-sm">{fontSize}</span>
+                <button
+                  onClick={() => handleFontSize(2)}
+                  className="flex h-8 w-8 items-center justify-center rounded border text-sm font-bold"
+                  style={{ borderColor: theme === "dark" ? "#444" : "#ddd", color: themeFg }}
+                >
+                  A+
+                </button>
+              </div>
+            </div>
+
+            {/* Theme */}
+            <div>
+              <label className="mb-2 block text-xs opacity-50">Theme</label>
+              <div className="flex gap-2">
+                {([
+                  { key: "light", label: "Light", bg: "#fff", fg: "#111" },
+                  { key: "sepia", label: "Sepia", bg: "#f4ecd8", fg: "#5c4b37" },
+                  { key: "dark", label: "Dark", bg: "#1a1a2e", fg: "#e0e0e0" },
+                ] as const).map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => handleThemeChange(t.key)}
+                    className={`flex-1 rounded-md border py-2 text-xs font-medium transition-all ${
+                      theme === t.key ? "ring-2 ring-blue-500" : ""
+                    }`}
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.fg,
+                      borderColor: theme === "dark" ? "#444" : "#ddd",
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Nav buttons */}
+        <button
+          onClick={() => sendToReader("prevPage", {})}
+          className="absolute left-0 top-0 z-[5] flex h-full w-12 items-center justify-center opacity-0 transition-opacity hover:opacity-60"
+          style={{ color: themeFg }}
+          aria-label="Previous page"
+        >
+          ‹
+        </button>
+        <button
+          onClick={() => sendToReader("nextPage", {})}
+          className="absolute right-0 top-0 z-[5] flex h-full w-12 items-center justify-center opacity-0 transition-opacity hover:opacity-60"
+          style={{ color: themeFg }}
+          aria-label="Next page"
+        >
+          ›
+        </button>
 
         {/* Reader iframe */}
         <iframe
@@ -185,21 +300,34 @@ function WebReaderPage() {
         />
       </div>
 
-      {/* Progress bar */}
-      <div className="relative h-5 border-t bg-white px-3">
+      {/* Bottom bar — progress */}
+      <div
+        className="flex items-center gap-3 px-4 py-2"
+        style={{ borderTop: `1px solid ${theme === "dark" ? "#333" : "#e5e5e5"}` }}
+      >
+        <span className="min-w-[3ch] text-xs opacity-40">{progress}%</span>
         <div
-          className="absolute inset-y-0 left-0 bg-gray-100"
-          style={{ width: `${progress}%` }}
-        />
-        <span className="relative text-xs text-gray-400">{progress}%</span>
+          className="relative h-1 flex-1 cursor-pointer rounded-full"
+          style={{ backgroundColor: theme === "dark" ? "#333" : "#e5e5e5" }}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const frac = (e.clientX - rect.left) / rect.width;
+            const pct = Math.round(Math.max(0, Math.min(100, frac * 100)));
+            sendToReader("goToFraction", { fraction: frac });
+            setProgress(pct);
+          }}
+        >
+          <div
+            className="absolute inset-y-0 left-0 rounded-full bg-blue-500 transition-all"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
       </div>
     </div>
   );
 }
 
 // ─── Inline reader HTML generators ──────────────────────────────────
-// These are simplified versions of the mobile HTML generators,
-// adapted for iframe communication instead of React Native WebView.
 
 function getEpubReaderHtml(bookUrl: string): string {
   return `<!DOCTYPE html>
@@ -211,7 +339,7 @@ function getEpubReaderHtml(bookUrl: string): string {
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
     #viewer { width: 100%; height: 100%; }
     foliate-view { width: 100%; height: 100%; }
-    #loading { display: flex; justify-content: center; align-items: center; height: 100%; font-family: system-ui; }
+    #loading { display: flex; justify-content: center; align-items: center; height: 100%; font-family: system-ui; color: #999; }
   </style>
 </head>
 <body>
@@ -219,8 +347,6 @@ function getEpubReaderHtml(bookUrl: string): string {
   <div id="viewer" style="display:none;"></div>
 
   <script type="module">
-    import 'https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js';
-
     const viewer = document.getElementById('viewer');
     const loading = document.getElementById('loading');
 
@@ -240,6 +366,7 @@ function getEpubReaderHtml(bookUrl: string): string {
         case 'setTheme':
           document.documentElement.style.setProperty('--bg', payload.bg);
           document.documentElement.style.setProperty('--fg', payload.fg);
+          document.body.style.background = payload.bg;
           if (view) view.renderer?.setStyles?.({ fontSize: payload.fontSize + 'px' });
           break;
         case 'goToChapter':
@@ -247,6 +374,9 @@ function getEpubReaderHtml(bookUrl: string): string {
           break;
         case 'goToLocation':
           if (view && payload.cfi) view.goTo(payload.cfi);
+          break;
+        case 'goToFraction':
+          if (view && typeof payload.fraction === 'number') view.goToFraction(payload.fraction);
           break;
         case 'prevPage':
           if (view) view.goLeft();
@@ -260,11 +390,13 @@ function getEpubReaderHtml(bookUrl: string): string {
     let view = null;
     async function init() {
       try {
+        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
+
         const res = await fetch('${bookUrl}');
+        if (!res.ok) throw new Error('Failed to fetch book (' + res.status + ')');
         const blob = await res.blob();
         const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
 
-        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
         const book = await makeBook(file);
 
         const el = document.createElement('foliate-view');
@@ -277,7 +409,6 @@ function getEpubReaderHtml(bookUrl: string): string {
         loading.style.display = 'none';
         viewer.style.display = 'block';
 
-        // Report TOC
         if (view.book?.toc) {
           const flatten = (items, depth = 0) =>
             items.flatMap(item => [
@@ -287,16 +418,16 @@ function getEpubReaderHtml(bookUrl: string): string {
           sendMessage('tocLoaded', { chapters: flatten(view.book.toc) });
         }
 
-        // Track progress
         view.addEventListener('relocate', (e) => {
-          const frac = e.detail?.fraction ?? 0;
+          const d = e.detail;
           sendMessage('progressUpdated', {
-            percentage: Math.round(frac * 100),
-            cfi: e.detail?.cfi,
+            percentage: Math.round((d.fraction ?? 0) * 100),
+            cfi: d.cfi,
+            chapter: d.tocItem?.label ?? '',
           });
         });
 
-        // Click left/right third to turn pages
+        // Click navigation
         viewer.addEventListener('click', (e) => {
           const x = e.clientX / window.innerWidth;
           if (x < 0.3) view.goLeft();
@@ -311,7 +442,7 @@ function getEpubReaderHtml(bookUrl: string): string {
 
         sendMessage('ready', {});
       } catch (err) {
-        loading.textContent = 'Failed to load book: ' + err.message;
+        loading.textContent = 'Failed to load: ' + err.message;
       }
     }
 
@@ -332,7 +463,7 @@ function getPdfReaderHtml(bookUrl: string): string {
     #pages { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px; }
     .page-slot { display: flex; justify-content: center; align-items: center; background: #e5e5e5; }
     .page-slot canvas { max-width: 100%; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
-    #loading { display: flex; justify-content: center; align-items: center; height: 100%; font-family: system-ui; }
+    #loading { display: flex; justify-content: center; align-items: center; height: 100%; font-family: system-ui; color: #999; }
   </style>
 </head>
 <body>
@@ -355,6 +486,7 @@ function getPdfReaderHtml(bookUrl: string): string {
         const msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         if (msg.type === 'setTheme') {
           document.documentElement.style.setProperty('--bg', msg.payload.bg);
+          document.body.style.background = msg.payload.bg;
         }
       } catch {}
     });
@@ -366,12 +498,8 @@ function getPdfReaderHtml(bookUrl: string): string {
       loading.style.display = 'none';
       pages.style.display = 'flex';
 
-      // Create placeholder slots for all pages with correct dimensions,
-      // but only render pages that are near the viewport (lazy rendering).
       const rendered = new Set();
       const slots = [];
-
-      // Get the first page to determine default dimensions
       const firstPage = await pdf.getPage(1);
       const defaultVp = firstPage.getViewport({ scale: 1.5 });
 
@@ -385,7 +513,6 @@ function getPdfReaderHtml(bookUrl: string): string {
         slots.push(slot);
       }
 
-      // Render the first page immediately
       const canvas1 = document.createElement('canvas');
       canvas1.width = defaultVp.width;
       canvas1.height = defaultVp.height;
@@ -393,7 +520,6 @@ function getPdfReaderHtml(bookUrl: string): string {
       await firstPage.render({ canvasContext: canvas1.getContext('2d'), viewport: defaultVp }).promise;
       rendered.add(1);
 
-      // Use IntersectionObserver to lazy-render pages as they approach the viewport
       const observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
@@ -418,7 +544,6 @@ function getPdfReaderHtml(bookUrl: string): string {
         await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
       }
 
-      // Scroll-based progress tracking
       document.addEventListener('scroll', () => {
         const scrollTop = document.documentElement.scrollTop;
         const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;

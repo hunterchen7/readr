@@ -1,6 +1,7 @@
-import { createRootRouteWithContext, Outlet, Link, useLocation } from "@tanstack/react-router";
+import { createRootRouteWithContext, Outlet, Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import { getToken } from "@/lib/api";
+import { getToken, getServerUrl, clearAuth } from "@/lib/api";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -12,8 +13,22 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 function RootLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const isLoginPage = location.pathname === "/login";
+  const isReaderPage = location.pathname.startsWith("/reader/");
   const isAuthed = !!getToken();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  function handleSignOut() {
+    clearAuth();
+    setMenuOpen(false);
+    navigate({ to: "/login" });
+  }
+
+  // Reader page gets no chrome — full screen
+  if (isReaderPage && isAuthed) {
+    return <Outlet />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -23,7 +38,7 @@ function RootLayout() {
             <Link to="/" className="text-xl font-bold text-gray-900">
               Readr
             </Link>
-            <div className="flex gap-4">
+            <div className="flex items-center gap-4">
               <Link
                 to="/library"
                 className="text-gray-600 hover:text-gray-900 [&.active]:font-semibold [&.active]:text-gray-900"
@@ -36,11 +51,38 @@ function RootLayout() {
               >
                 Upload
               </Link>
+              <div className="relative">
+                <button
+                  onClick={() => setMenuOpen((o) => !o)}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-300"
+                  aria-label="User menu"
+                >
+                  ●
+                </button>
+                {menuOpen ? (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                    <div className="absolute right-0 z-20 mt-2 w-56 rounded-lg border bg-white py-1 shadow-lg">
+                      <div className="border-b px-4 py-2">
+                        <p className="truncate text-xs text-gray-400">
+                          {getServerUrl()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleSignOut}
+                        className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-50"
+                      >
+                        Sign out
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
             </div>
           </div>
         </nav>
       ) : null}
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main className={isLoginPage ? "" : "mx-auto max-w-6xl px-6 py-8"}>
         <Outlet />
       </main>
     </div>
