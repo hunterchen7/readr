@@ -169,23 +169,6 @@ export default function ReaderScreen() {
     enabled: !!bookId,
   });
 
-  // Write reader HTML to a temp file so WebView loads from file:// origin,
-  // allowing fetch("file://...") for locally downloaded books.
-  const [readerHtmlUri, setReaderHtmlUri] = useState<string | null>(null);
-  const readerHtmlRef = useRef("");  // updated below, used by the effect
-  useEffect(() => {
-    if (!localFileUrl && !data?.book?.downloadUrl) return;
-    let cancelled = false;
-    (async () => {
-      const html = readerHtmlRef.current;
-      if (!html) return;
-      const FileSystem = await import("expo-file-system/legacy");
-      const path = FileSystem.cacheDirectory + "reader.html";
-      await FileSystem.writeAsStringAsync(path, html);
-      if (!cancelled) setReaderHtmlUri(path);
-    })();
-    return () => { cancelled = true; };
-  }, [localFileUrl, data?.book?.downloadUrl]);
 
   const book = data?.book;
 
@@ -497,7 +480,6 @@ export default function ReaderScreen() {
   const sourceUrl = localFileUrl ?? book?.downloadUrl ?? "";
   const readerHtml =
     format === "pdf" ? getPdfReaderHtml(sourceUrl) : getReaderHtml(sourceUrl);
-  readerHtmlRef.current = readerHtml;
 
   const lookupProviders = DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
     name: p.name,
@@ -547,7 +529,7 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={styles.webview}
         originWhitelist={["*"]}
-        source={readerHtmlUri ? { uri: readerHtmlUri } : { html: "<p>Loading reader...</p>" }}
+        source={{ html: readerHtml }}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs

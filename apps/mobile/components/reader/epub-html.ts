@@ -169,13 +169,29 @@ export function getReaderHtml(bookUrl: string): string {
       }
     }
 
+    function fetchFile(url) {
+      // fetch() doesn't work with file:// on Android WebView.
+      // XMLHttpRequest does when allowFileAccess is enabled.
+      if (url.startsWith('file://')) {
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('GET', url, true);
+          xhr.responseType = 'blob';
+          xhr.onload = () => xhr.status === 200 || xhr.status === 0
+            ? resolve(xhr.response)
+            : reject(new Error('XHR failed: ' + xhr.status));
+          xhr.onerror = () => reject(new Error('XHR network error'));
+          xhr.send();
+        });
+      }
+      return fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); });
+    }
+
     async function init() {
       try {
         const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
 
-        const res = await fetch(BOOK_URL);
-        if (!res.ok) throw new Error('Failed to fetch book (' + res.status + ')');
-        const blob = await res.blob();
+        const blob = await fetchFile(BOOK_URL);
         const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
 
         book = await makeBook(file);
