@@ -22,34 +22,25 @@ export function isEmailEnabled(): boolean {
 export async function sendVerificationCode(opts: {
   to: string;
   code: string;
-  purpose: "attach" | "recover";
+  purpose: "attach" | "recover" | "login";
 }): Promise<void> {
   const r = getClient();
   if (!r || !env.RESEND_FROM) {
     throw new Error("email not configured");
   }
   const subject =
-    opts.purpose === "attach"
-      ? "Verify your Readr recovery email"
-      : "Your Readr device token";
+    opts.purpose === "login"
+      ? "Your Readr login code"
+      : opts.purpose === "attach"
+        ? "Verify your Readr recovery email"
+        : "Your Readr device token";
 
-  const body =
-    opts.purpose === "attach"
-      ? `Your Readr verification code is ${opts.code}.
-
-Enter this in the Settings → Attach email screen to finish linking
-this email to your Readr account. The code expires in 15 minutes.
-
-If you didn't request this, you can safely ignore this email.`
-      : `Someone requested a recovery code for this Readr account.
-
-Your code: ${opts.code}
-
-Enter it on the "Recover my device token" screen to get your token
-e-mailed back to you. The code expires in 15 minutes.
-
-If you didn't request this, ignore it — no one can access your
-account without the code.`;
+  const bodies: Record<string, string> = {
+    login: `Your Readr login code is:\n\n${opts.code}\n\nEnter this in the app to sign in. It expires in 15 minutes.\n\nIf you didn't request this, just ignore this email.`,
+    attach: `Your Readr verification code is ${opts.code}.\n\nEnter this in Settings to link this email to your account. It expires in 15 minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
+    recover: `Your Readr recovery code is:\n\n${opts.code}\n\nEnter it on the recovery screen to retrieve your account. It expires in 15 minutes.\n\nIf you didn't request this, just ignore it.`,
+  };
+  const body = bodies[opts.purpose];
 
   await r.emails.send({
     from: env.RESEND_FROM,

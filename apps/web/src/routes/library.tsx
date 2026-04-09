@@ -1,6 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listBooks, deleteBook } from "@/lib/api";
+import { listBooks, deleteBook, uploadBook, getToken } from "@/lib/api";
 import type { Book } from "@readr/shared";
 
 export const Route = createFileRoute("/library")({
@@ -8,7 +9,11 @@ export const Route = createFileRoute("/library")({
 });
 
 function LibraryPage() {
+  if (!getToken()) return <Navigate to="/login" />;
   const queryClient = useQueryClient();
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ["books"],
     queryFn: () => listBooks(),
@@ -20,13 +25,58 @@ function LibraryPage() {
     onError: (err: Error) => alert(`Failed to delete: ${err.message}`),
   });
 
+  const handleFile = useCallback(async (file: File) => {
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (ext !== "epub" && ext !== "pdf") {
+      alert("Only .epub and .pdf files are supported");
+      return;
+    }
+    if (file.size > 500 * 1024 * 1024) {
+      alert("File is too large (max 500 MB)");
+      return;
+    }
+    setUploading(true);
+    try {
+      await uploadBook(file);
+      await queryClient.invalidateQueries({ queryKey: ["books"] });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }, [queryClient]);
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    for (const file of files) handleFile(file);
+  }
+
   if (isLoading) return <p className="text-gray-500">Loading library...</p>;
   if (error) return <p className="text-red-600">Failed to load library: {error.message}</p>;
 
   const books = data?.books ?? [];
 
   return (
-    <div>
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      className={`relative min-h-[60vh] transition-colors ${dragOver ? "bg-blue-50" : ""}`}
+    >
+      {dragOver ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-400 bg-blue-50/80">
+          <p className="text-lg font-medium text-blue-600">Drop to upload</p>
+        </div>
+      ) : null}
+
+      {uploading ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80">
+          <p className="text-gray-600">Uploading...</p>
+        </div>
+      ) : null}
+
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Library</h1>
         <Link
@@ -39,9 +89,9 @@ function LibraryPage() {
 
       {books.length === 0 ? (
         <div className="rounded-lg border-2 border-dashed p-12 text-center">
-          <p className="text-gray-500">No books yet.</p>
+          <p className="text-gray-500">No books yet. Drag an EPUB or PDF here.</p>
           <Link to="/upload" className="mt-2 inline-block text-sm font-medium text-gray-900 hover:underline">
-            Upload your first book
+            Or click to upload
           </Link>
         </div>
       ) : (

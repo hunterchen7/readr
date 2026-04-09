@@ -22,6 +22,7 @@ import { getProgress } from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { useSyncStatus } from "../../lib/sync-status";
 import { useLibraryPrefs } from "../../lib/library-prefs";
+import { Search, X, LayoutGrid, List, RefreshCw, Plus, Cloud, ArrowUpDown } from "lucide-react-native";
 import type { Book } from "@readr/shared";
 
 type BookWithProgress = Book & {
@@ -224,13 +225,13 @@ export default function LibraryScreen() {
             style={styles.iconButton}
             onPress={() => setSearchOpen((o) => !o)}
           >
-            <Text style={styles.iconText}>{searchOpen ? "✕" : "🔍"}</Text>
+            {searchOpen ? <X size={20} color="#333" /> : <Search size={20} color="#333" />}
           </Pressable>
           <Pressable
             style={styles.iconButton}
             onPress={() => setView(view === "grid" ? "list" : "grid")}
           >
-            <Text style={styles.iconText}>{view === "grid" ? "☰" : "▦"}</Text>
+            {view === "grid" ? <List size={20} color="#333" /> : <LayoutGrid size={20} color="#333" />}
           </Pressable>
           <Pressable
             style={styles.syncChip}
@@ -242,13 +243,16 @@ export default function LibraryScreen() {
             {syncPhase === "running" ? (
               <ActivityIndicator size="small" color="#111" />
             ) : (
-              <Text style={styles.syncChipText}>
-                {syncLastError
-                  ? "⚠ Sync"
-                  : syncLastAt
-                    ? formatRelative(syncLastAt)
-                    : "Sync"}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <RefreshCw size={14} color={syncLastError ? "#dc2626" : "#555"} />
+                <Text style={styles.syncChipText}>
+                  {syncLastError
+                    ? "Error"
+                    : syncLastAt
+                      ? formatRelative(syncLastAt)
+                      : "Sync"}
+                </Text>
+              </View>
             )}
           </Pressable>
           <Pressable
@@ -259,7 +263,7 @@ export default function LibraryScreen() {
             {uploading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.uploadButtonText}>+</Text>
+              <Plus size={20} color="#fff" />
             )}
           </Pressable>
         </View>
@@ -280,7 +284,7 @@ export default function LibraryScreen() {
           />
           {search ? (
             <Pressable onPress={() => setSearch("")}>
-              <Text style={styles.iconText}>✕</Text>
+              <X size={18} color="#999" />
             </Pressable>
           ) : null}
         </View>
@@ -292,7 +296,10 @@ export default function LibraryScreen() {
         contentContainerStyle={styles.filterRow}
       >
         <Pressable style={styles.sortPill} onPress={cycleSort}>
-          <Text style={styles.sortPillText}>↕ {SORT_LABELS[sort]}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <ArrowUpDown size={12} color="#fff" />
+            <Text style={styles.sortPillText}>{SORT_LABELS[sort]}</Text>
+          </View>
         </Pressable>
         {(Object.keys(FILTER_LABELS) as FilterKey[]).map((key) => (
           <Pressable
@@ -519,8 +526,8 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
+    paddingVertical: 6,
+    gap: 6,
     flexDirection: "row",
     alignItems: "center",
   },

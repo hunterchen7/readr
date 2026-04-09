@@ -46,13 +46,11 @@ function UploadPage() {
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    for (const file of Array.from(e.dataTransfer.files)) handleFile(file);
   }
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
+    for (const file of Array.from(e.target.files ?? [])) handleFile(file);
   }
 
   return (
@@ -77,14 +75,15 @@ function UploadPage() {
         ) : (
           <>
             <p className="mb-2 text-gray-600">
-              Drag and drop an EPUB or PDF file here
+              Drag and drop EPUB or PDF files here
             </p>
             <p className="mb-4 text-sm text-gray-400">or</p>
             <label className="cursor-pointer rounded-md bg-gray-900 px-4 py-2 text-sm text-white hover:bg-gray-800">
-              Choose File
+              Choose Files
               <input
                 type="file"
                 accept=".epub,.pdf"
+                multiple
                 onChange={handleFileInput}
                 className="hidden"
               />

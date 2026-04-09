@@ -88,6 +88,37 @@ export async function registerToken(
   return res.json();
 }
 
+// Email login
+export async function emailLoginStart(email: string): Promise<void> {
+  const serverUrl = getServerUrl();
+  if (!serverUrl) throw new Error("Server URL not configured");
+  const res = await fetch(`${serverUrl}/api/email/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? "Failed to send code");
+  }
+}
+
+export async function emailLoginVerify(email: string, code: string): Promise<string> {
+  const serverUrl = getServerUrl();
+  if (!serverUrl) throw new Error("Server URL not configured");
+  const res = await fetch(`${serverUrl}/api/email/login/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? "Verification failed");
+  }
+  const data = await res.json();
+  return data.token;
+}
+
 // Books
 export function listBooks(sort = "recent", search?: string) {
   const params = new URLSearchParams({ sort });

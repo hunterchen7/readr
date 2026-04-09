@@ -28,23 +28,6 @@ export async function clearToken(): Promise<void> {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
 }
 
-/**
- * Generate a new 32-character URL-safe random token. Used on first launch
- * if the user doesn't have a token yet. This is a cryptographically secure
- * random value via expo's SecureStore-aligned source.
- */
-export function generateToken(): string {
-  // 24 bytes → ~32 base64 chars. Avoid `+`/`/`/`=` so the token is URL-safe.
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  let out = "";
-  for (const b of bytes) {
-    out += "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[
-      b % 62
-    ];
-  }
-  return out + "_" + Date.now().toString(36);
-}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const serverUrl = await getServerUrl();
@@ -71,8 +54,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 /**
  * POST /api/register — create (or no-op if existing) a user row for the
- * given token. The register endpoint is the one and only unauthenticated
- * API call the client ever makes.
+ * given token.
  */
 export async function registerToken(
   serverUrl: string,
@@ -89,6 +71,41 @@ export async function registerToken(
     throw new Error(body.error ?? `Register failed: ${res.status}`);
   }
   return res.json();
+}
+
+// === Email login ===
+
+export async function emailLoginStart(
+  serverUrl: string,
+  email: string,
+): Promise<void> {
+  const res = await fetch(`${serverUrl}/api/email/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? "Failed to send code");
+  }
+}
+
+export async function emailLoginVerify(
+  serverUrl: string,
+  email: string,
+  code: string,
+): Promise<string> {
+  const res = await fetch(`${serverUrl}/api/email/login/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? "Verification failed");
+  }
+  const data = await res.json();
+  return data.token;
 }
 
 /**

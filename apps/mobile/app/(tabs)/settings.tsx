@@ -1,5 +1,4 @@
-import { View, Text, Pressable, StyleSheet, Alert, Switch, Platform, ScrollView } from "react-native";
-import * as Clipboard from "expo-clipboard";
+import { View, Text, Pressable, StyleSheet, Alert, Switch, ScrollView } from "react-native";
 import { router } from "expo-router";
 import Constants from "expo-constants";
 import { useAuthStore } from "../../lib/auth-store";
@@ -7,14 +6,8 @@ import { useDisplayStore } from "../../contexts/DisplayContext";
 import { clearAllDownloads } from "../../lib/book-cache";
 
 export default function SettingsScreen() {
-  const { serverUrl, token, signOut } = useAuthStore();
+  const { serverUrl, signOut } = useAuthStore();
   const { settings, toggleEink } = useDisplayStore();
-
-  async function handleCopyToken() {
-    if (!token) return;
-    await Clipboard.setStringAsync(token);
-    Alert.alert("Copied", "Device token copied to clipboard");
-  }
 
   function handleClearCache() {
     Alert.alert(
@@ -58,19 +51,6 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Device token</Text>
-        <Text style={styles.token} selectable>
-          {token || "Not configured"}
-        </Text>
-        <Pressable style={styles.copyButton} onPress={handleCopyToken}>
-          <Text style={styles.copyButtonText}>Copy token</Text>
-        </Pressable>
-        <Text style={styles.hint}>
-          Paste this on another device to share your library.
-        </Text>
-      </View>
-
-      <View style={styles.section}>
         <Text style={styles.label}>Display</Text>
         <View style={styles.row}>
           <Text style={styles.value}>E-ink Mode</Text>
@@ -78,7 +58,7 @@ export default function SettingsScreen() {
         </View>
         {settings.isEink ? (
           <Text style={styles.hint}>
-            Animations disabled, high contrast, larger tap targets, paginated scrolling
+            Animations disabled, high contrast, larger tap targets
           </Text>
         ) : null}
       </View>
@@ -89,7 +69,7 @@ export default function SettingsScreen() {
           <Text style={styles.actionButtonText}>Clear offline cache</Text>
         </Pressable>
         <Text style={styles.hint}>
-          Removes downloaded book files to free space. Books remain in your cloud library.
+          Removes downloaded books to free space. Books stay in your cloud library.
         </Text>
       </View>
 
@@ -104,22 +84,12 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
-  content: { padding: 24, paddingBottom: 48 },
-  section: { marginBottom: 24 },
-  label: { fontSize: 12, color: "#999", marginBottom: 8, textTransform: "uppercase" },
-  value: { fontSize: 16 },
+  content: { padding: 20, paddingBottom: 40 },
+  section: { marginBottom: 20 },
+  label: { fontSize: 12, color: "#999", marginBottom: 6, textTransform: "uppercase" },
+  value: { fontSize: 15 },
   hint: { fontSize: 13, color: "#999", marginTop: 4 },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  copyButton: {
-    marginTop: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    alignSelf: "flex-start",
-  },
-  copyButtonText: { fontSize: 13, color: "#333" },
   actionButton: {
     paddingVertical: 10,
     paddingHorizontal: 14,
@@ -135,13 +105,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 14,
     alignItems: "center",
-    marginTop: 16,
+    marginTop: 12,
   },
   signOutText: { color: "#dc2626", fontSize: 16, fontWeight: "600" },
-  token: {
-    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
-    fontSize: 13,
-    color: "#333",
-  },
-  version: { textAlign: "center", color: "#bbb", fontSize: 12, marginTop: 24 },
+  version: { textAlign: "center", color: "#bbb", fontSize: 12, marginTop: 20 },
 });

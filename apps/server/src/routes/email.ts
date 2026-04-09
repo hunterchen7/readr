@@ -4,12 +4,22 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { badRequest, forbidden } from "../lib/errors.js";
+import { randomBytes } from "node:crypto";
 import {
   generateVerificationCode,
   isEmailEnabled,
   sendDeviceTokenRecovery,
   sendVerificationCode,
 } from "../services/email.js";
+
+/** Generate a 32-char URL-safe random token for new users. */
+function generateToken(): string {
+  const bytes = randomBytes(24);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (const b of bytes) out += alphabet[b % 62];
+  return out + "_" + Date.now().toString(36);
+}
 
 type Variables = { userId?: string };
 
@@ -109,6 +119,88 @@ emailPublicRouter.post("/email/recover/finish", async (c) => {
   await sendDeviceTokenRecovery({ to: email, token: row.userId });
 
   return c.json({ sent: true });
+});
+
+/**
+ * POST /email/login — UNAUTHENTICATED. Primary login flow.
+ * Enter email → get code. If the email isn't registered yet, a new
+ * user is created automatically with a generated token.
+ */
+emailPublicRouter.post("/email/login", async (c) => {
+  if (!isEmailEnabled()) return c.json({ error: "email disabled" }, 503);
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = z.object({ email: emailSchema }).safeParse(body);
+  if (!parsed.success) throw badRequest("Valid email required");
+  const email = parsed.data.email.toLowerCase();
+
+  // Find or create user for this email
+  let [user] = await db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(eq(schema.users.email, email))
+    .limit(1);
+
+  if (!user) {
+    // Auto-create user with a generated token
+    const token = generateToken();
+    const [newUser] = await db
+      .insert(schema.users)
+      .values({ id: token, email, emailVerifiedAt: new Date() })
+      .returning({ id: schema.users.id });
+    user = newUser;
+  }
+
+  const code = generateVerificationCode();
+  const expiresAt = new Date(Date.now() + FIFTEEN_MIN);
+  await db.insert(schema.emailVerifications).values({
+    email,
+    code,
+    purpose: "login",
+    userId: user.id,
+    expiresAt,
+  });
+  await sendVerificationCode({ to: email, code, purpose: "login" });
+
+  return c.json({ sent: true });
+});
+
+/**
+ * POST /email/login/verify — UNAUTHENTICATED. Submit the 6-digit code.
+ * Returns the bearer token directly so the client can store it.
+ */
+emailPublicRouter.post("/email/login/verify", async (c) => {
+  if (!isEmailEnabled()) return c.json({ error: "email disabled" }, 503);
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = z
+    .object({ email: emailSchema, code: z.string().length(6) })
+    .safeParse(body);
+  if (!parsed.success) throw badRequest("Valid email and 6-digit code required");
+  const email = parsed.data.email.toLowerCase();
+
+  const [row] = await db
+    .select()
+    .from(schema.emailVerifications)
+    .where(
+      and(
+        eq(schema.emailVerifications.email, email),
+        eq(schema.emailVerifications.code, parsed.data.code),
+        eq(schema.emailVerifications.purpose, "login"),
+        isNull(schema.emailVerifications.consumedAt),
+        gt(schema.emailVerifications.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+
+  if (!row || !row.userId) throw badRequest("Invalid or expired code");
+
+  // Consume the code
+  await db
+    .update(schema.emailVerifications)
+    .set({ consumedAt: new Date() })
+    .where(eq(schema.emailVerifications.id, row.id));
+
+  // Return the token directly
+  return c.json({ token: row.userId });
 });
 
 // ---- Authenticated endpoints (mounted under /api after auth middleware) ----

@@ -18,24 +18,12 @@ const s3 = new S3Client({
   },
 });
 
-// Separate S3 client whose endpoint is the PUBLIC one — used only for
-// signing presigned URLs. S3v4 signs the Host header, so we can't just
-// rewrite the host after the fact; the URL must be signed against the
-// public host the client will actually hit. Falls back to the internal
-// client if no public endpoint is configured.
-const s3Presign = env.S3_PUBLIC_ENDPOINT
-  ? new S3Client({
-      endpoint: env.S3_PUBLIC_ENDPOINT,
-      region: env.S3_REGION,
-      forcePathStyle: env.S3_FORCE_PATH_STYLE,
-      credentials: {
-        accessKeyId: env.S3_ACCESS_KEY,
-        secretAccessKey: env.S3_SECRET_KEY,
-      },
-    })
-  : s3;
-
 const bucket = env.S3_BUCKET;
+
+/** Public base URL for direct (non-signed) access to the bucket. */
+const publicBase = env.S3_PUBLIC_ENDPOINT
+  ? `${env.S3_PUBLIC_ENDPOINT.replace(/\/$/, "")}/${bucket}`
+  : null;
 
 export async function uploadFile(
   key: string,
@@ -53,8 +41,12 @@ export async function uploadFile(
 }
 
 export async function getPresignedDownloadUrl(key: string): Promise<string> {
+  // If the bucket is publicly readable, return a direct URL (no signing).
+  // This avoids S3v4 host-header mismatches when proxied through CF tunnel.
+  if (publicBase) return `${publicBase}/${key}`;
+
   return getSignedUrl(
-    s3Presign,
+    s3,
     new GetObjectCommand({ Bucket: bucket, Key: key }),
     { expiresIn: PRESIGNED_URL_EXPIRY_SECONDS },
   );

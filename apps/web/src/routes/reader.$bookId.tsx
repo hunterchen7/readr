@@ -232,12 +232,13 @@ function getEpubReaderHtml(bookUrl: string): string {
       try {
         const res = await fetch('${bookUrl}');
         const blob = await res.blob();
+        const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
 
         const el = document.createElement('foliate-view');
         el.setAttribute('flow', 'paginated');
         viewer.appendChild(el);
 
-        await el.open(blob);
+        await el.open(file);
         view = el;
 
         loading.style.display = 'none';
