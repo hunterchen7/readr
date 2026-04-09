@@ -9,7 +9,7 @@ import {
   createNoteSchema,
   updateAnnotationSchema,
 } from "@readr/shared";
-import { notFound, badRequest } from "../lib/errors.js";
+import { notFound } from "../lib/errors.js";
 
 type Variables = { userId: string };
 
