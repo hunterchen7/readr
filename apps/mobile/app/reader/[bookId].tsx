@@ -57,7 +57,6 @@ export default function ReaderScreen() {
   const display = useDisplay();
   const insets = useSafeAreaInsets();
   const [showControls, setShowControls] = useState(false);
-  const [showHeader, setShowHeader] = useState(true);
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
   );
@@ -310,12 +309,13 @@ export default function ReaderScreen() {
           }
           break;
         case "tapCenter":
-          setShowHeader((h) => !h);
+          // Toggle header visibility — currently no-op, header always shown.
+          // WebView click events don't reliably propagate from foliate's shadow DOM.
           break;
         case "progressUpdated": {
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
-          setShowHeader(false);
+          // Header always shown for now.
           const position: BookPosition = {
             percentage: pct,
             cfi: msg.payload.cfi,
@@ -510,7 +510,6 @@ export default function ReaderScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      {showHeader ? (
       <View
         style={[
           styles.header,
@@ -535,7 +534,6 @@ export default function ReaderScreen() {
           </Pressable>
         </View>
       </View>
-      ) : null}
 
       <WebView
         ref={webviewRef}
@@ -551,8 +549,7 @@ export default function ReaderScreen() {
         mixedContentMode="always"
       />
 
-      {showHeader ? (
-        <Pressable
+      <Pressable
           onPress={() => setShowGotoDialog(true)}
           style={[
             styles.progressBar,
@@ -569,7 +566,6 @@ export default function ReaderScreen() {
               : `${progress}%`}
           </Text>
         </Pressable>
-      ) : null}
 
       <ReaderControls
         visible={showControls}
