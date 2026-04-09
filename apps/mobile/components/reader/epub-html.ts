@@ -266,7 +266,7 @@ export function getReaderHtml(bookUrl: string): string {
         }
 
         // Tap zones for page turns (honors the tapToTurn theme flag).
-        view.addEventListener('click', (e) => {
+        function handleTap(e) {
           const w = window.innerWidth;
           const x = e.clientX;
           if (tapToTurn) {
@@ -274,7 +274,9 @@ export function getReaderHtml(bookUrl: string): string {
             if (x > w * 0.7) { view.next(); return; }
           }
           post('tapCenter', {});
-        });
+        }
+        view.addEventListener('click', handleTap);
+        document.addEventListener('click', handleTap);
 
         // Report ready
         post('ready', {});
