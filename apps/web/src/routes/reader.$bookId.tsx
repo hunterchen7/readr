@@ -296,6 +296,19 @@ function getEpubReaderHtml(bookUrl: string): string {
           });
         });
 
+        // Click left/right third to turn pages
+        viewer.addEventListener('click', (e) => {
+          const x = e.clientX / window.innerWidth;
+          if (x < 0.3) view.goLeft();
+          else if (x > 0.7) view.goRight();
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'PageUp') view.goLeft();
+          else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') view.goRight();
+        });
+
         sendMessage('ready', {});
       } catch (err) {
         loading.textContent = 'Failed to load book: ' + err.message;
