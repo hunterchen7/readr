@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { scopeToUser } from "../middleware/user-scope.js";
+import { notFound } from "../lib/errors.js";
 
 type Variables = { userId: string };
 
@@ -31,7 +32,7 @@ exportRouter.get("/export/annotations/:bookId", async (c) => {
     .limit(1);
 
   if (!book) {
-    return c.json({ error: "Book not found" }, 404);
+    throw notFound("Book not found");
   }
 
   // Fetch all annotations

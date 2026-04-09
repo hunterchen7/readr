@@ -1,12 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { getBook } from "@/lib/api";
+import { getBook, getToken } from "@/lib/api";
 
 export const Route = createFileRoute("/book/$bookId")({
   component: BookDetailPage,
 });
 
 function BookDetailPage() {
+  if (!getToken()) return <Navigate to="/login" />;
   const { bookId } = Route.useParams();
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],

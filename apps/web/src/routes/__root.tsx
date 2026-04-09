@@ -57,7 +57,7 @@ function RootLayout() {
                   className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-300"
                   aria-label="User menu"
                 >
-                  ●
+                  U
                 </button>
                 {menuOpen ? (
                   <>

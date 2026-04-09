@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import * as schema from "../db/schema.js";
 
 export const scopeToUser = {
@@ -16,12 +16,3 @@ export const scopeToUser = {
   readingSessions: (userId: string) =>
     eq(schema.readingSessions.userId, userId),
 } as const;
-
-/** Combine user scope with an additional condition */
-export function userAnd(
-  userId: string,
-  table: keyof typeof scopeToUser,
-  ...conditions: ReturnType<(typeof scopeToUser)[typeof table]>[]
-) {
-  return and(scopeToUser[table](userId), ...conditions);
-}

@@ -1,13 +1,14 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Navigate } from "@tanstack/react-router";
 import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { uploadBook } from "@/lib/api";
+import { uploadBook, getToken } from "@/lib/api";
 
 export const Route = createFileRoute("/upload")({
   component: UploadPage,
 });
 
 function UploadPage() {
+  if (!getToken()) return <Navigate to="/login" />;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);

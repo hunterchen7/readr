@@ -46,6 +46,7 @@ function WebReaderPage() {
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
   const savedCfiRef = useRef<string | null>(null);
+  const progressRef = useRef(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -73,6 +74,8 @@ function WebReaderPage() {
             const pct = msg.payload.percentage ?? 0;
             const cfi = msg.payload.cfi;
             setProgress(pct);
+            progressRef.current = pct;
+            if (cfi) savedCfiRef.current = cfi;
             if (msg.payload.chapter) setChapter(msg.payload.chapter);
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
             saveTimerRef.current = setTimeout(() => {
@@ -90,7 +93,13 @@ function WebReaderPage() {
     window.addEventListener("message", handleMessage);
     return () => {
       window.removeEventListener("message", handleMessage);
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (saveTimerRef.current) {
+        saveProgress(bookId, {
+          percentage: progressRef.current,
+          cfi: savedCfiRef.current ?? undefined,
+        }).catch(() => {});
+        clearTimeout(saveTimerRef.current);
+      }
     };
   }, [bookId]);
 

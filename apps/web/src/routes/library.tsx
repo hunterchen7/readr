@@ -1,8 +1,10 @@
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listBooks, deleteBook, uploadBook, getToken, getProgress } from "@/lib/api";
+import { listBooks, deleteBook, uploadBook, getToken } from "@/lib/api";
 import type { Book } from "@readr/shared";
+
+type BookWithProgress = Book & { progressPct?: number };
 
 export const Route = createFileRoute("/library")({
   component: LibraryPage,
@@ -56,7 +58,7 @@ function LibraryPage() {
   if (isLoading) return <p className="text-gray-500">Loading library...</p>;
   if (error) return <p className="text-red-600">Failed to load library: {error.message}</p>;
 
-  const books = data?.books ?? [];
+  const books = (data?.books ?? []) as BookWithProgress[];
 
   return (
     <div
@@ -115,7 +117,7 @@ function BookCard({
   onDelete,
   isDeleting,
 }: {
-  book: Book;
+  book: BookWithProgress;
   onDelete: () => void;
   isDeleting: boolean;
 }) {
@@ -147,8 +149,8 @@ function BookCard({
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] uppercase text-gray-500">
             {book.format ?? "epub"}
           </span>
-          {(book as any).progressPct > 0 ? (
-            <span className="text-[10px] text-gray-400">{(book as any).progressPct}%</span>
+          {book.progressPct && book.progressPct > 0 ? (
+            <span className="text-[10px] text-gray-400">{book.progressPct}%</span>
           ) : null}
           <button
             onClick={(e) => {

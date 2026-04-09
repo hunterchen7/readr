@@ -224,12 +224,14 @@ export default function LibraryScreen() {
           <Pressable
             style={styles.iconButton}
             onPress={() => setSearchOpen((o) => !o)}
+            accessibilityLabel={searchOpen ? "Close search" : "Search library"}
           >
             {searchOpen ? <X size={20} color="#333" /> : <Search size={20} color="#333" />}
           </Pressable>
           <Pressable
             style={styles.iconButton}
             onPress={() => setView(view === "grid" ? "list" : "grid")}
+            accessibilityLabel={view === "grid" ? "Switch to list view" : "Switch to grid view"}
           >
             {view === "grid" ? <List size={20} color="#333" /> : <LayoutGrid size={20} color="#333" />}
           </Pressable>
@@ -239,6 +241,7 @@ export default function LibraryScreen() {
               await runSyncNow();
               queryClient.invalidateQueries({ queryKey: ["books"] });
             }}
+            accessibilityLabel="Sync library"
           >
             {syncPhase === "running" ? (
               <ActivityIndicator size="small" color="#111" />
@@ -259,6 +262,7 @@ export default function LibraryScreen() {
             style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
             onPress={handleUpload}
             disabled={uploading}
+            accessibilityLabel="Upload book"
           >
             {uploading ? (
               <ActivityIndicator color="#fff" />

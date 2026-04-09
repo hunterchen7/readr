@@ -308,14 +308,9 @@ export default function ReaderScreen() {
             sendToWebView("goToLocation", { cfi: currentPosition.cfi });
           }
           break;
-        case "tapCenter":
-          // Toggle header visibility — currently no-op, header always shown.
-          // WebView click events don't reliably propagate from foliate's shadow DOM.
-          break;
         case "progressUpdated": {
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
-          // Header always shown for now.
           const position: BookPosition = {
             percentage: pct,
             cfi: msg.payload.cfi,
@@ -516,20 +511,20 @@ export default function ReaderScreen() {
           { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
         ]}
       >
-        <Pressable onPress={() => router.back()} style={styles.headerButton}>
+        <Pressable onPress={() => router.back()} style={styles.headerButton} accessibilityLabel="Go back">
           <ArrowLeft size={20} color={theme.fg} />
         </Pressable>
         <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
           {book.title ?? "Reading"}
         </Text>
         <View style={styles.headerActions}>
-          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
+          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
             <BookOpen size={20} color={theme.fg} />
           </Pressable>
-          <Pressable onPress={handleCreateBookmark} style={styles.headerButton}>
+          <Pressable onPress={handleCreateBookmark} style={styles.headerButton} accessibilityLabel="Add bookmark">
             <BookmarkIcon size={20} color={theme.fg} />
           </Pressable>
-          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton}>
+          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton} accessibilityLabel="Reader settings">
             <Settings size={20} color={theme.fg} />
           </Pressable>
         </View>
