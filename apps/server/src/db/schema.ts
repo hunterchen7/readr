@@ -18,10 +18,34 @@ export const users = pgTable("users", {
   id: text("id").primaryKey(),
   // Optional metadata the user can set (shown on the Settings screen).
   name: text("name"),
+  // Optional recovery email. Nullable because attaching an email is
+  // opt-in and the token is still the only auth factor. email is
+  // verified via a 6-digit code sent through Resend; emailVerifiedAt
+  // is stamped on successful verification. Not unique: two users on
+  // different devices could legitimately share the same personal
+  // email.
+  email: text("email"),
+  emailVerifiedAt: timestamp("email_verified_at"),
   storageQuotaMb: integer("storage_quota_mb").default(1024),
   storageUsedMb: integer("storage_used_mb").default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Pending email verification codes. Short-lived (~15 min), single use.
+// Intentionally not linked to a userId for the recovery flow — the
+// recovery endpoint takes an email and sends a code without revealing
+// whether the email is registered, so the row may or may not point at
+// an existing user by the time it's consumed.
+export const emailVerifications = pgTable("email_verifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  code: text("code").notNull(), // 6-digit zero-padded
+  purpose: text("purpose").notNull(), // 'attach' | 'recover'
+  userId: text("user_id"), // set for 'attach', null for 'recover' until we look it up
+  expiresAt: timestamp("expires_at").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Content-addressable file storage.
