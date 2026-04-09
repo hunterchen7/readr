@@ -88,6 +88,12 @@ export function getReaderHtml(bookUrl: string): string {
       document.body.style.background = theme.bg || '#fff';
 
       if (!view) return;
+
+      // Page edge margin — foliate-js reads this attribute on the view element.
+      if (theme.margin != null) {
+        view.renderer?.setAttribute?.('margin', String(theme.margin) + 'px');
+      }
+
       view.renderer?.setStyles?.({
         style: [
           'html {',
@@ -99,6 +105,8 @@ export function getReaderHtml(bookUrl: string): string {
           '  line-height: ' + (theme.lineHeight || 1.6) + ';',
           theme.fontFamily ? '  font-family: ' + theme.fontFamily + ';' : '',
           '}',
+          'body { font-family: inherit; }',
+          'p { line-height: inherit; }',
           'img { max-width: 100%; height: auto; }',
         ].join('\\n'),
       });
@@ -124,13 +132,17 @@ export function getReaderHtml(bookUrl: string): string {
 
     async function init() {
       try {
-        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@0.3/view.js');
+        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
 
         const res = await fetch(BOOK_URL);
         if (!res.ok) throw new Error('Failed to download book');
         const blob = await res.blob();
+        // foliate-js's makeBook() dispatches on file.name.endsWith() to pick
+        // a parser (EPUB vs CBZ vs FB2 etc.), so a bare Blob (no .name) crashes.
+        // Wrap it in a File with an explicit .epub name and mime.
+        const file = new File([blob], 'book.epub', { type: 'application/epub+zip' });
 
-        book = await makeBook(blob);
+        book = await makeBook(file);
         document.getElementById('loading').style.display = 'none';
 
         const viewer = document.getElementById('viewer');
@@ -139,6 +151,7 @@ export function getReaderHtml(bookUrl: string): string {
 
         // Configure pagination (CSS multi-column)
         view.setAttribute('flow', 'paginated');
+        view.setAttribute('margin', '48px');
 
         await view.open(book);
 

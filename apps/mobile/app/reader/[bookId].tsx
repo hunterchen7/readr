@@ -10,8 +10,10 @@ import { getPdfReaderHtml } from "../../components/reader/pdf-html";
 import {
   ReaderControls,
   DEFAULT_THEME,
+  EINK_THEME,
   type ReaderTheme,
 } from "../../components/reader/ReaderControls";
+import { useDisplay } from "../../contexts/DisplayContext";
 import { ContextMenu } from "../../components/reader/ContextMenu";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
 import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
@@ -37,8 +39,11 @@ export default function ReaderScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const webviewRef = useRef<WebView>(null);
 
+  const display = useDisplay();
   const [showControls, setShowControls] = useState(false);
-  const [theme, setTheme] = useState<ReaderTheme>(DEFAULT_THEME);
+  const [theme, setTheme] = useState<ReaderTheme>(() =>
+    display.isEink ? EINK_THEME : DEFAULT_THEME,
+  );
   const [toc, setToc] = useState<TocItem[]>([]);
   const [progress, setProgress] = useState(0);
   const [currentPosition, setCurrentPosition] = useState<BookPosition | null>(null);

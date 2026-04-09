@@ -1,5 +1,6 @@
-import { View, Text, Pressable, StyleSheet, Modal, FlatList, TextInput } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, FlatList, TextInput, ScrollView } from "react-native";
 import { useState } from "react";
+import { useDisplay } from "../../contexts/DisplayContext";
 
 export interface ReaderTheme {
   bg: string;
@@ -7,6 +8,8 @@ export interface ReaderTheme {
   fontSize: number;
   lineHeight: number;
   fontFamily: string;
+  /** Page edge margin in pixels (passed through to foliate-js renderer). */
+  margin: number;
 }
 
 export const DEFAULT_THEME: ReaderTheme = {
@@ -15,6 +18,17 @@ export const DEFAULT_THEME: ReaderTheme = {
   fontSize: 18,
   lineHeight: 1.6,
   fontFamily: "Georgia, serif",
+  margin: 48,
+};
+
+/** Generous defaults tuned for the Supernote A5X 7.8" e-ink panel. */
+export const EINK_THEME: ReaderTheme = {
+  bg: "#ffffff",
+  fg: "#000000",
+  fontSize: 20,
+  lineHeight: 1.7,
+  fontFamily: "Georgia, serif",
+  margin: 72,
 };
 
 const THEME_PRESETS = [
@@ -23,6 +37,22 @@ const THEME_PRESETS = [
   { label: "Dark", bg: "#1a1a2e", fg: "#e0e0e0" },
   { label: "E-ink", bg: "#ffffff", fg: "#000000" },
 ] as const;
+
+const FONT_FAMILIES = [
+  { label: "Serif", value: "Georgia, 'Times New Roman', serif" },
+  { label: "Sans", value: "-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif" },
+  { label: "Mono", value: "'SF Mono', Menlo, Consolas, monospace" },
+  { label: "Dyslexic", value: "'OpenDyslexic', Georgia, serif" },
+] as const;
+
+const FONT_SIZE_MIN = 12;
+const FONT_SIZE_MAX = 32;
+const LINE_HEIGHT_MIN = 1.2;
+const LINE_HEIGHT_MAX = 2.4;
+const LINE_HEIGHT_STEP = 0.1;
+const MARGIN_MIN = 16;
+const MARGIN_MAX = 128;
+const MARGIN_STEP = 8;
 
 interface TocItem {
   label: string;
@@ -41,6 +71,10 @@ interface ReaderControlsProps {
   onSearch: (query: string) => void;
 }
 
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
+}
+
 export function ReaderControls({
   visible,
   theme,
@@ -51,13 +85,24 @@ export function ReaderControls({
   onGoToChapter,
   onSearch,
 }: ReaderControlsProps) {
+  const display = useDisplay();
   const [tab, setTab] = useState<"theme" | "toc" | "search">("theme");
   const [searchQuery, setSearchQuery] = useState("");
 
   if (!visible) return null;
 
+  // Hide the Dark preset on e-ink devices — inverted text causes ghosting & A2-mode flashing.
+  const presets = display.isEink
+    ? THEME_PRESETS.filter((p) => p.label !== "Dark")
+    : THEME_PRESETS;
+
   return (
-    <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}>
+    <Modal
+      transparent
+      animationType={display.animationsEnabled ? "slide" : "none"}
+      visible={visible}
+      onRequestClose={onClose}
+    >
       <Pressable style={styles.overlay} onPress={onClose} />
       <View style={styles.panel}>
         <View style={styles.tabs}>
@@ -68,17 +113,17 @@ export function ReaderControls({
               onPress={() => setTab(t)}
             >
               <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-                {t === "theme" ? "Theme" : t === "toc" ? "Contents" : "Search"}
+                {t === "theme" ? "Display" : t === "toc" ? "Contents" : "Search"}
               </Text>
             </Pressable>
           ))}
         </View>
 
         {tab === "theme" ? (
-          <View style={styles.section}>
+          <ScrollView style={styles.section} contentContainerStyle={styles.sectionContent}>
             <Text style={styles.sectionLabel}>Preset</Text>
             <View style={styles.presetRow}>
-              {THEME_PRESETS.map((p) => (
+              {presets.map((p) => (
                 <Pressable
                   key={p.label}
                   style={[
@@ -92,24 +137,100 @@ export function ReaderControls({
               ))}
             </View>
 
+            <Text style={styles.sectionLabel}>Font</Text>
+            <View style={styles.presetRow}>
+              {FONT_FAMILIES.map((f) => {
+                const active = theme.fontFamily === f.value;
+                return (
+                  <Pressable
+                    key={f.label}
+                    style={[
+                      styles.fontButton,
+                      active && styles.fontButtonActive,
+                    ]}
+                    onPress={() => onThemeChange({ ...theme, fontFamily: f.value })}
+                  >
+                    <Text
+                      style={[
+                        styles.fontButtonText,
+                        active && styles.fontButtonTextActive,
+                      ]}
+                    >
+                      {f.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             <Text style={styles.sectionLabel}>Font Size: {theme.fontSize}px</Text>
             <View style={styles.sizeRow}>
               <Pressable
                 style={styles.sizeButton}
-                onPress={() => onThemeChange({ ...theme, fontSize: Math.max(12, theme.fontSize - 1) })}
+                onPress={() =>
+                  onThemeChange({ ...theme, fontSize: clamp(theme.fontSize - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) })
+                }
               >
-                <Text style={styles.sizeButtonText}>A-</Text>
+                <Text style={styles.sizeButtonText}>A−</Text>
               </Pressable>
               <Pressable
                 style={styles.sizeButton}
-                onPress={() => onThemeChange({ ...theme, fontSize: Math.min(32, theme.fontSize + 1) })}
+                onPress={() =>
+                  onThemeChange({ ...theme, fontSize: clamp(theme.fontSize + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) })
+                }
               >
-                <Text style={styles.sizeButtonText}>A+</Text>
+                <Text style={[styles.sizeButtonText, { fontSize: 20 }]}>A+</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.sectionLabel}>Line Spacing: {theme.lineHeight.toFixed(1)}</Text>
+            <View style={styles.sizeRow}>
+              <Pressable
+                style={styles.sizeButton}
+                onPress={() =>
+                  onThemeChange({
+                    ...theme,
+                    lineHeight: Math.round(clamp(theme.lineHeight - LINE_HEIGHT_STEP, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX) * 10) / 10,
+                  })
+                }
+              >
+                <Text style={styles.sizeButtonText}>−</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sizeButton}
+                onPress={() =>
+                  onThemeChange({
+                    ...theme,
+                    lineHeight: Math.round(clamp(theme.lineHeight + LINE_HEIGHT_STEP, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX) * 10) / 10,
+                  })
+                }
+              >
+                <Text style={styles.sizeButtonText}>+</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.sectionLabel}>Page Margin: {theme.margin}px</Text>
+            <View style={styles.sizeRow}>
+              <Pressable
+                style={styles.sizeButton}
+                onPress={() =>
+                  onThemeChange({ ...theme, margin: clamp(theme.margin - MARGIN_STEP, MARGIN_MIN, MARGIN_MAX) })
+                }
+              >
+                <Text style={styles.sizeButtonText}>−</Text>
+              </Pressable>
+              <Pressable
+                style={styles.sizeButton}
+                onPress={() =>
+                  onThemeChange({ ...theme, margin: clamp(theme.margin + MARGIN_STEP, MARGIN_MIN, MARGIN_MAX) })
+                }
+              >
+                <Text style={styles.sizeButtonText}>+</Text>
               </Pressable>
             </View>
 
             <Text style={styles.progressText}>{progress}% read</Text>
-          </View>
+          </ScrollView>
         ) : tab === "toc" ? (
           <FlatList
             data={toc}
@@ -160,7 +281,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    maxHeight: "60%",
+    maxHeight: "75%",
     paddingBottom: 32,
   },
   tabs: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: "#eee" },
@@ -168,9 +289,10 @@ const styles = StyleSheet.create({
   tabActive: { borderBottomWidth: 2, borderBottomColor: "#111" },
   tabText: { color: "#999", fontSize: 14 },
   tabTextActive: { color: "#111", fontWeight: "600" },
-  section: { padding: 16 },
-  sectionLabel: { fontSize: 12, color: "#999", marginBottom: 8, textTransform: "uppercase" },
-  presetRow: { flexDirection: "row", gap: 8, marginBottom: 20 },
+  section: { paddingHorizontal: 16, paddingTop: 16 },
+  sectionContent: { paddingBottom: 24 },
+  sectionLabel: { fontSize: 12, color: "#999", marginBottom: 8, marginTop: 4, textTransform: "uppercase" },
+  presetRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
   presetButton: {
     flex: 1,
     padding: 12,
@@ -178,7 +300,22 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: "center",
   },
-  sizeRow: { flexDirection: "row", gap: 12, marginBottom: 16 },
+  fontButton: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    alignItems: "center",
+    backgroundColor: "#fff",
+  },
+  fontButtonActive: {
+    borderColor: "#111",
+    backgroundColor: "#f4f4f4",
+  },
+  fontButtonText: { fontSize: 13, color: "#666" },
+  fontButtonTextActive: { color: "#111", fontWeight: "600" },
+  sizeRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
   sizeButton: {
     flex: 1,
     borderWidth: 1,
