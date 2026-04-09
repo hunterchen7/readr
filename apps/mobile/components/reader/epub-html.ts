@@ -62,14 +62,23 @@ export function getReaderHtml(bookUrl: string): string {
         case 'clearSearch':
           if (view.clearSearch) view.clearSearch();
           break;
-        case 'addHighlight':
+        case 'addHighlight': {
+          // RN sends either { cfi } (live selection) or { cfiRange } (replay);
+          // foliate's addAnnotation wants the CFI range as its first arg.
+          const cfi = data.payload.cfi || data.payload.cfiRange;
+          if (!cfi) break;
           if (view.addAnnotation) {
-            view.addAnnotation(data.payload.cfiRange, {
-              type: 'highlight',
-              color: data.payload.color || 'yellow',
-            });
+            try {
+              view.addAnnotation(cfi, {
+                type: 'highlight',
+                color: data.payload.color || 'yellow',
+              });
+            } catch (err) {
+              post('highlightError', { cfi, error: String(err) });
+            }
           }
           break;
+        }
       }
     }
 
@@ -94,6 +103,7 @@ export function getReaderHtml(bookUrl: string): string {
         view.renderer?.setAttribute?.('margin', String(theme.margin) + 'px');
       }
 
+      const eink = !!theme.isEink;
       view.renderer?.setStyles?.({
         style: [
           'html {',
@@ -108,6 +118,23 @@ export function getReaderHtml(bookUrl: string): string {
           'body { font-family: inherit; }',
           'p { line-height: inherit; }',
           'img { max-width: 100%; height: auto; }',
+          // e-ink overrides: force full-contrast text everywhere and kill
+          // grayscale-washed colored links/headings that become illegible
+          // after the device-level daltonizer desaturates them.
+          eink
+            ? [
+                'html, body, h1, h2, h3, h4, h5, h6, p, li, blockquote,',
+                'th, td, strong, em, b, i, cite, span { color: #000 !important; }',
+                'a, a:link, a:visited, a:hover, a:active { color: #000 !important; text-decoration: underline !important; }',
+                'code, kbd, pre, samp { color: #000 !important; background: #eee !important; }',
+                'blockquote { border-left: 3px solid #000 !important; }',
+                'hr { border-color: #000 !important; }',
+                // e-ink displays render images as grayscale anyway — force
+                // a small contrast bump so they don\\'t muddy out.
+                'img { filter: grayscale(100%) contrast(1.15); }',
+                '* { text-shadow: none !important; box-shadow: none !important; }',
+              ].join('\\n')
+            : '',
         ].join('\\n'),
       });
     }

@@ -60,6 +60,12 @@ interface TocItem {
   depth: number;
 }
 
+export interface SearchResult {
+  cfi: string;
+  excerpt: string;
+  section?: string | null;
+}
+
 interface ReaderControlsProps {
   visible: boolean;
   theme: ReaderTheme;
@@ -69,6 +75,9 @@ interface ReaderControlsProps {
   onThemeChange: (theme: ReaderTheme) => void;
   onGoToChapter: (href: string) => void;
   onSearch: (query: string) => void;
+  searchResults: SearchResult[];
+  searchLoading: boolean;
+  onJumpToResult: (cfi: string) => void;
 }
 
 function clamp(n: number, min: number, max: number): number {
@@ -84,6 +93,9 @@ export function ReaderControls({
   onThemeChange,
   onGoToChapter,
   onSearch,
+  searchResults,
+  searchLoading,
+  onJumpToResult,
 }: ReaderControlsProps) {
   const display = useDisplay();
   const [tab, setTab] = useState<"theme" | "toc" | "search">("theme");
@@ -251,7 +263,7 @@ export function ReaderControls({
             )}
           />
         ) : (
-          <View style={styles.section}>
+          <View style={styles.searchPane}>
             <View style={styles.searchRow}>
               <TextInput
                 style={styles.searchInput}
@@ -259,6 +271,8 @@ export function ReaderControls({
                 onChangeText={setSearchQuery}
                 placeholder="Search in book..."
                 returnKeyType="search"
+                autoCapitalize="none"
+                autoCorrect={false}
                 onSubmitEditing={() => onSearch(searchQuery)}
               />
               <Pressable
@@ -268,6 +282,39 @@ export function ReaderControls({
                 <Text style={styles.searchButtonText}>Go</Text>
               </Pressable>
             </View>
+            {searchLoading ? (
+              <Text style={styles.searchMeta}>Searching…</Text>
+            ) : searchQuery && searchResults.length === 0 ? (
+              <Text style={styles.searchMeta}>No results</Text>
+            ) : searchResults.length > 0 ? (
+              <Text style={styles.searchMeta}>
+                {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+              </Text>
+            ) : null}
+            <FlatList
+              style={styles.searchResults}
+              data={searchResults}
+              keyExtractor={(r, i) => `${r.cfi}-${i}`}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <Pressable
+                  style={styles.resultItem}
+                  onPress={() => {
+                    onJumpToResult(item.cfi);
+                    onClose();
+                  }}
+                >
+                  {item.section ? (
+                    <Text style={styles.resultSection} numberOfLines={1}>
+                      {item.section}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.resultExcerpt} numberOfLines={3}>
+                    {item.excerpt}
+                  </Text>
+                </Pressable>
+              )}
+            />
           </View>
         )}
       </View>
@@ -329,6 +376,7 @@ const styles = StyleSheet.create({
   tocList: { maxHeight: 400 },
   tocItem: { paddingVertical: 12, paddingRight: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
   tocLabel: { fontSize: 15 },
+  searchPane: { paddingHorizontal: 16, paddingTop: 16, flex: 1 },
   searchRow: { flexDirection: "row", gap: 8 },
   searchInput: {
     flex: 1,
@@ -346,4 +394,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   searchButtonText: { color: "#fff", fontWeight: "600" },
+  searchMeta: { color: "#999", fontSize: 12, marginTop: 8, textTransform: "uppercase" },
+  searchResults: { marginTop: 8, maxHeight: 400 },
+  resultItem: {
+    paddingVertical: 12,
+    paddingRight: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  resultSection: { fontSize: 11, color: "#666", marginBottom: 2, textTransform: "uppercase" },
+  resultExcerpt: { fontSize: 14, color: "#222", lineHeight: 20 },
 });

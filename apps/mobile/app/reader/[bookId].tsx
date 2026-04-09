@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { View, Text, ActivityIndicator, StyleSheet, Pressable, FlatList, Alert } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -24,8 +24,11 @@ import {
   createBookmark,
   deleteBookmark,
   createHighlight,
+  getHighlights,
   createNote,
 } from "../../lib/local-db";
+import type { Highlight } from "@readr/shared";
+import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
 import { DEFAULT_LOOKUP_PROVIDERS } from "@readr/shared";
 import * as Linking from "expo-linking";
 
@@ -44,6 +47,12 @@ export default function ReaderScreen() {
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
   );
+  // Merged theme sent to the WebView — the base theme plus an isEink flag
+  // so the injected EPUB stylesheet can force high-contrast black text.
+  const themeForWebView = useMemo(
+    () => ({ ...theme, isEink: display.isEink }) as Record<string, unknown>,
+    [theme, display.isEink],
+  );
   const [toc, setToc] = useState<TocItem[]>([]);
   const [progress, setProgress] = useState(0);
   const [currentPosition, setCurrentPosition] = useState<BookPosition | null>(null);
@@ -57,9 +66,16 @@ export default function ReaderScreen() {
   const [showTypedNote, setShowTypedNote] = useState(false);
   const [showHandwriting, setShowHandwriting] = useState(false);
 
-  // Bookmarks state
+  // Bookmarks + highlights state
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
+
+  // In-book search state
+  const [searchResults, setSearchResults] = useState<
+    { cfi: string; excerpt: string; section?: string | null }[]
+  >([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["book", bookId],
@@ -69,19 +85,26 @@ export default function ReaderScreen() {
 
   const book = data?.book;
 
-  // Load saved progress and bookmarks on mount
+  // Load saved progress, bookmarks, highlights, and reader prefs on mount
   useEffect(() => {
     if (!bookId) return;
     async function load() {
-      const [savedProgress, savedBookmarks] = await Promise.all([
-        getProgress(bookId!),
-        getBookmarks(bookId!),
-      ]);
+      const [savedProgress, savedBookmarks, savedHighlights, savedPrefs] =
+        await Promise.all([
+          getProgress(bookId!),
+          getBookmarks(bookId!),
+          getHighlights(bookId!),
+          loadReaderPrefs(),
+        ]);
       if (savedProgress) {
         setProgress(Math.round(savedProgress.position.percentage));
         setCurrentPosition(savedProgress.position);
       }
       setBookmarks(savedBookmarks);
+      setHighlights(savedHighlights);
+      if (savedPrefs?.theme) {
+        setTheme(savedPrefs.theme);
+      }
     }
     load();
   }, [bookId]);
@@ -95,7 +118,9 @@ export default function ReaderScreen() {
 
   function handleThemeChange(newTheme: ReaderTheme) {
     setTheme(newTheme);
-    sendToWebView("setTheme", newTheme as unknown as Record<string, unknown>);
+    sendToWebView("setTheme", { ...newTheme, isEink: display.isEink });
+    // Fire-and-forget persistence — failure is non-fatal.
+    saveReaderPrefs({ theme: newTheme });
   }
 
   function handleGoToChapter(href: string) {
@@ -103,7 +128,18 @@ export default function ReaderScreen() {
   }
 
   function handleSearch(query: string) {
+    if (!query.trim()) {
+      setSearchResults([]);
+      sendToWebView("clearSearch", {});
+      return;
+    }
+    setSearchLoading(true);
+    setSearchResults([]);
     sendToWebView("search", { query });
+  }
+
+  function handleJumpToResult(cfi: string) {
+    sendToWebView("goToLocation", { cfi });
   }
 
   function handleMessage(event: { nativeEvent: { data: string } }) {
@@ -111,7 +147,15 @@ export default function ReaderScreen() {
       const msg = JSON.parse(event.nativeEvent.data);
       switch (msg.type) {
         case "ready":
-          sendToWebView("setTheme", theme as unknown as Record<string, unknown>);
+          sendToWebView("setTheme", themeForWebView);
+          // Replay saved highlights so they're visible when reopening.
+          // The WebView ignores any it's already drawn.
+          for (const h of highlights) {
+            sendToWebView("addHighlight", {
+              cfi: h.cfiRange,
+              color: h.color,
+            });
+          }
           // Restore saved position
           if (currentPosition?.cfi) {
             sendToWebView("goToLocation", { cfi: currentPosition.cfi });
@@ -144,6 +188,10 @@ export default function ReaderScreen() {
             setSelectionCfi(msg.payload.cfi ?? "");
             setContextMenuVisible(true);
           }
+          break;
+        case "searchResults":
+          setSearchResults(msg.payload.results ?? []);
+          setSearchLoading(false);
           break;
       }
     } catch {
@@ -302,6 +350,9 @@ export default function ReaderScreen() {
         onThemeChange={handleThemeChange}
         onGoToChapter={handleGoToChapter}
         onSearch={handleSearch}
+        searchResults={searchResults}
+        searchLoading={searchLoading}
+        onJumpToResult={handleJumpToResult}
       />
 
       <ContextMenu
