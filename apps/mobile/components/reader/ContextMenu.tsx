@@ -1,7 +1,8 @@
-import { View, Text, Pressable, StyleSheet, Modal } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { lookupWord, type LookupResult } from "../../lib/dictionary";
 
 interface ContextMenuProps {
   visible: boolean;
@@ -54,6 +55,33 @@ export function ContextMenu({
   const display = useDisplay();
   const [showColors, setShowColors] = useState(false);
   const [showLookup, setShowLookup] = useState(false);
+  const [offlineDef, setOfflineDef] = useState<LookupResult | null | undefined>(
+    undefined, // undefined = not looked up yet, null = not found
+  );
+
+  // Whenever the user selects a single (or few) words, kick off an
+  // offline dictionary lookup in the background so the definition is
+  // ready to display if they tap "Define". Does NOT block the menu.
+  useEffect(() => {
+    if (!visible || !selectedText) {
+      setOfflineDef(undefined);
+      return;
+    }
+    // Only run on short-ish selections — no point dictionary-ing a
+    // whole paragraph.
+    const words = selectedText.trim().split(/\s+/);
+    if (words.length > 3) {
+      setOfflineDef(null);
+      return;
+    }
+    let cancelled = false;
+    lookupWord(words[0]).then((res) => {
+      if (!cancelled) setOfflineDef(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, selectedText]);
 
   if (!visible) return null;
 
@@ -63,6 +91,21 @@ export function ContextMenu({
     <Modal transparent animationType={display.isEink ? "none" : "fade"} visible={visible} onRequestClose={onClose}>
       <Pressable style={styles.overlay} onPress={onClose} />
       <View style={[styles.menu, { bottom: 80 }]}>
+        {offlineDef ? (
+          <View style={styles.definitionBlock}>
+            <View style={styles.definitionHeader}>
+              <Text style={styles.definitionWord}>{offlineDef.word}</Text>
+              {offlineDef.partOfSpeech ? (
+                <Text style={styles.definitionPos}>{offlineDef.partOfSpeech}</Text>
+              ) : null}
+            </View>
+            <Text style={styles.definitionText}>{offlineDef.definition}</Text>
+          </View>
+        ) : offlineDef === undefined ? (
+          <View style={styles.definitionBlock}>
+            <ActivityIndicator size="small" color="#666" />
+          </View>
+        ) : null}
         {showColors ? (
           <View style={styles.colorRow}>
             {HIGHLIGHT_COLORS.map((color) => (
@@ -169,6 +212,17 @@ const styles = StyleSheet.create({
     elevation: 5,
     padding: 8,
   },
+  definitionBlock: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    marginBottom: 6,
+  },
+  definitionHeader: { flexDirection: "row", alignItems: "baseline", gap: 8 },
+  definitionWord: { fontSize: 15, fontWeight: "700", color: "#111" },
+  definitionPos: { fontSize: 11, color: "#888", fontStyle: "italic" },
+  definitionText: { fontSize: 13, color: "#333", marginTop: 4, lineHeight: 18 },
   actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, justifyContent: "center" },
   actionButton: {
     alignItems: "center",
