@@ -1,5 +1,5 @@
 FROM node:22-alpine AS base
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
 # poppler-utils → pdftoppm for PDF page-1 cover rendering.
 # Alpine's minimal poppler package is ~8 MB, worth it for real book covers.
 RUN apk add --no-cache poppler-utils
