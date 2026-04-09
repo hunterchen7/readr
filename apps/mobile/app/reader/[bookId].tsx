@@ -171,31 +171,17 @@ export default function ReaderScreen() {
 
   const book = data?.book;
 
-  // When the book is downloaded locally, we avoid all the URL-scheme
-  // pain (data: / file:// / null-origin / CORS) by injecting the book
-  // bytes as a base64 string on window.__READR_BOOK__ via the WebView's
-  // injectedJavaScriptBeforeContentLoaded prop. The reader HTML's
-  // init() checks for that global first and uses it instead of
-  // fetching BOOK_URL.
-  const [bookBase64, setBookBase64] = useState<string | null>(null);
+  // Resolve the local file path for downloaded books so the WebView
+  // fetches from disk (file://) rather than the network.
+  const [localFileUrl, setLocalFileUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
     (async () => {
       const downloaded = await getDownloadedBook(bookId);
-      if (!downloaded) {
-        setBookBase64(null);
-        return;
-      }
-      const FileSystem = await import("expo-file-system/legacy");
-      const b64 = await FileSystem.readAsStringAsync(downloaded.localPath, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      if (!cancelled) setBookBase64(b64);
+      if (!cancelled) setLocalFileUrl(downloaded?.localPath ?? null);
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [bookId]);
 
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
@@ -490,16 +476,10 @@ export default function ReaderScreen() {
   }
 
   const format = book.format ?? "epub";
-  // For downloaded books the presigned URL is unused; the reader HTML
-  // picks up window.__READR_BOOK__ via the injected script.
-  // For not-downloaded books, the HTML's fetch(BOOK_URL) still runs
-  // against the server's presigned URL.
-  const sourceUrl = book.downloadUrl ?? "";
+  // Use local file if downloaded, otherwise fall back to server URL
+  const sourceUrl = localFileUrl ?? book.downloadUrl ?? "";
   const readerHtml =
     format === "pdf" ? getPdfReaderHtml(sourceUrl) : getReaderHtml(sourceUrl);
-  const injectedBookScript = bookBase64
-    ? `window.__READR_BOOK_B64__ = ${JSON.stringify(bookBase64)}; window.__READR_BOOK_MIME__ = ${JSON.stringify(format === "pdf" ? "application/pdf" : "application/epub+zip")}; true;`
-    : undefined;
 
   const lookupProviders = DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
     name: p.name,
@@ -550,7 +530,9 @@ export default function ReaderScreen() {
         style={styles.webview}
         originWhitelist={["*"]}
         source={{ html: readerHtml }}
-        injectedJavaScriptBeforeContentLoaded={injectedBookScript}
+        allowFileAccess
+        allowFileAccessFromFileURLs
+        allowUniversalAccessFromFileURLs
         onMessage={handleMessage}
         javaScriptEnabled
         domStorageEnabled

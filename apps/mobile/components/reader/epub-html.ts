@@ -169,41 +169,14 @@ export function getReaderHtml(bookUrl: string): string {
       }
     }
 
-    function base64ToBytes(b64) {
-      const bin = atob(b64);
-      const len = bin.length;
-      const out = new Uint8Array(len);
-      for (let i = 0; i < len; i++) out[i] = bin.charCodeAt(i);
-      return out;
-    }
-
     async function init() {
       try {
-        let makeBook;
-        try {
-          const mod = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
-          makeBook = mod.makeBook;
-        } catch (importErr) {
-          document.getElementById('loading').textContent = 'Import error: ' + importErr.message;
-          post('error', { message: 'foliate import failed: ' + importErr.message });
-          return;
-        }
+        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
 
-        // Prefer the locally-injected book bytes when available (set by
-        // the host RN app via injectedJavaScriptBeforeContentLoaded for
-        // downloaded books). Otherwise fetch the presigned URL.
-        let file;
-        if (window.__READR_BOOK_B64__) {
-          const bytes = base64ToBytes(window.__READR_BOOK_B64__);
-          const mime = window.__READR_BOOK_MIME__ || 'application/epub+zip';
-          file = new File([bytes], 'book.epub', { type: mime });
-          window.__READR_BOOK_B64__ = null;
-        } else {
-          const res = await fetch(BOOK_URL);
-          if (!res.ok) throw new Error('Failed to download book');
-          const blob = await res.blob();
-          file = new File([blob], 'book.epub', { type: 'application/epub+zip' });
-        }
+        const res = await fetch(BOOK_URL);
+        if (!res.ok) throw new Error('Failed to fetch book (' + res.status + ')');
+        const blob = await res.blob();
+        const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
 
         book = await makeBook(file);
         document.getElementById('loading').style.display = 'none';
