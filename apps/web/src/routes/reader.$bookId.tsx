@@ -38,13 +38,18 @@ function WebReaderPage() {
     [],
   );
 
+  // Use a ref to track the latest theme so the message handler never
+  // goes stale — no dependency on `theme` means a single stable listener.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       try {
         const msg = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
         switch (msg.type) {
           case "ready":
-            applyTheme(theme);
+            applyTheme(themeRef.current);
             break;
           case "progressUpdated":
             setProgress(msg.payload.percentage ?? 0);
@@ -60,7 +65,7 @@ function WebReaderPage() {
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [theme]);
+  }, []);
 
   function applyTheme(t: string) {
     const themes: Record<string, { bg: string; fg: string; fontSize: number }> = {
@@ -187,7 +192,7 @@ function getEpubReaderHtml(bookUrl: string): string {
   <div id="viewer" style="display:none;"></div>
 
   <script type="module">
-    import 'https://cdn.jsdelivr.net/npm/foliate-js@0.5/view.js';
+    import 'https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js';
 
     const viewer = document.getElementById('viewer');
     const loading = document.getElementById('loading');
@@ -278,7 +283,8 @@ function getPdfReaderHtml(bookUrl: string): string {
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow-y: auto; background: var(--bg, #f5f5f5); }
     #pages { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px; }
-    canvas { max-width: 100%; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+    .page-slot { display: flex; justify-content: center; align-items: center; background: #e5e5e5; }
+    .page-slot canvas { max-width: 100%; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
     #loading { display: flex; justify-content: center; align-items: center; height: 100%; font-family: system-ui; }
   </style>
 </head>
@@ -286,9 +292,8 @@ function getPdfReaderHtml(bookUrl: string): string {
   <div id="loading">Loading PDF...</div>
   <div id="pages" style="display:none;"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs" type="module"></script>
   <script type="module">
-    const pdfjsLib = window['pdfjs-dist/build/pdf'] ?? await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs');
+    const pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs');
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
 
     const loading = document.getElementById('loading');
@@ -314,13 +319,55 @@ function getPdfReaderHtml(bookUrl: string): string {
       loading.style.display = 'none';
       pages.style.display = 'flex';
 
+      // Create placeholder slots for all pages with correct dimensions,
+      // but only render pages that are near the viewport (lazy rendering).
+      const rendered = new Set();
+      const slots = [];
+
+      // Get the first page to determine default dimensions
+      const firstPage = await pdf.getPage(1);
+      const defaultVp = firstPage.getViewport({ scale: 1.5 });
+
       for (let i = 1; i <= totalPages; i++) {
-        const page = await pdf.getPage(i);
+        const slot = document.createElement('div');
+        slot.className = 'page-slot';
+        slot.style.width = defaultVp.width + 'px';
+        slot.style.height = defaultVp.height + 'px';
+        slot.dataset.page = String(i);
+        pages.appendChild(slot);
+        slots.push(slot);
+      }
+
+      // Render the first page immediately
+      const canvas1 = document.createElement('canvas');
+      canvas1.width = defaultVp.width;
+      canvas1.height = defaultVp.height;
+      slots[0].appendChild(canvas1);
+      await firstPage.render({ canvasContext: canvas1.getContext('2d'), viewport: defaultVp }).promise;
+      rendered.add(1);
+
+      // Use IntersectionObserver to lazy-render pages as they approach the viewport
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const pageNum = parseInt(entry.target.dataset.page, 10);
+          if (rendered.has(pageNum)) continue;
+          rendered.add(pageNum);
+          renderPage(pageNum, entry.target);
+        }
+      }, { rootMargin: '200% 0px' });
+
+      for (const slot of slots) observer.observe(slot);
+
+      async function renderPage(num, slot) {
+        const page = await pdf.getPage(num);
         const viewport = page.getViewport({ scale: 1.5 });
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        pages.appendChild(canvas);
+        slot.style.width = viewport.width + 'px';
+        slot.style.height = viewport.height + 'px';
+        slot.appendChild(canvas);
         await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
       }
 
