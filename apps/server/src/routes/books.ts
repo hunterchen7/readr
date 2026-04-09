@@ -47,6 +47,17 @@ app.get("/", async (c) => {
     conditions.push(eq(schema.files.format, query.format));
   }
 
+  // Subquery for latest progress percentage per book
+  const progressSq = db
+    .select({
+      bookId: schema.readingProgress.bookId,
+      percentage: sql<number>`max((${schema.readingProgress.position}->>'percentage')::int)`.as("progress_pct"),
+    })
+    .from(schema.readingProgress)
+    .where(eq(schema.readingProgress.userId, userId))
+    .groupBy(schema.readingProgress.bookId)
+    .as("prog");
+
   let qb = db
     .select({
       id: schema.books.id,
@@ -61,9 +72,11 @@ app.get("/", async (c) => {
       format: schema.files.format,
       fileSize: schema.files.size,
       coverKey: schema.files.coverKey,
+      progressPct: sql<number | null>`${progressSq.percentage}`,
     })
     .from(schema.books)
     .innerJoin(schema.files, eq(schema.books.fileId, schema.files.id))
+    .leftJoin(progressSq, eq(progressSq.bookId, schema.books.id))
     .where(and(...conditions))
     .$dynamic();
 

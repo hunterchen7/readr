@@ -119,6 +119,20 @@ export async function emailLoginVerify(email: string, code: string): Promise<str
   return data.token;
 }
 
+// Progress
+export function getProgress(bookId: string) {
+  return apiFetch<{ positions: { position: { percentage: number; cfi?: string }; deviceId: string }[] }>(
+    `/api/books/${bookId}/progress`,
+  );
+}
+
+export function saveProgress(bookId: string, position: { percentage: number; cfi?: string }) {
+  return apiFetch(`/api/books/${bookId}/progress`, {
+    method: "PUT",
+    body: JSON.stringify({ deviceId: "web", position }),
+  });
+}
+
 // Books
 export function listBooks(sort = "recent", search?: string) {
   const params = new URLSearchParams({ sort });

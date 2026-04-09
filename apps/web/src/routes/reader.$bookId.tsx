@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState, useCallback, useEffect } from "react";
-import { getBook } from "@/lib/api";
+import { getBook, getProgress, saveProgress } from "@/lib/api";
 
 export const Route = createFileRoute("/reader/$bookId")({
   component: WebReaderPage,
@@ -38,10 +38,22 @@ function WebReaderPage() {
     [],
   );
 
-  // Use a ref to track the latest theme so the message handler never
-  // goes stale — no dependency on `theme` means a single stable listener.
+  // Use refs to track latest values so the message handler never goes stale.
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const savedCfiRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load saved progress on mount
+  useEffect(() => {
+    getProgress(bookId).then(({ positions }) => {
+      if (positions.length > 0) {
+        const latest = positions.sort((a, b) => (b.position.percentage ?? 0) - (a.position.percentage ?? 0))[0];
+        if (latest.position.cfi) savedCfiRef.current = latest.position.cfi;
+        setProgress(latest.position.percentage ?? 0);
+      }
+    }).catch(() => {});
+  }, [bookId]);
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
@@ -50,10 +62,22 @@ function WebReaderPage() {
         switch (msg.type) {
           case "ready":
             applyTheme(themeRef.current);
+            // Restore saved position
+            if (savedCfiRef.current) {
+              sendToReader("goToChapter", { href: savedCfiRef.current });
+            }
             break;
-          case "progressUpdated":
-            setProgress(msg.payload.percentage ?? 0);
+          case "progressUpdated": {
+            const pct = msg.payload.percentage ?? 0;
+            const cfi = msg.payload.cfi;
+            setProgress(pct);
+            // Debounced save — every 3 seconds max
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+            saveTimerRef.current = setTimeout(() => {
+              saveProgress(bookId, { percentage: pct, cfi }).catch(() => {});
+            }, 3000);
             break;
+          }
           case "tocLoaded":
             setToc(msg.payload.chapters ?? []);
             break;
@@ -64,8 +88,11 @@ function WebReaderPage() {
     }
 
     window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [bookId]);
 
   function applyTheme(t: string) {
     const themes: Record<string, { bg: string; fg: string; fontSize: number }> = {

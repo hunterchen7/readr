@@ -9,6 +9,9 @@ type Variables = { userId: string };
 
 const app = new Hono<{ Variables: Variables }>();
 
+// GET /api/books/:id/progress (below) — but first, a batch endpoint
+// mounted via index.ts at /api/progress/all to avoid /:id conflict.
+
 // GET /api/books/:id/progress
 app.get("/:id/progress", async (c) => {
   const userId = c.get("userId");
