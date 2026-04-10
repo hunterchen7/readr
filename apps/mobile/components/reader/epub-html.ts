@@ -342,31 +342,31 @@ export function getReaderHtml(bookUrl: string): string {
             }
           } catch {}
 
-          // Compute page from the actual CSS transform/scroll in foliate's shadow DOM
+          // Compute page from CSS transform in the shadow root
+          // foliate doesn't scroll — it transforms containers
           try {
+            const vw = view.clientWidth || window.innerWidth;
+            // Re-measure section pages using viewport width (not section clientWidth which is the full column layout width)
+            if (currentSectionDoc) {
+              const sw = currentSectionDoc.documentElement.scrollWidth || currentSectionDoc.body?.scrollWidth || 0;
+              if (sw > 0 && vw > 0) {
+                pagesInSection = Math.max(1, Math.round(sw / vw));
+                sectionPageCounts[secIdx] = pagesInSection;
+              }
+            }
+            // Read transform from shadow root to find current column
             const sr = view.shadowRoot;
             if (sr) {
-              // Foliate uses a container with CSS transform for pagination
-              const els = sr.querySelectorAll('div');
-              for (const el of els) {
+              for (const el of sr.querySelectorAll('*')) {
                 const t = getComputedStyle(el).transform;
                 if (t && t !== 'none') {
-                  const m = t.match(/matrix\\(([^)]+)\\)/);
-                  if (m) {
-                    const tx = Math.abs(parseFloat(m[1].split(',')[4]));
-                    const vw = el.clientWidth || view.clientWidth;
-                    if (vw > 0 && tx > 0) {
+                  const parts = t.replace(/[^0-9.,-]/g, '').split(',');
+                  if (parts.length >= 5) {
+                    const tx = Math.abs(parseFloat(parts[4]));
+                    if (tx > 10 && vw > 0) {
                       pageInCurrentSection = Math.round(tx / vw) + 1;
                       break;
                     }
-                  }
-                }
-                // Also check scrollLeft
-                if (el.scrollLeft > 0) {
-                  const vw = el.clientWidth || view.clientWidth;
-                  if (vw > 0) {
-                    pageInCurrentSection = Math.round(el.scrollLeft / vw) + 1;
-                    break;
                   }
                 }
               }
