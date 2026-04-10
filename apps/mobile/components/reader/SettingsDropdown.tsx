@@ -32,10 +32,9 @@ interface SettingsDropdownProps {
   onClose: () => void;
   theme: ReaderTheme;
   onThemeChange: (theme: ReaderTheme) => void;
-  isEink: boolean;
 }
 
-export function SettingsDropdown({ visible, onClose, theme, onThemeChange, isEink }: SettingsDropdownProps) {
+export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: SettingsDropdownProps) {
   const display = useDisplay();
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
@@ -45,9 +44,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange, isEin
     onThemeChange({ ...theme, ...partial });
   }
 
-  const presets = isEink
-    ? THEME_PRESETS.filter((p) => p.label !== "Dark")
-    : THEME_PRESETS;
+  const presets = THEME_PRESETS;
 
   return (
     <Modal

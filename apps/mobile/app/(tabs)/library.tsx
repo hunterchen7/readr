@@ -548,7 +548,6 @@ const styles = StyleSheet.create({
     gap: 6,
     flexDirection: "row",
     alignItems: "center",
-    flexGrow: 1,
   },
   sortPill: {
     backgroundColor: colors.primary,

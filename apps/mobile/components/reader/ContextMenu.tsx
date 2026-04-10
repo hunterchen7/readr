@@ -1,6 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
-import { Highlighter, Bookmark, StickyNote, Copy, Search } from "lucide-react-native";
+import { Highlighter, Bookmark, StickyNote, Copy, Search, PenTool } from "lucide-react-native";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { useEffect, useState } from "react";
 import { lookupWord, type LookupResult } from "../../lib/dictionary";
@@ -12,6 +12,7 @@ interface ContextMenuProps {
   onHighlight: (color: HighlightColor) => void;
   onBookmark: () => void;
   onNote: () => void;
+  onDraw: () => void;
   onCopy: () => void;
   onLookup: (provider: string) => void;
   lookupProviders: { name: string; icon: string; urlTemplate: string }[];
@@ -49,6 +50,7 @@ export function ContextMenu({
   onHighlight,
   onBookmark,
   onNote,
+  onDraw,
   onCopy,
   onLookup,
   lookupProviders,
@@ -174,6 +176,13 @@ export function ContextMenu({
             >
               <StickyNote size={20} color="#444" />
               <Text style={styles.actionLabel}>Note</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.actionButton, { minHeight: tapTarget }]}
+              onPress={onDraw}
+            >
+              <PenTool size={20} color="#444" />
+              <Text style={styles.actionLabel}>Draw</Text>
             </Pressable>
             <Pressable
               style={[styles.actionButton, { minHeight: tapTarget }]}

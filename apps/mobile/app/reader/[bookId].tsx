@@ -24,6 +24,7 @@ import { SettingsDropdown } from "../../components/reader/SettingsDropdown";
 import { TtsBar } from "../../components/reader/TtsBar";
 import { useTtsStore } from "../../lib/tts-store";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
+import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
 import {
   upsertProgress,
   getProgress,
@@ -81,6 +82,7 @@ export default function ReaderScreen() {
 
   // Notes state
   const [showTypedNote, setShowTypedNote] = useState(false);
+  const [showDrawing, setShowDrawing] = useState(false);
 
   // Bookmarks + highlights + notes state
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -399,6 +401,11 @@ export default function ReaderScreen() {
     setShowTypedNote(true);
   }
 
+  function handleDrawFromMenu() {
+    setContextMenuVisible(false);
+    setShowDrawing(true);
+  }
+
   function handleCopy() {
     if (selectedText) {
       // Use WebView to copy to clipboard
@@ -602,7 +609,6 @@ export default function ReaderScreen() {
         onClose={() => setShowSettingsDropdown(false)}
         theme={theme}
         onThemeChange={handleThemeChange}
-        isEink={display.isEink}
       />
 
       <ContextMenu
@@ -612,6 +618,7 @@ export default function ReaderScreen() {
         onHighlight={handleHighlight}
         onBookmark={handleBookmarkFromMenu}
         onNote={handleNoteFromMenu}
+        onDraw={handleDrawFromMenu}
         onCopy={handleCopy}
         onLookup={handleLookup}
         lookupProviders={lookupProviders}
@@ -621,6 +628,19 @@ export default function ReaderScreen() {
         visible={showTypedNote}
         onSave={handleSaveTypedNote}
         onCancel={() => setShowTypedNote(false)}
+      />
+
+      <HandwritingCanvas
+        visible={showDrawing}
+        onSave={async (strokes, penConfig) => {
+          if (!bookId || !currentPosition) return;
+          try {
+            const n = await createNote(bookId, currentPosition, "handwritten", JSON.stringify({ strokes, penConfig }));
+            setNotes((prev) => [n, ...prev]);
+          } catch {}
+          setShowDrawing(false);
+        }}
+        onCancel={() => setShowDrawing(false)}
       />
 
       <NotesPanel
