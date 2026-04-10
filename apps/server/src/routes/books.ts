@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, and, desc, asc, ilike, or, sql } from "drizzle-orm";
+import { eq, and, desc, asc, ilike, or, sql, count } from "drizzle-orm";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { scopeToUser } from "../middleware/user-scope.js";
@@ -197,18 +197,11 @@ app.post("/", async (c) => {
       throw conflict("You already have this book in your library");
     }
 
-    // Reuse existing file row + its metadata.
-    await db
-      .update(schema.files)
-      .set({ refCount: sql`${schema.files.refCount} + 1` })
-      .where(eq(schema.files.id, existingFile.id));
     fileId = existingFile.id;
   } else {
-    // First time we see this file anywhere — upload, extract, persist.
-    // Keep S3 writes in order so a mid-flight failure never leaves the
-    // DB pointing at a non-existent key. Best-effort compensating
-    // cleanup on error; full atomicity would require a transactional
-    // outbox but this gets 95% of the benefit.
+    // First time we see this file anywhere — upload to S3, extract
+    // metadata, persist. S3 writes happen BEFORE the DB insert so a
+    // mid-flight failure never leaves the DB pointing at a missing key.
     const s3Key = `files/${sha256}.${format}`;
     let coverKey: string | null = null;
     const metadata = await extractMetadata(buffer, format, file.name);
@@ -237,7 +230,7 @@ app.post("/", async (c) => {
 
       fileId = newFile.id;
     } catch (err) {
-      // Compensating cleanup: delete whatever we already wrote.
+      // Compensating cleanup: delete whatever we already wrote to S3.
       await Promise.allSettled([
         deleteFile(s3Key),
         coverKey ? deleteFile(coverKey) : Promise.resolve(),
@@ -246,24 +239,26 @@ app.post("/", async (c) => {
     }
   }
 
-  // Per-user books row. No title/author — those come from the joined files
-  // row via the effective* expressions above.
-  const [inserted] = await db
-    .insert(schema.books)
-    .values({ userId, fileId })
-    .returning({ id: schema.books.id });
+  // Wrap the multi-table mutation in a transaction so a crash between
+  // inserting the books row and updating the user quota can't leave
+  // the database in an inconsistent state.
+  const insertedId = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(schema.books)
+      .values({ userId, fileId })
+      .returning({ id: schema.books.id });
 
-  await db
-    .update(schema.users)
-    .set({
-      storageUsedMb: sql`${schema.users.storageUsedMb} + ${Math.ceil(sizeMb)}`,
-    })
-    .where(eq(schema.users.id, userId));
+    await tx
+      .update(schema.users)
+      .set({
+        storageUsedMb: sql`${schema.users.storageUsedMb} + ${Math.ceil(sizeMb)}`,
+      })
+      .where(eq(schema.users.id, userId));
 
-  // Return the full joined book shape so clients don't have to follow up
-  // with a GET /books/:id to find out the title, cover URL, or
-  // downloadUrl they just uploaded.
-  const full = await fetchBookById(inserted.id, userId);
+    return inserted.id;
+  });
+
+  const full = await fetchBookById(insertedId, userId);
   if (!full) throw notFound("Book not found after insert");
   return c.json({ book: full }, 201);
 });
@@ -350,7 +345,10 @@ app.patch("/:id/metadata", async (c) => {
   return c.json({ book });
 });
 
-// DELETE /api/books/:id — remove from user's library; drop file if last ref
+// DELETE /api/books/:id — remove from user's library; drop file if last ref.
+// Uses a transaction with row-level locking on the files row to prevent
+// two concurrent deletes from both seeing refCount = 1 and racing to
+// delete the S3 object.
 app.delete("/:id", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
@@ -362,35 +360,57 @@ app.delete("/:id", async (c) => {
 
   if (!book) throw notFound("Book not found");
 
-  const [file] = await db
-    .select()
-    .from(schema.files)
-    .where(eq(schema.files.id, book.fileId));
+  // Transaction: delete books row, compute true ref count, conditionally
+  // delete files row, update storage quota — all atomically.
+  const orphanedFile = await db.transaction(async (tx) => {
+    await tx.delete(schema.books).where(eq(schema.books.id, bookId));
 
-  await db.delete(schema.books).where(eq(schema.books.id, bookId));
+    // Lock the files row to prevent concurrent deletes from racing.
+    const [file] = await tx
+      .select()
+      .from(schema.files)
+      .where(eq(schema.files.id, book.fileId))
+      .for("update");
 
-  if (file) {
-    const newRefCount = (file.refCount ?? 1) - 1;
-    if (newRefCount <= 0) {
-      await Promise.all([
-        deleteFile(file.s3Key),
-        file.coverKey ? deleteFile(file.coverKey) : Promise.resolve(),
-        db.delete(schema.files).where(eq(schema.files.id, file.id)),
-      ]);
-    } else {
-      await db
-        .update(schema.files)
-        .set({ refCount: newRefCount })
-        .where(eq(schema.files.id, file.id));
-    }
+    if (!file) return null;
+
+    // Compute the ACTUAL reference count from the books table rather
+    // than trusting the manually-maintained refCount column.
+    const [{ refs }] = await tx
+      .select({ refs: count() })
+      .from(schema.books)
+      .where(eq(schema.books.fileId, file.id));
 
     const fileSizeMb = Math.ceil(file.size / (1024 * 1024));
-    await db
+    await tx
       .update(schema.users)
       .set({
         storageUsedMb: sql`GREATEST(${schema.users.storageUsedMb} - ${fileSizeMb}, 0)`,
       })
       .where(eq(schema.users.id, userId));
+
+    if (Number(refs) === 0) {
+      await tx.delete(schema.files).where(eq(schema.files.id, file.id));
+      return file; // caller deletes S3 objects outside the transaction
+    }
+
+    // Keep refCount in sync for fast reads (but the source of truth
+    // is now the COUNT query above).
+    await tx
+      .update(schema.files)
+      .set({ refCount: Number(refs) })
+      .where(eq(schema.files.id, file.id));
+
+    return null;
+  });
+
+  // S3 deletes happen AFTER the transaction commits so we don't hold
+  // the lock while waiting on network I/O.
+  if (orphanedFile) {
+    await Promise.allSettled([
+      deleteFile(orphanedFile.s3Key),
+      orphanedFile.coverKey ? deleteFile(orphanedFile.coverKey) : Promise.resolve(),
+    ]);
   }
 
   return c.json({ success: true });

@@ -10,6 +10,7 @@ type Variables = { userId: string };
 
 const sessionSchema = z.object({
   bookId: z.string().uuid(),
+  deviceId: z.string().max(128).nullish(),
   startedAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
   endedAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
   durationMinutes: z.number().int().min(0).max(1440),
@@ -43,6 +44,7 @@ statsRouter.post("/stats/sessions", async (c) => {
     .values({
       userId,
       bookId: body.bookId,
+      deviceId: body.deviceId ?? null,
       startedAt: new Date(body.startedAt),
       endedAt: new Date(body.endedAt),
       durationMinutes: body.durationMinutes,

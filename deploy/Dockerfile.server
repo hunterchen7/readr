@@ -1,11 +1,14 @@
 FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
 # poppler-utils → pdftoppm for PDF page-1 cover rendering.
-# Alpine's minimal poppler package is ~8 MB, worth it for real book covers.
 RUN apk add --no-cache poppler-utils
 WORKDIR /app
 
-# Install all workspace dependencies (including tsx, which we use to run TS directly).
+# Install all workspace deps (including tsx). tsx is needed at runtime
+# because workspace packages (shared, sync-engine) export raw .ts via
+# their package.json "main" field. tsx's esbuild-based loader adds
+# ~200ms cold start — acceptable for a self-hosted app. To eliminate
+# it, change the workspace packages to export compiled JS.
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json packages/shared/
@@ -13,9 +16,6 @@ COPY packages/sync-engine/package.json packages/sync-engine/
 COPY apps/server/package.json apps/server/
 RUN pnpm install --frozen-lockfile --prod=false
 
-# Ship the source directly — packages/shared and packages/sync-engine export
-# ./src/index.ts via their package.json "main"/"exports", so tsx resolves them
-# at import time without any pre-compile step. Matches `pnpm dev` behavior exactly.
 FROM deps AS production
 COPY tsconfig.base.json ./
 COPY packages/shared/ packages/shared/

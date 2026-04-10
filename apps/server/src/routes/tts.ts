@@ -43,33 +43,14 @@ ttsRouter.get("/tts/status", async (c) => {
   return c.json({ available, engines, streamingAvailable, queueDepth });
 });
 
-// POST /tts/generate
+// POST /tts/generate — batch TTS generation.
+// Text extraction from EPUB/PDF is not yet implemented, so this endpoint
+// returns 501 until the extraction pipeline is built.
 ttsRouter.post("/tts/generate", async (c) => {
-  const userId = c.get("userId");
-  const body = generateTTSSchema.parse(await c.req.json());
-
-  // Verify book belongs to user
-  const [book] = await db
-    .select()
-    .from(schema.books)
-    .where(and(eq(schema.books.id, body.bookId), scopeToUser.books(userId)))
-    .limit(1);
-
-  if (!book) {
-    return c.json({ error: "Book not found" }, 404);
-  }
-
-  // TODO: Extract chapter texts from book file
-  // For now, create a placeholder job — actual text extraction
-  // requires parsing the EPUB/PDF which will be added with the worker
-  const chapterTexts = ["Chapter text placeholder"];
-
-  const job = await queueTTSJob(body.bookId, userId, {
-    engine: body.engine,
-    voiceConfig: body.voiceConfig,
-  }, chapterTexts);
-
-  return c.json({ job }, 201);
+  return c.json(
+    { error: "Batch TTS generation is not yet available — text extraction from EPUB/PDF is still in progress" },
+    501,
+  );
 });
 
 // GET /tts/jobs

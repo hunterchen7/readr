@@ -31,6 +31,11 @@ const envSchema = z.object({
   // verified domain. Example: Readr <readr@reader.example.com>
   RESEND_FROM: z.string().optional(),
 
+  // Comma-separated list of allowed CORS origins. Defaults to "*"
+  // (any origin) which is safe with bearer-token auth but can be
+  // tightened in production for defense-in-depth.
+  CORS_ORIGINS: z.string().default("*"),
+
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("debug"),

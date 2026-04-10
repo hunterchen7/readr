@@ -22,13 +22,20 @@ const app = new Hono();
 // Request logging
 app.use("*", logger());
 
-// CORS — wildcard is fine because the client sends a bearer token, not a
-// cookie, so there's no ambient authority to worry about. Credentials
-// are no longer needed.
+// CORS — defaults to wildcard (safe with bearer-token auth). Set
+// CORS_ORIGINS to a comma-separated list of origins in production
+// for defense-in-depth (e.g. "https://read.example.com,http://localhost:5173").
+const allowedOrigins = env.CORS_ORIGINS === "*"
+  ? null // null = allow any origin
+  : new Set(env.CORS_ORIGINS.split(",").map((o) => o.trim()));
+
 app.use(
   "/api/*",
   cors({
-    origin: (origin) => origin ?? "*",
+    origin: (origin) => {
+      if (!allowedOrigins) return origin ?? "*";
+      return origin && allowedOrigins.has(origin) ? origin : "";
+    },
     allowHeaders: ["Authorization", "Content-Type"],
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     credentials: false,

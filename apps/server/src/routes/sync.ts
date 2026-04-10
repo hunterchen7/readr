@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, gt, lt, sql } from "drizzle-orm";
 import { syncPullQuerySchema, syncPushSchema } from "@readr/shared";
 import { lwwMerge, setMerge, type ExistingEntity } from "@readr/sync-engine";
 import { scopeToUser } from "../middleware/user-scope.js";
@@ -36,6 +36,10 @@ syncRouter.get("/sync/changes", async (c) => {
     .orderBy(schema.syncLog.timestamp);
 
   const serverTimestamp = new Date().toISOString();
+
+  // Fire-and-forget: prune old sync_log entries so the table doesn't
+  // grow without bound. Errors are swallowed — pruning is best-effort.
+  pruneSyncLog(userId).catch(() => {});
 
   return c.json({
     changes: changes.map((row) => ({
@@ -354,6 +358,30 @@ async function softDeleteEntity(
       await db.update(schema.notes).set({ deletedAt }).where(eq(schema.notes.id, entityId));
       break;
   }
+}
+
+// ─── Sync log maintenance ──────────────────────────────────────────
+//
+// The sync_log table is append-only and grows without bound. We prune
+// entries older than 90 days on every pull. This is safe because any
+// client that hasn't synced in 90 days will get a full re-sync on next
+// connect (the server returns all current entity state, not just the
+// delta). The 90-day window is generous — most clients sync daily.
+
+const SYNC_LOG_RETENTION_DAYS = 90;
+
+async function pruneSyncLog(userId: string): Promise<void> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - SYNC_LOG_RETENTION_DAYS);
+
+  await db
+    .delete(schema.syncLog)
+    .where(
+      and(
+        eq(schema.syncLog.userId, userId),
+        lt(schema.syncLog.timestamp, cutoff),
+      ),
+    );
 }
 
 export default syncRouter;

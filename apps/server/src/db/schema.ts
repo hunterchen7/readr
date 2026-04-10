@@ -308,6 +308,7 @@ export const readingSessions = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
+    deviceId: text("device_id"),
     startedAt: timestamp("started_at").notNull(),
     endedAt: timestamp("ended_at"),
     durationMinutes: integer("duration_minutes"),
