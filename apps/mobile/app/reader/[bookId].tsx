@@ -575,13 +575,13 @@ export default function ReaderScreen() {
             </Text>
             <View style={styles.progressInfoRow}>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                {pageInSection != null && pagesInSection != null
-                  ? `${pageInSection}/${pagesInSection} in ch.`
+                {pageInSection != null && pagesInSection != null && totalPages != null
+                  ? `${pagesInSection - pageInSection}/${totalPages - (currentPage ?? 0)} left`
                   : ""}
               </Text>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
                 {currentPage != null && totalPages != null && totalPages > 0
-                  ? `p. ${currentPage} of ${totalPages}  ·  ${progress}%`
+                  ? `p. ${currentPage}/${totalPages}  ·  ${progress}%`
                   : `${progress}%`}
               </Text>
             </View>
