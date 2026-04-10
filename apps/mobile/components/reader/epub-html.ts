@@ -9,9 +9,26 @@ export function getReaderHtml(bookUrl: string): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Crimson+Text&family=EB+Garamond&family=Fira+Mono&family=IBM+Plex+Mono&family=Inter&family=Libre+Baskerville&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Nunito&family=Open+Sans&family=PT+Serif&family=Playfair+Display&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap" rel="stylesheet">
+  <style>
+    /* Bundled fonts — loaded from android assets */
+    @font-face { font-family: 'Literata'; src: url('file:///android_asset/fonts/Literata.ttf'); }
+    @font-face { font-family: 'Lora'; src: url('file:///android_asset/fonts/Lora.ttf'); }
+    @font-face { font-family: 'Merriweather'; src: url('file:///android_asset/fonts/Merriweather.ttf'); }
+    @font-face { font-family: 'EB Garamond'; src: url('file:///android_asset/fonts/EBGaramond.ttf'); }
+    @font-face { font-family: 'Source Serif 4'; src: url('file:///android_asset/fonts/SourceSerif4.ttf'); }
+    @font-face { font-family: 'Noto Serif'; src: url('file:///android_asset/fonts/NotoSerif.ttf'); }
+    @font-face { font-family: 'Crimson Text'; src: url('file:///android_asset/fonts/CrimsonText.ttf'); }
+    @font-face { font-family: 'Libre Baskerville'; src: url('file:///android_asset/fonts/LibreBaskerville.ttf'); }
+    @font-face { font-family: 'Playfair Display'; src: url('file:///android_asset/fonts/PlayfairDisplay.ttf'); }
+    @font-face { font-family: 'PT Serif'; src: url('file:///android_asset/fonts/PTSerif.ttf'); }
+    @font-face { font-family: 'Roboto Slab'; src: url('file:///android_asset/fonts/RobotoSlab.ttf'); }
+    @font-face { font-family: 'Roboto'; src: url('file:///android_asset/fonts/Roboto.ttf'); }
+    @font-face { font-family: 'Open Sans'; src: url('file:///android_asset/fonts/OpenSans.ttf'); }
+    @font-face { font-family: 'Inter'; src: url('file:///android_asset/fonts/Inter.ttf'); }
+    @font-face { font-family: 'Nunito'; src: url('file:///android_asset/fonts/Nunito.ttf'); }
+    @font-face { font-family: 'Fira Mono'; src: url('file:///android_asset/fonts/FiraMono.ttf'); }
+    @font-face { font-family: 'IBM Plex Mono'; src: url('file:///android_asset/fonts/IBMPlexMono.ttf'); }
+  </style>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
@@ -116,8 +133,24 @@ export function getReaderHtml(bookUrl: string): string {
       const ff = theme.fontFamily || '';
 
       return [
-        // Load Google Fonts in the section iframe
-        "@import url('https://fonts.googleapis.com/css2?family=Crimson+Text&family=EB+Garamond&family=Fira+Mono&family=IBM+Plex+Mono&family=Inter&family=Libre+Baskerville&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Nunito&family=Open+Sans&family=PT+Serif&family=Playfair+Display&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap');",
+        // Load bundled fonts in the section iframe via @font-face
+        "@font-face{font-family:'Literata';src:url('file:///android_asset/fonts/Literata.ttf')}",
+        "@font-face{font-family:'Lora';src:url('file:///android_asset/fonts/Lora.ttf')}",
+        "@font-face{font-family:'Merriweather';src:url('file:///android_asset/fonts/Merriweather.ttf')}",
+        "@font-face{font-family:'EB Garamond';src:url('file:///android_asset/fonts/EBGaramond.ttf')}",
+        "@font-face{font-family:'Source Serif 4';src:url('file:///android_asset/fonts/SourceSerif4.ttf')}",
+        "@font-face{font-family:'Noto Serif';src:url('file:///android_asset/fonts/NotoSerif.ttf')}",
+        "@font-face{font-family:'Crimson Text';src:url('file:///android_asset/fonts/CrimsonText.ttf')}",
+        "@font-face{font-family:'Libre Baskerville';src:url('file:///android_asset/fonts/LibreBaskerville.ttf')}",
+        "@font-face{font-family:'Playfair Display';src:url('file:///android_asset/fonts/PlayfairDisplay.ttf')}",
+        "@font-face{font-family:'PT Serif';src:url('file:///android_asset/fonts/PTSerif.ttf')}",
+        "@font-face{font-family:'Roboto Slab';src:url('file:///android_asset/fonts/RobotoSlab.ttf')}",
+        "@font-face{font-family:'Roboto';src:url('file:///android_asset/fonts/Roboto.ttf')}",
+        "@font-face{font-family:'Open Sans';src:url('file:///android_asset/fonts/OpenSans.ttf')}",
+        "@font-face{font-family:'Inter';src:url('file:///android_asset/fonts/Inter.ttf')}",
+        "@font-face{font-family:'Nunito';src:url('file:///android_asset/fonts/Nunito.ttf')}",
+        "@font-face{font-family:'Fira Mono';src:url('file:///android_asset/fonts/FiraMono.ttf')}",
+        "@font-face{font-family:'IBM Plex Mono';src:url('file:///android_asset/fonts/IBMPlexMono.ttf')}",
         // Root styles
         'html { background: ' + bg + ' !important; }',
         // Force ALL elements: color, bg transparent, typography
