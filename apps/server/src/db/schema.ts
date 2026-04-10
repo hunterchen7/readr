@@ -11,26 +11,34 @@ import {
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
-export const users = pgTable("users", {
-  // The id IS the bearer token — a long random string generated on the
-  // client on first launch. There are no passwords, no sessions.
-  id: text("id").primaryKey(),
-  // Optional metadata the user can set (shown on the Settings screen).
-  name: text("name"),
-  // Optional recovery email. Nullable because attaching an email is
-  // opt-in and the token is still the only auth factor. email is
-  // verified via a 6-digit code sent through Resend; emailVerifiedAt
-  // is stamped on successful verification. Not unique: two users on
-  // different devices could legitimately share the same personal
-  // email.
-  email: text("email"),
-  emailVerifiedAt: timestamp("email_verified_at"),
-  storageQuotaMb: integer("storage_quota_mb").default(1024),
-  storageUsedMb: integer("storage_used_mb").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // The bearer token — a long random string generated on first launch
+    // (client-generated) or server-generated for email-login users.
+    // This is the sole auth factor. Stored separately from the PK so it
+    // never leaks through FK joins or logs.
+    token: text("token").notNull(),
+    name: text("name"),
+    // Recovery/login email. Verified emails are unique (enforced by
+    // partial index below) so login and recovery flows are unambiguous.
+    email: text("email"),
+    emailVerifiedAt: timestamp("email_verified_at"),
+    storageQuotaMb: integer("storage_quota_mb").default(1024),
+    storageUsedMb: integer("storage_used_mb").default(0),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("users_token_idx").on(table.token),
+    uniqueIndex("users_email_verified_unique")
+      .on(table.email)
+      .where(sql`email_verified_at IS NOT NULL`),
+  ],
+);
 
 // Pending email verification codes. Short-lived (~15 min), single use.
 // Intentionally not linked to a userId for the recovery flow — the
@@ -41,8 +49,8 @@ export const emailVerifications = pgTable("email_verifications", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   code: text("code").notNull(), // 6-digit zero-padded
-  purpose: text("purpose").notNull(), // 'attach' | 'recover'
-  userId: text("user_id"), // set for 'attach', null for 'recover' until we look it up
+  purpose: text("purpose").notNull(), // 'attach' | 'recover' | 'login'
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }), // null for recover until consumed
   expiresAt: timestamp("expires_at").notNull(),
   consumedAt: timestamp("consumed_at"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -84,7 +92,7 @@ export const books = pgTable(
   "books",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     fileId: uuid("file_id")
@@ -109,7 +117,7 @@ export const readingProgress = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     deviceId: text("device_id").notNull(),
@@ -137,7 +145,7 @@ export const bookmarks = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     position: jsonb("position").notNull(),
@@ -158,7 +166,7 @@ export const highlights = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     cfiRange: text("cfi_range").notNull(),
@@ -181,7 +189,7 @@ export const notes = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     position: jsonb("position").notNull(),
@@ -207,7 +215,7 @@ export const notes = pgTable(
 
 export const lookupProviders = pgTable("lookup_providers", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id")
+  userId: uuid("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   name: text("name").notNull(),
@@ -225,7 +233,7 @@ export const ttsJobs = pgTable(
     bookId: uuid("book_id")
       .references(() => books.id, { onDelete: "cascade" })
       .notNull(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     status: text("status").notNull().default("queued"),
@@ -260,7 +268,7 @@ export const collections = pgTable(
   "collections",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     name: text("name").notNull(),
@@ -294,7 +302,7 @@ export const readingSessions = pgTable(
   "reading_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     bookId: uuid("book_id")
@@ -317,7 +325,7 @@ export const syncLog = pgTable(
   "sync_log",
   {
     id: serial("id").primaryKey(),
-    userId: text("user_id")
+    userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     entityType: text("entity_type").notNull(),

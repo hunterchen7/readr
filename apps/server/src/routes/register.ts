@@ -13,9 +13,10 @@ const app = new Hono();
  * on every subsequent request. Idempotent — if the token already exists
  * the existing user row is returned unchanged.
  *
- * This endpoint is intentionally unauthenticated. The token is the secret.
- * Anyone who knows a token IS that user, so the client must store it in
- * SecureStore / a password manager and treat it like a password.
+ * The user PK is a server-generated UUID. The token is stored in a
+ * separate column with a unique index. Anyone who knows a token IS
+ * that user, so the client must store it in SecureStore / a password
+ * manager and treat it like a password.
  */
 const registerSchema = z.object({
   token: z
@@ -42,7 +43,7 @@ app.post("/register", async (c) => {
   const [existing] = await db
     .select({ id: schema.users.id, name: schema.users.name })
     .from(schema.users)
-    .where(eq(schema.users.id, token))
+    .where(eq(schema.users.token, token))
     .limit(1);
 
   if (existing) {
@@ -51,7 +52,7 @@ app.post("/register", async (c) => {
 
   const [created] = await db
     .insert(schema.users)
-    .values({ id: token, name: name ?? null })
+    .values({ token, name: name ?? null })
     .returning({ id: schema.users.id, name: schema.users.name });
 
   return c.json({ user: created, created: true }, 201);
