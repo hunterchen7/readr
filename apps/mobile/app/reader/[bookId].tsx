@@ -194,7 +194,7 @@ export default function ReaderScreen() {
   const _format = data?.book?.format ?? "epub";
   const _sourceUrl = localFileUrl ?? data?.book?.downloadUrl ?? "";
   const _readerHtml = _sourceUrl
-    ? (_format === "pdf" ? getPdfReaderHtml(_sourceUrl) : getReaderHtml(_sourceUrl))
+    ? (_format === "pdf" ? getPdfReaderHtml(_sourceUrl) : getReaderHtml(_sourceUrl, theme.bg, theme.fg))
     : "";
 
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
@@ -523,7 +523,7 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={[styles.webview, { backgroundColor: theme.bg }]}
         originWhitelist={["*"]}
-        source={{ html: _readerHtml || "<html><body><p style='text-align:center;padding:48px;color:#999'>Loading...</p></body></html>", baseUrl: localFileUrl ? localFileUrl.replace(/\/[^/]+$/, "/") : "" }}
+        source={{ html: _readerHtml || `<html style="background:${theme.bg}"><body style="background:${theme.bg}"><p style='text-align:center;padding:48px;color:${theme.fg}'>Loading...</p></body></html>`, baseUrl: localFileUrl ? localFileUrl.replace(/\/[^/]+$/, "/") : "" }}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs

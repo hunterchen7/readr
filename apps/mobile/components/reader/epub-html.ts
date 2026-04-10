@@ -3,9 +3,11 @@
  * Uses foliate-js for EPUB rendering with full theme, pagination, TOC,
  * search, and text selection support.
  */
-export function getReaderHtml(bookUrl: string): string {
+export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: string): string {
+  const bg = initialBg || '#fff';
+  const fg = initialFg || '#111';
   return `<!DOCTYPE html>
-<html>
+<html style="background:${bg};color:${fg}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -31,9 +33,9 @@ export function getReaderHtml(bookUrl: string): string {
   </style>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
-    #viewer { width: 100%; height: 100%; background: var(--bg, #fff); }
-    foliate-view { width: 100%; height: 100%; background: var(--bg, #fff); border: none; }
+    html, body { height: 100%; overflow: hidden; background: ${bg}; color: ${fg}; }
+    #viewer { width: 100%; height: 100%; background: ${bg}; }
+    foliate-view { width: 100%; height: 100%; background: ${bg}; border: none; }
     iframe { border: none; }
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
