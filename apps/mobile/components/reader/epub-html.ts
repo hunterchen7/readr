@@ -81,10 +81,7 @@ export function getReaderHtml(bookUrl: string): string {
           if (!cfi) break;
           if (view.addAnnotation) {
             try {
-              view.addAnnotation(cfi, {
-                type: 'highlight',
-                color: data.payload.color || 'yellow',
-              });
+              view.addAnnotation({ value: cfi, color: data.payload.color || 'yellow' });
             } catch (err) {
               post('highlightError', { cfi, error: String(err) });
             }
@@ -118,6 +115,7 @@ export function getReaderHtml(bookUrl: string): string {
         theme.fontFamily ? '  font-family: ' + theme.fontFamily + ' !important;' : '',
         '}',
         'body { background: inherit !important; color: inherit !important; font-family: inherit !important; font-weight: inherit !important; }',
+        '* { color: ' + (theme.fg || '#111') + ' !important; }',
         'p, li, td, th, dd, dt { line-height: inherit !important; }',
         'img { max-width: 100% !important; height: auto !important; }',
         eink
@@ -205,7 +203,10 @@ export function getReaderHtml(bookUrl: string): string {
 
     async function init() {
       try {
-        const { makeBook } = await import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js');
+        const [{ makeBook }, { Overlayer }] = await Promise.all([
+          import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js'),
+          import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/overlayer.js'),
+        ]);
 
         const blob = await fetchFile(BOOK_URL);
         const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
@@ -245,7 +246,11 @@ export function getReaderHtml(bookUrl: string): string {
 
         // Text selection
         view.addEventListener('draw-annotation', (e) => {
-          // foliate-js annotation drawing
+          const { draw, annotation } = e.detail ?? {};
+          if (draw && annotation) {
+            const color = annotation.color || 'yellow';
+            draw(Overlayer.highlight, { color });
+          }
         });
 
         view.addEventListener('show-annotation', (e) => {
@@ -259,6 +264,55 @@ export function getReaderHtml(bookUrl: string): string {
           if (e.detail?.doc) {
             currentSectionDoc = e.detail.doc;
             injectThemeIntoDoc(currentSectionDoc);
+
+            post('debug', { msg: 'section loaded, attaching handlers to iframe doc' });
+
+            // Clicks inside foliate's section iframes don't bubble to the
+            // parent document.  Attach our tap handler directly so
+            // page-turn and toggle-controls work from inside the content.
+            currentSectionDoc.addEventListener('click', (e) => {
+              post('debug', { msg: 'section click at x=' + e.clientX });
+              handleTap(e);
+            });
+
+            // Suppress native Android context menu so our custom RN
+            // menu (Highlight / Bookmark / Note / Copy / Lookup) shows.
+            currentSectionDoc.addEventListener('contextmenu', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            });
+
+            // Text selection — detect via selectionchange + pointerup.
+            // selectionchange fires as the user drags handles; we debounce
+            // and only post once the selection stabilises (pointerup or
+            // after a short delay).
+            let selDebounce = null;
+            function checkSelection() {
+              const sel = currentSectionDoc.getSelection?.();
+              if (sel && sel.toString().trim() && sel.rangeCount > 0 && !sel.isCollapsed) {
+                let cfi = '';
+                try {
+                  const range = sel.getRangeAt(0);
+                  const contents = view.renderer?.getContents?.() ?? [];
+                  const content = contents.find(c => c.doc.contains(range.startContainer));
+                  if (content) cfi = view.getCFI(content.index, range) ?? '';
+                } catch (err) {
+                  post('debug', { msg: 'CFI error: ' + err });
+                }
+                post('debug', { msg: 'selection: ' + sel.toString().slice(0, 30) + ', cfi=' + (cfi ? 'yes' : 'no') });
+                post('selectionChanged', { text: sel.toString(), cfi });
+              } else {
+                post('selectionCleared', {});
+              }
+            }
+            currentSectionDoc.addEventListener('selectionchange', () => {
+              clearTimeout(selDebounce);
+              selDebounce = setTimeout(checkSelection, 200);
+            });
+            currentSectionDoc.addEventListener('pointerup', () => {
+              setTimeout(checkSelection, 80);
+            });
           }
         });
 
@@ -268,29 +322,28 @@ export function getReaderHtml(bookUrl: string): string {
           post('externalLink', { href: e.detail.href });
         });
 
-        // Custom selection handler
-        const doc = view.renderer?.document ?? view.shadowRoot;
-        if (doc) {
-          doc.addEventListener('selectionchange', () => {
-            const sel = doc.getSelection?.() ?? window.getSelection();
-            if (sel && sel.toString().trim()) {
-              post('selectionChanged', {
-                text: sel.toString(),
-                // CFI range will be computed when the user acts on the selection
-              });
-            } else {
-              post('selectionCleared', {});
-            }
-          });
-        }
+        // Selection handling is now attached to each section doc
+        // in the 'load' handler above (iframes don't bubble events).
 
         // Tap zones for page turns (honors the tapToTurn theme flag).
         function handleTap(e) {
-          const w = window.innerWidth;
-          const x = e.clientX;
+          // If there's an active text selection, clear it on tap
+          // instead of navigating. Next tap will navigate normally.
+          try {
+            const doc = (e.view || window).document ?? document;
+            const sel = doc.getSelection?.() ?? window.getSelection?.();
+            if (sel && !sel.isCollapsed && sel.toString().trim()) {
+              sel.removeAllRanges();
+              post('selectionCleared', {});
+              return;
+            }
+          } catch {}
+
+          const w = screen.width;
+          const x = e.screenX;
           if (tapToTurn) {
-            if (x < w * 0.3) { view.prev(); return; }
-            if (x > w * 0.7) { view.next(); return; }
+            if (x < w * 0.2) { view.prev(); return; }
+            if (x > w * 0.8) { view.next(); return; }
           }
           post('tapCenter', {});
         }

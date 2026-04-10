@@ -7,8 +7,10 @@ import { colors, spacing, fontSize } from "../../lib/theme";
 const THEME_PRESETS = [
   { label: "Light", bg: "#ffffff", fg: "#111111" },
   { label: "Sepia", bg: "#f8f0e3", fg: "#5b4636" },
-  { label: "Dark", bg: "#1a1a2e", fg: "#e0e0e0" },
   { label: "E-ink", bg: "#ffffff", fg: "#000000" },
+  { label: "Gray", bg: "#2a2a2a", fg: "#cccccc" },
+  { label: "Dark", bg: "#1a1a2e", fg: "#e0e0e0" },
+  { label: "Black", bg: "#000000", fg: "#c8c8c8" },
 ] as const;
 
 const FONT_FAMILIES = [

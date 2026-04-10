@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
-import { BookOpen, Settings } from "lucide-react-native";
+import { BookOpen, Settings, Bookmark as BookmarkIcon } from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -57,7 +57,8 @@ export default function ReaderScreen() {
 
   const display = useDisplay();
   const insets = useSafeAreaInsets();
-  const [showControls, setShowControls] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [showTocDrawer, setShowTocDrawer] = useState(false);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [theme, setTheme] = useState<ReaderTheme>(() =>
@@ -321,7 +322,10 @@ export default function ReaderScreen() {
           setToc(msg.payload.chapters ?? []);
           break;
         case "tapCenter":
-          setShowControls(true);
+          setControlsVisible((v) => {
+            if (v && controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+            return !v;
+          });
           break;
         case "selectionChanged":
           if (msg.payload.text) {
@@ -452,6 +456,27 @@ export default function ReaderScreen() {
     setShowTocDrawer(false);
   }
 
+  // ─── Bookmark toggle ───────────────────────────────────────────────
+
+  const isBookmarked = useMemo(() => {
+    if (!currentPosition) return false;
+    return bookmarks.some(
+      (b) => Math.abs(b.position.percentage - currentPosition.percentage) < 1,
+    );
+  }, [bookmarks, currentPosition]);
+
+  async function handleToggleBookmark() {
+    if (!bookId || !currentPosition) return;
+    const existing = bookmarks.find(
+      (b) => Math.abs(b.position.percentage - currentPosition.percentage) < 1,
+    );
+    if (existing) {
+      await handleDeleteBookmark(existing.id);
+    } else {
+      await handleCreateBookmark();
+    }
+  }
+
   // ─── Render ────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -483,23 +508,6 @@ export default function ReaderScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
-        ]}
-      >
-        <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
-          <BookOpen size={20} color={theme.fg} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
-          {book.title ?? "Reading"}
-        </Text>
-        <Pressable onPress={() => setShowSettingsDropdown(true)} style={styles.headerButton} accessibilityLabel="Reader settings">
-          <Settings size={20} color={theme.fg} />
-        </Pressable>
-      </View>
-
       <WebView
         ref={webviewRef}
         style={styles.webview}
@@ -512,25 +520,71 @@ export default function ReaderScreen() {
         javaScriptEnabled
         domStorageEnabled
         mixedContentMode="always"
+        menuItems={[]}
       />
 
-      <Pressable
-          onPress={() => setShowGotoDialog(true)}
-          style={[
-            styles.progressBar,
-            {
-              backgroundColor: theme.bg,
-              paddingBottom: Math.max(insets.bottom, 4),
-            },
-          ]}
-        >
-          <View style={[styles.progressFill, { width: `${progress}%` }]} />
-          <Text style={[styles.progressText, { color: theme.fg }]}>
-            {currentPage != null && totalPages != null
-              ? `${currentPage} / ${totalPages}  ·  ${progress}%`
-              : `${progress}%`}
-          </Text>
-        </Pressable>
+      {controlsVisible ? (
+        <>
+          <View
+            style={[
+              styles.header,
+              styles.headerOverlay,
+              { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
+            ]}
+          >
+            <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
+              <BookOpen size={20} color={theme.fg} />
+            </Pressable>
+            <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
+              {book.title ?? "Reading"}
+            </Text>
+            <Pressable onPress={handleToggleBookmark} style={styles.headerButton} accessibilityLabel={isBookmarked ? "Remove bookmark" : "Add bookmark"}>
+              <BookmarkIcon size={20} color={theme.fg} fill={isBookmarked ? theme.fg : "none"} />
+            </Pressable>
+            <Pressable onPress={() => setShowSettingsDropdown(true)} style={styles.headerButton} accessibilityLabel="Reader settings">
+              <Settings size={20} color={theme.fg} />
+            </Pressable>
+          </View>
+
+          <Pressable
+            onPress={() => setShowGotoDialog(true)}
+            style={[
+              styles.progressOverlay,
+              { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
+            ]}
+          >
+            {/* Scrubber track with dot */}
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${progress}%` }]} />
+              <View style={[styles.progressDot, { left: `${progress}%` }]} />
+            </View>
+
+            {/* Chapter name */}
+            {currentPosition?.chapter ? (
+              <Text style={[styles.progressChapter, { color: theme.fg }]} numberOfLines={1}>
+                {currentPosition.chapter}
+              </Text>
+            ) : null}
+
+            {/* Page and percentage info */}
+            <View style={styles.progressInfoRow}>
+              {currentPage != null && totalPages != null ? (
+                <>
+                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                    Page {currentPage} of {totalPages}
+                  </Text>
+                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                    {totalPages - currentPage} pages left
+                  </Text>
+                </>
+              ) : null}
+              <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                {progress}%
+              </Text>
+            </View>
+          </Pressable>
+        </>
+      ) : null}
 
       <TocDrawer
         visible={showTocDrawer}
@@ -621,30 +675,64 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 8,
-    // Top padding is applied inline at the call site via insets.top + 8.
     paddingBottom: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#e0e0e0",
+  },
+  headerOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
   },
   headerButton: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },
   headerButtonText: { fontSize: 20 },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 15, fontWeight: "500" },
   headerActions: { flexDirection: "row" },
   webview: { flex: 1 },
-  progressBar: {
-    height: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
+  progressOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    paddingHorizontal: 16,
+    paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#e0e0e0",
   },
-  progressFill: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.05)",
+  progressTrack: {
+    height: 4,
+    backgroundColor: "rgba(0,0,0,0.08)",
+    borderRadius: 2,
+    marginBottom: 8,
+    position: "relative",
   },
-  progressText: { fontSize: 11, opacity: 0.5 },
+  progressFill: {
+    height: 4,
+    backgroundColor: "rgba(0,0,0,0.25)",
+    borderRadius: 2,
+  },
+  progressDot: {
+    position: "absolute",
+    top: -4,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    marginLeft: -6,
+  },
+  progressChapter: {
+    fontSize: 13,
+    fontWeight: "500",
+    opacity: 0.7,
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  progressInfoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  progressLabel: { fontSize: 11, opacity: 0.5 },
 });

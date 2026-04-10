@@ -1,5 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
+import { Highlighter, Bookmark, StickyNote, Copy, Search } from "lucide-react-native";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { useEffect, useState } from "react";
 import { lookupWord, type LookupResult } from "../../lib/dictionary";
@@ -143,7 +144,7 @@ export function ContextMenu({
                   setShowLookup(false);
                 }}
               >
-                <Text style={styles.actionIcon}>{p.icon}</Text>
+                <Search size={16} color="#444" />
                 <Text style={styles.actionLabel}>{p.name}</Text>
               </Pressable>
             ))}
@@ -157,28 +158,28 @@ export function ContextMenu({
               style={[styles.actionButton, { minHeight: tapTarget }]}
               onPress={() => setShowColors(true)}
             >
-              <Text style={styles.actionIcon}>🖍</Text>
+              <Highlighter size={20} color="#444" />
               <Text style={styles.actionLabel}>Highlight</Text>
             </Pressable>
             <Pressable
               style={[styles.actionButton, { minHeight: tapTarget }]}
               onPress={onBookmark}
             >
-              <Text style={styles.actionIcon}>🔖</Text>
+              <Bookmark size={20} color="#444" />
               <Text style={styles.actionLabel}>Bookmark</Text>
             </Pressable>
             <Pressable
               style={[styles.actionButton, { minHeight: tapTarget }]}
               onPress={onNote}
             >
-              <Text style={styles.actionIcon}>📝</Text>
+              <StickyNote size={20} color="#444" />
               <Text style={styles.actionLabel}>Note</Text>
             </Pressable>
             <Pressable
               style={[styles.actionButton, { minHeight: tapTarget }]}
               onPress={onCopy}
             >
-              <Text style={styles.actionIcon}>📋</Text>
+              <Copy size={20} color="#444" />
               <Text style={styles.actionLabel}>Copy</Text>
             </Pressable>
             {lookupProviders.length > 0 ? (
@@ -186,7 +187,7 @@ export function ContextMenu({
                 style={[styles.actionButton, { minHeight: tapTarget }]}
                 onPress={() => setShowLookup(true)}
               >
-                <Text style={styles.actionIcon}>🔍</Text>
+                <Search size={20} color="#444" />
                 <Text style={styles.actionLabel}>Look Up</Text>
               </Pressable>
             ) : null}
@@ -231,7 +232,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
-  actionIcon: { fontSize: 20, marginBottom: 2 },
+  actionIcon: { marginBottom: 2 },
   actionLabel: { fontSize: 11, color: "#666" },
   colorRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", padding: 8 },
   colorButton: {
