@@ -15,6 +15,8 @@ ios/
 android/
 # Prevent expo prebuild / copy scripts from recursively nesting the project
 apps/mobile/apps/
+# WebView assets generated from npm deps by scripts/bundle-webview-assets.mjs
+apps/mobile/assets/js/
 
 # Environment
 .env
