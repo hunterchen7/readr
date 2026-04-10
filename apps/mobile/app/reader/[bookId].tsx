@@ -524,7 +524,7 @@ export default function ReaderScreen() {
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       <WebView
         ref={webviewRef}
-        style={styles.webview}
+        style={[styles.webview, { backgroundColor: theme.bg }]}
         originWhitelist={["*"]}
         source={{ html: _readerHtml || "<html><body><p style='text-align:center;padding:48px;color:#999'>Loading...</p></body></html>", baseUrl: localFileUrl ? localFileUrl.replace(/\/[^/]+$/, "/") : "" }}
         allowFileAccess
@@ -543,7 +543,7 @@ export default function ReaderScreen() {
             style={[
               styles.header,
               styles.headerOverlay,
-              { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
+              { backgroundColor: theme.bg, paddingTop: insets.top + 8, borderBottomColor: theme.fg + "22" },
             ]}
           >
             <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
@@ -564,7 +564,7 @@ export default function ReaderScreen() {
             onPress={() => setShowGotoDialog(true)}
             style={[
               styles.progressOverlay,
-              { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
+              { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8), borderTopColor: theme.fg + "22" },
             ]}
           >
             {/* Scrubber track */}

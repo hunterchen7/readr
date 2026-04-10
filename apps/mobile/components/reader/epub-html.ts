@@ -11,7 +11,7 @@ export function getReaderHtml(bookUrl: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond&family=Fira+Mono&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Open+Sans&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Text&family=EB+Garamond&family=Fira+Mono&family=IBM+Plex+Mono&family=Inter&family=Libre+Baskerville&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Nunito&family=Open+Sans&family=PT+Serif&family=Playfair+Display&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
@@ -117,7 +117,7 @@ export function getReaderHtml(bookUrl: string): string {
 
       return [
         // Load Google Fonts in the section iframe
-        "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond&family=Fira+Mono&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Open+Sans&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap');",
+        "@import url('https://fonts.googleapis.com/css2?family=Crimson+Text&family=EB+Garamond&family=Fira+Mono&family=IBM+Plex+Mono&family=Inter&family=Libre+Baskerville&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Nunito&family=Open+Sans&family=PT+Serif&family=Playfair+Display&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap');",
         // Root styles
         'html { background: ' + bg + ' !important; }',
         // Force ALL elements: color, bg transparent, typography
@@ -165,6 +165,10 @@ export function getReaderHtml(bookUrl: string): string {
       root.style.setProperty('--bg', theme.bg || '#fff');
       root.style.setProperty('--fg', theme.fg || '#111');
       document.body.style.background = theme.bg || '#fff';
+      // Also color the viewer container and foliate-view
+      const viewer = document.getElementById('viewer');
+      if (viewer) viewer.style.background = theme.bg || '#fff';
+      if (view) view.style.background = theme.bg || '#fff';
       tapToTurn = theme.tapToTurn !== false;
 
       currentThemeCSS = buildThemeCSS(theme);
