@@ -10,8 +10,8 @@ import {
 } from "react-native";
 import { useState } from "react";
 import { router } from "expo-router";
-import { Home } from "lucide-react-native";
-import type { Bookmark } from "@readr/shared";
+import { Home, Trash2 } from "lucide-react-native";
+import type { Bookmark, Note, Highlight } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { colors, spacing, fontSize } from "../../lib/theme";
 
@@ -26,9 +26,14 @@ interface TocDrawerProps {
   onClose: () => void;
   toc: TocItem[];
   bookmarks: Bookmark[];
+  notes: Note[];
+  highlights: Highlight[];
   onGoToChapter: (href: string) => void;
   onJumpToBookmark: (bookmark: Bookmark) => void;
   onDeleteBookmark: (id: string) => void;
+  onJumpToNote: (note: Note) => void;
+  onJumpToHighlight: (highlight: Highlight) => void;
+  onDeleteHighlight: (id: string) => void;
   theme: { bg: string; fg: string };
 }
 
@@ -37,14 +42,19 @@ export function TocDrawer({
   onClose,
   toc,
   bookmarks,
+  notes,
+  highlights,
   onGoToChapter,
   onJumpToBookmark,
   onDeleteBookmark,
+  onJumpToNote,
+  onJumpToHighlight,
+  onDeleteHighlight,
   theme,
 }: TocDrawerProps) {
   const display = useDisplay();
   const { width: screenWidth } = useWindowDimensions();
-  const [tab, setTab] = useState<"chapters" | "bookmarks">("chapters");
+  const [tab, setTab] = useState<"chapters" | "bookmarks" | "notes">("chapters");
 
   if (!visible) return null;
 
@@ -83,8 +93,9 @@ export function TocDrawer({
           <View
             style={[styles.tabs, { borderBottomColor: theme.fg + "22" }]}
           >
-            {(["chapters", "bookmarks"] as const).map((t) => {
+            {(["chapters", "bookmarks", "notes"] as const).map((t) => {
               const active = tab === t;
+              const labels = { chapters: "Chapters", bookmarks: "Bookmarks", notes: "Notes" };
               return (
                 <Pressable
                   key={t}
@@ -101,7 +112,7 @@ export function TocDrawer({
                       active && styles.tabTextActive,
                     ]}
                   >
-                    {t === "chapters" ? "Chapters" : "Bookmarks"}
+                    {labels[t]}
                   </Text>
                 </Pressable>
               );
@@ -137,51 +148,100 @@ export function TocDrawer({
                 </Pressable>
               )}
             />
-          ) : (
+          ) : tab === "bookmarks" ? (
             <FlatList
               data={bookmarks}
               keyExtractor={(item) => item.id}
               style={styles.list}
               ListEmptyComponent={
                 <Text style={[styles.emptyText, { color: theme.fg + "66" }]}>
-                  No bookmarks yet.
+                  No bookmarks yet. Tap the bookmark icon in the header to add one.
                 </Text>
               }
               renderItem={({ item }) => (
-                <Pressable
+                <View
                   style={[
                     styles.bookmarkItem,
                     { borderBottomColor: theme.fg + "11" },
                   ]}
-                  onPress={() => {
-                    onJumpToBookmark(item);
-                    onClose();
-                  }}
-                  onLongPress={() => {
-                    Alert.alert(
-                      "Delete Bookmark?",
-                      item.label ?? "This bookmark",
-                      [
-                        { text: "Cancel", style: "cancel" },
-                        {
-                          text: "Delete",
-                          style: "destructive",
-                          onPress: () => onDeleteBookmark(item.id),
-                        },
-                      ],
-                    );
-                  }}
                 >
-                  <Text
-                    style={[styles.bookmarkLabel, { color: theme.fg }]}
-                    numberOfLines={1}
+                  <Pressable
+                    style={{ flex: 1 }}
+                    onPress={() => {
+                      onJumpToBookmark(item);
+                      onClose();
+                    }}
                   >
-                    {item.label ??
-                      `Page ${item.position.page ?? Math.round(item.position.percentage) + "%"}`}
-                  </Text>
+                    <Text
+                      style={[styles.bookmarkLabel, { color: theme.fg }]}
+                      numberOfLines={1}
+                    >
+                      {item.label ??
+                        `Page ${item.position.page ?? Math.round(item.position.percentage) + "%"}`}
+                    </Text>
+                  </Pressable>
                   <Text style={[styles.bookmarkPct, { color: theme.fg + "66" }]}>
                     {Math.round(item.position.percentage)}%
                   </Text>
+                  <Pressable
+                    onPress={() => onDeleteBookmark(item.id)}
+                    style={styles.deleteBtn}
+                  >
+                    <Trash2 size={16} color={theme.fg + "66"} />
+                  </Pressable>
+                </View>
+              )}
+            />
+          ) : (
+            <FlatList
+              data={[
+                ...notes.map((n) => ({ type: "note" as const, item: n, at: n.createdAt })),
+                ...highlights.map((h) => ({ type: "highlight" as const, item: h, at: h.createdAt })),
+              ].sort((a, b) => b.at.localeCompare(a.at))}
+              keyExtractor={(entry) => entry.item.id}
+              style={styles.list}
+              ListEmptyComponent={
+                <Text style={[styles.emptyText, { color: theme.fg + "66" }]}>
+                  No notes or highlights yet. Select text to add one.
+                </Text>
+              }
+              renderItem={({ item: entry }) => (
+                <Pressable
+                  style={[styles.noteItem, { borderBottomColor: theme.fg + "11" }]}
+                  onPress={() => {
+                    if (entry.type === "note") onJumpToNote(entry.item as Note);
+                    else onJumpToHighlight(entry.item as Highlight);
+                    onClose();
+                  }}
+                >
+                  {entry.type === "highlight" ? (
+                    <>
+                      <View style={[styles.highlightBar, { backgroundColor: (entry.item as Highlight).color || "#fef08a" }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.noteText, { color: theme.fg }]} numberOfLines={2}>
+                          {(entry.item as Highlight).textContent || "Highlight"}
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => onDeleteHighlight(entry.item.id)}
+                        style={styles.deleteBtn}
+                      >
+                        <Trash2 size={16} color={theme.fg + "66"} />
+                      </Pressable>
+                    </>
+                  ) : (
+                    <>
+                      <View style={[styles.highlightBar, { backgroundColor: "#60a5fa" }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.noteText, { color: theme.fg }]} numberOfLines={2}>
+                          {(entry.item as Note).noteType === "handwritten" ? "Handwritten note" : ((entry.item as Note).textContent || "Note")}
+                        </Text>
+                        <Text style={[styles.noteMeta, { color: theme.fg + "66" }]}>
+                          {Math.round((entry.item as Note).position.percentage)}%
+                        </Text>
+                      </View>
+                    </>
+                  )}
                 </Pressable>
               )}
             />
@@ -270,6 +330,31 @@ const styles = StyleSheet.create({
   emptyText: {
     textAlign: "center",
     paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.lg,
     fontSize: fontSize.sm,
+  },
+  deleteBtn: {
+    padding: spacing.sm,
+    marginLeft: spacing.sm,
+  },
+  noteItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderBottomWidth: 1,
+    gap: spacing.sm,
+  },
+  highlightBar: {
+    width: 4,
+    borderRadius: 2,
+    alignSelf: "stretch",
+  },
+  noteText: {
+    fontSize: fontSize.md,
+  },
+  noteMeta: {
+    fontSize: fontSize.xs,
+    marginTop: 2,
   },
 });

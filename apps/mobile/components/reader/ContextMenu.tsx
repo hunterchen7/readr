@@ -1,6 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
-import { Highlighter, Bookmark, StickyNote, Copy, Search, PenTool } from "lucide-react-native";
+import { Highlighter, Bookmark, StickyNote, Copy } from "lucide-react-native";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { useEffect, useState } from "react";
 import { lookupWord, type LookupResult } from "../../lib/dictionary";
@@ -12,7 +12,6 @@ interface ContextMenuProps {
   onHighlight: (color: HighlightColor) => void;
   onBookmark: () => void;
   onNote: () => void;
-  onDraw: () => void;
   onCopy: () => void;
   onLookup: (provider: string) => void;
   lookupProviders: { name: string; icon: string; urlTemplate: string }[];
@@ -50,14 +49,12 @@ export function ContextMenu({
   onHighlight,
   onBookmark,
   onNote,
-  onDraw,
   onCopy,
   onLookup,
   lookupProviders,
 }: ContextMenuProps) {
   const display = useDisplay();
   const [showColors, setShowColors] = useState(false);
-  const [showLookup, setShowLookup] = useState(false);
   const [offlineDef, setOfflineDef] = useState<LookupResult | null | undefined>(
     undefined, // undefined = not looked up yet, null = not found
   );
@@ -135,72 +132,40 @@ export function ContextMenu({
               <Text>✕</Text>
             </Pressable>
           </View>
-        ) : showLookup ? (
-          <View style={styles.lookupList}>
-            {lookupProviders.map((p) => (
-              <Pressable
-                key={p.name}
-                style={[styles.actionButton, { minHeight: tapTarget }]}
-                onPress={() => {
-                  onLookup(p.urlTemplate.replace("{{query}}", encodeURIComponent(selectedText)));
-                  setShowLookup(false);
-                }}
-              >
-                <Search size={16} color="#444" />
-                <Text style={styles.actionLabel}>{p.name}</Text>
-              </Pressable>
-            ))}
-            <Pressable style={styles.cancelButton} onPress={() => setShowLookup(false)}>
-              <Text>✕</Text>
-            </Pressable>
-          </View>
         ) : (
-          <View style={styles.actionRow}>
-            <Pressable
-              style={[styles.actionButton, { minHeight: tapTarget }]}
-              onPress={() => setShowColors(true)}
-            >
-              <Highlighter size={20} color="#444" />
-              <Text style={styles.actionLabel}>Highlight</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.actionButton, { minHeight: tapTarget }]}
-              onPress={onBookmark}
-            >
-              <Bookmark size={20} color="#444" />
-              <Text style={styles.actionLabel}>Bookmark</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.actionButton, { minHeight: tapTarget }]}
-              onPress={onNote}
-            >
-              <StickyNote size={20} color="#444" />
-              <Text style={styles.actionLabel}>Note</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.actionButton, { minHeight: tapTarget }]}
-              onPress={onDraw}
-            >
-              <PenTool size={20} color="#444" />
-              <Text style={styles.actionLabel}>Draw</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.actionButton, { minHeight: tapTarget }]}
-              onPress={onCopy}
-            >
-              <Copy size={20} color="#444" />
-              <Text style={styles.actionLabel}>Copy</Text>
-            </Pressable>
-            {lookupProviders.length > 0 ? (
-              <Pressable
-                style={[styles.actionButton, { minHeight: tapTarget }]}
-                onPress={() => setShowLookup(true)}
-              >
-                <Search size={20} color="#444" />
-                <Text style={styles.actionLabel}>Look Up</Text>
+          <>
+            {/* Main action buttons */}
+            <View style={styles.actionRow}>
+              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={() => setShowColors(true)}>
+                <Highlighter size={20} color="#444" />
+                <Text style={styles.actionLabel}>Highlight</Text>
               </Pressable>
-            ) : null}
-          </View>
+              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onBookmark}>
+                <Bookmark size={20} color="#444" />
+                <Text style={styles.actionLabel}>Bookmark</Text>
+              </Pressable>
+              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onNote}>
+                <StickyNote size={20} color="#444" />
+                <Text style={styles.actionLabel}>Note</Text>
+              </Pressable>
+              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onCopy}>
+                <Copy size={20} color="#444" />
+                <Text style={styles.actionLabel}>Copy</Text>
+              </Pressable>
+            </View>
+            {/* Inline search links */}
+            <View style={styles.searchRow}>
+              {lookupProviders.map((p) => (
+                <Pressable
+                  key={p.name}
+                  style={styles.searchLink}
+                  onPress={() => onLookup(p.urlTemplate.replace("{{query}}", encodeURIComponent(selectedText)))}
+                >
+                  <Text style={styles.searchLinkText}>{p.name}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
         )}
       </View>
     </Modal>
@@ -243,6 +208,17 @@ const styles = StyleSheet.create({
   },
   actionIcon: { marginBottom: 2 },
   actionLabel: { fontSize: 11, color: "#666" },
+  searchRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#eee",
+  },
+  searchLink: { paddingVertical: 4 },
+  searchLinkText: { fontSize: 12, color: "#2563eb" },
   colorRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", padding: 8 },
   colorButton: {
     borderRadius: 8,
@@ -258,5 +234,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  lookupList: { gap: 4 },
 });

@@ -29,6 +29,7 @@
     "expo-speech": "~13",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3",
+    "foliate-js": "1.0.1",
     "lucide-react-native": "^1.8.0",
     "react": "19.1.0",
     "react-native": "0.81.5",
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "esbuild": "^0.28.0",
     "typescript": "~5.9.2"
   }
 }

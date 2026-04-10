@@ -10,6 +10,7 @@ import type { SyncLogEntry, SyncConflict, BookPosition } from "@readr/shared";
 type Variables = { userId: string };
 
 const syncRouter = new Hono<{ Variables: Variables }>();
+type AcceptedEntity = Pick<SyncLogEntry, "entityType" | "entityId">;
 
 // GET /sync/changes?since=<ISO timestamp>&deviceId=<string>
 syncRouter.get("/sync/changes", async (c) => {
@@ -61,6 +62,7 @@ syncRouter.post("/sync/push", async (c) => {
 
   const { changes } = parsed.data;
   let accepted = 0;
+  const acceptedEntities: AcceptedEntity[] = [];
   const conflicts: SyncConflict[] = [];
 
   for (const change of changes) {
@@ -71,6 +73,10 @@ syncRouter.post("/sync/push", async (c) => {
         const result = await handleProgressSync(userId, entry);
         if (result.accepted) {
           accepted++;
+          acceptedEntities.push({
+            entityType: entry.entityType,
+            entityId: entry.entityId,
+          });
         } else {
           conflicts.push({
             entityType: entry.entityType,
@@ -83,6 +89,10 @@ syncRouter.post("/sync/push", async (c) => {
         const result = await handleAnnotationSync(userId, entry);
         if (result.accepted) {
           accepted++;
+          acceptedEntities.push({
+            entityType: entry.entityType,
+            entityId: entry.entityId,
+          });
         }
       }
     } catch (err) {
@@ -90,7 +100,7 @@ syncRouter.post("/sync/push", async (c) => {
     }
   }
 
-  return c.json({ accepted, conflicts });
+  return c.json({ accepted, acceptedEntities, conflicts });
 });
 
 // ─── Progress sync (LWW) ────────────────────────────────────────────

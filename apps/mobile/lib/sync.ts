@@ -2,7 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import type { SyncLogEntry, SyncConflict } from "@readr/shared";
 import { deduplicateQueue } from "@readr/sync-engine";
 import { getServerUrl, getToken } from "./api";
-import { getSyncQueue, clearSyncQueue, getDb } from "./local-db";
+import { getSyncQueue, getDb } from "./local-db";
 
 const LAST_SYNC_KEY = "lastSyncTimestamp";
 
@@ -23,6 +23,7 @@ interface PullResponse {
 
 interface PushResponse {
   accepted: number;
+  acceptedEntities?: Array<Pick<SyncLogEntry, "entityType" | "entityId">>;
   conflicts: SyncConflict[];
 }
 
@@ -243,37 +244,18 @@ export async function runSync(): Promise<{
     pushResult = await pushChanges(deduplicated);
 
     if (pushResult) {
-      // Build a set of conflicted/failed entity keys so we can keep them
-      const conflictedKeys = new Set(
-        pushResult.conflicts.map((c) => `${c.entityType}:${c.entityId}`),
+      const acceptedKeys = new Set(
+        (pushResult.acceptedEntities ?? []).map((entry) => `${entry.entityType}:${entry.entityId}`),
       );
 
-      // Only remove queue items that were NOT conflicted. Items whose
-      // entity appears in the conflicts array stay in the queue for retry.
-      // Items that errored silently (neither accepted nor conflicted) also
-      // stay because they weren't counted as accepted.
-      const acceptedCount = pushResult.accepted;
-      const totalPushed = deduplicated.length;
-      const failedCount = totalPushed - acceptedCount - pushResult.conflicts.length;
-
-      if (failedCount <= 0 && pushResult.conflicts.length === 0) {
-        // Everything was accepted — clear the entire queue
-        const maxId = Math.max(...queue.map((e) => e.id ?? 0));
-        if (maxId > 0) {
-          await clearSyncQueue(maxId);
-        }
-      } else {
-        // Partial success — remove only accepted items
+      if (acceptedKeys.size > 0) {
         const db = await getDb();
         const idsToRemove = queue
-          .filter((e) => !conflictedKeys.has(`${e.entityType}:${e.entityId}`))
+          .filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`))
           .map((e) => e.id)
           .filter((id): id is number => id != null);
 
-        // Remove up to the accepted count (in queue order) to avoid
-        // clearing items that silently failed on the server.
-        const safeIds = idsToRemove.slice(0, acceptedCount);
-        for (const id of safeIds) {
+        for (const id of idsToRemove) {
           await db.runAsync("DELETE FROM sync_queue WHERE id = ?", [id]);
         }
       }

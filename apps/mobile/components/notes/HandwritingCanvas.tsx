@@ -1,11 +1,8 @@
 import { useState, useCallback } from "react";
 import { View, Pressable, Text, StyleSheet, Modal } from "react-native";
+import Svg, { Path } from "react-native-svg";
 import type { Stroke, StrokePoint, PenConfig } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
-
-// Note: This component uses a basic touch-based drawing approach.
-// @shopify/react-native-skia integration for pressure-sensitive drawing
-// will be added when dev client build is configured.
 
 interface HandwritingCanvasProps {
   visible: boolean;
@@ -16,6 +13,17 @@ interface HandwritingCanvasProps {
 
 const PEN_SIZES = [2, 4, 8];
 const PEN_COLORS = ["#000000", "#dc2626", "#2563eb"];
+
+/** Convert stroke points to an SVG path string */
+function pointsToPath(points: StrokePoint[]): string {
+  if (points.length === 0) return "";
+  const first = points[0];
+  let d = `M${first.x.toFixed(1)},${first.y.toFixed(1)}`;
+  for (let i = 1; i < points.length; i++) {
+    d += ` L${points[i].x.toFixed(1)},${points[i].y.toFixed(1)}`;
+  }
+  return d;
+}
 
 export function HandwritingCanvas({
   visible,
@@ -32,24 +40,22 @@ export function HandwritingCanvas({
 
   const handleTouchStart = useCallback(
     (e: { nativeEvent: { locationX: number; locationY: number; force?: number } }) => {
-      const point: StrokePoint = {
+      setCurrentStroke([{
         x: e.nativeEvent.locationX,
         y: e.nativeEvent.locationY,
         pressure: e.nativeEvent.force ?? 0.5,
-      };
-      setCurrentStroke([point]);
+      }]);
     },
     [],
   );
 
   const handleTouchMove = useCallback(
     (e: { nativeEvent: { locationX: number; locationY: number; force?: number } }) => {
-      const point: StrokePoint = {
+      setCurrentStroke((prev) => [...prev, {
         x: e.nativeEvent.locationX,
         y: e.nativeEvent.locationY,
         pressure: e.nativeEvent.force ?? 0.5,
-      };
-      setCurrentStroke((prev) => [...prev, point]);
+      }]);
     },
     [],
   );
@@ -57,8 +63,20 @@ export function HandwritingCanvas({
   const handleTouchEnd = useCallback(() => {
     if (currentStroke.length > 0) {
       if (isEraser) {
-        // Simple eraser: remove strokes near the touch points
-        // Full eraser implementation will use Skia hit testing
+        // Remove strokes that intersect with the eraser path
+        const eraserPoints = currentStroke;
+        setStrokes((prev) =>
+          prev.filter((s) => {
+            for (const ep of eraserPoints) {
+              for (const sp of s.points) {
+                const dx = ep.x - sp.x;
+                const dy = ep.y - sp.y;
+                if (dx * dx + dy * dy < 400) return false; // 20px radius
+              }
+            }
+            return true;
+          }),
+        );
       } else {
         setStrokes((prev) => [
           ...prev,
@@ -68,18 +86,6 @@ export function HandwritingCanvas({
       setCurrentStroke([]);
     }
   }, [currentStroke, penColor, penWidth, isEraser]);
-
-  function handleSave() {
-    onSave(strokes, { color: penColor, width: penWidth });
-  }
-
-  function handleUndo() {
-    setStrokes((prev) => prev.slice(0, -1));
-  }
-
-  function handleClear() {
-    setStrokes([]);
-  }
 
   return (
     <Modal
@@ -94,7 +100,7 @@ export function HandwritingCanvas({
             <Text style={styles.cancelText}>Cancel</Text>
           </Pressable>
           <Text style={styles.title}>Handwriting</Text>
-          <Pressable onPress={handleSave}>
+          <Pressable onPress={() => onSave(strokes, { color: penColor, width: penWidth })}>
             <Text style={styles.saveText}>Save</Text>
           </Pressable>
         </View>
@@ -105,10 +111,7 @@ export function HandwritingCanvas({
             <Pressable
               key={size}
               style={[styles.sizeButton, penWidth === size && styles.sizeButtonActive]}
-              onPress={() => {
-                setPenWidth(size);
-                setIsEraser(false);
-              }}
+              onPress={() => { setPenWidth(size); setIsEraser(false); }}
             >
               <View
                 style={{
@@ -131,10 +134,7 @@ export function HandwritingCanvas({
                 { backgroundColor: color },
                 penColor === color && !isEraser && styles.colorDotActive,
               ]}
-              onPress={() => {
-                setPenColor(color);
-                setIsEraser(false);
-              }}
+              onPress={() => { setPenColor(color); setIsEraser(false); }}
             />
           ))}
 
@@ -144,31 +144,51 @@ export function HandwritingCanvas({
             style={[styles.toolButton, isEraser && styles.toolButtonActive]}
             onPress={() => setIsEraser(!isEraser)}
           >
-            <Text style={styles.toolButtonText}>Eraser</Text>
+            <Text style={[styles.toolButtonText, isEraser && { color: "#fff" }]}>Eraser</Text>
           </Pressable>
 
-          <Pressable style={styles.toolButton} onPress={handleUndo}>
+          <Pressable style={styles.toolButton} onPress={() => setStrokes((p) => p.slice(0, -1))}>
             <Text style={styles.toolButtonText}>Undo</Text>
           </Pressable>
 
-          <Pressable style={styles.toolButton} onPress={handleClear}>
+          <Pressable style={styles.toolButton} onPress={() => setStrokes([])}>
             <Text style={styles.toolButtonText}>Clear</Text>
           </Pressable>
         </View>
 
-        {/* Canvas area — basic touch tracking.
-            Full Skia canvas will be integrated when dev client is available. */}
+        {/* Canvas with SVG rendering */}
         <View
           style={styles.canvas}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          <Text style={styles.canvasPlaceholder}>
-            {strokes.length > 0
-              ? `${strokes.length} stroke(s) recorded`
-              : "Draw here — Skia rendering will be added with dev client"}
-          </Text>
+          <Svg style={StyleSheet.absoluteFill}>
+            {/* Completed strokes */}
+            {strokes.map((s, i) => (
+              <Path
+                key={i}
+                d={pointsToPath(s.points)}
+                stroke={s.color}
+                strokeWidth={s.width}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+              />
+            ))}
+            {/* Active stroke being drawn */}
+            {currentStroke.length > 0 ? (
+              <Path
+                d={pointsToPath(currentStroke)}
+                stroke={isEraser ? "#ccc" : penColor}
+                strokeWidth={isEraser ? 20 : penWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+                opacity={isEraser ? 0.5 : 1}
+              />
+            ) : null}
+          </Svg>
         </View>
       </View>
     </Modal>
@@ -230,8 +250,5 @@ const styles = StyleSheet.create({
   canvas: {
     flex: 1,
     backgroundColor: "#fafafa",
-    justifyContent: "center",
-    alignItems: "center",
   },
-  canvasPlaceholder: { color: "#999", textAlign: "center" },
 });

@@ -37,12 +37,17 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
     #viewer { width: 100%; height: 100%; background: ${bg}; }
     foliate-view { width: 100%; height: 100%; background: ${bg}; border: none; }
     iframe { border: none; }
+  </style>
+  <script src="file:///android_asset/js/foliate-bundle.js"></script>
+  <style>
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
       height: 100%; font-family: system-ui, sans-serif; padding: 24px; text-align: center;
     }
     #loading { color: #666; }
     #error { display: none; color: #dc2626; }
+  </style>
+  <style>
   </style>
 </head>
 <body>
@@ -131,7 +136,6 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           break;
         }
         case 'addHighlight': {
-          // RN sends either { cfi } (live selection) or { cfiRange } (replay).
           const cfi = data.payload.cfi || data.payload.cfiRange;
           if (!cfi) break;
           if (view.addAnnotation) {
@@ -141,6 +145,15 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
               post('highlightError', { cfi, error: String(err) });
             }
           }
+          break;
+        }
+        case 'removeHighlight': {
+          const cfi = data.payload.cfi || data.payload.cfiRange;
+          if (!cfi || !view.addAnnotation) break;
+          try {
+            // foliate: passing truthy 2nd arg removes the annotation
+            view.addAnnotation({ value: cfi }, true);
+          } catch {}
           break;
         }
       }
@@ -358,10 +371,9 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
 
     async function init() {
       try {
-        const [{ makeBook }, { Overlayer }] = await Promise.all([
-          import('file:///android_asset/js/view.js'),
-          import('file:///android_asset/js/overlayer.js'),
-        ]);
+        // foliate-js is loaded via <script src="file:///android_asset/js/foliate-bundle.js">
+        // which sets window.__foliate = { makeBook, Overlayer }
+        const { makeBook, Overlayer } = window.__foliate;
 
         const blob = await fetchFile(BOOK_URL);
         const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });

@@ -13,6 +13,9 @@ services:
       DATABASE_URL: postgresql://reader:password@postgres:5432/reader
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
+      # S3_PUBLIC_ENDPOINT must be set in .env to the externally-reachable
+      # MinIO URL (e.g. http://<host-ip>:9000). Without it, presigned URLs
+      # are signed against the internal docker hostname and 403 in browsers.
     depends_on:
       postgres:
         condition: service_healthy

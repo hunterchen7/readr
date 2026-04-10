@@ -32,6 +32,7 @@ import {
   createBookmark,
   deleteBookmark,
   createHighlight,
+  deleteHighlight,
   getHighlights,
   createNote,
   getNotes,
@@ -458,6 +459,20 @@ export default function ReaderScreen() {
     }
   }
 
+  async function handleDeleteHighlight(hlId: string) {
+    const hl = highlights.find((h) => h.id === hlId);
+    try {
+      await deleteHighlight(hlId);
+      setHighlights((prev) => prev.filter((h) => h.id !== hlId));
+      // Remove visual annotation from WebView
+      if (hl?.cfiRange) {
+        sendToWebView("removeHighlight", { cfi: hl.cfiRange });
+      }
+    } catch {
+      Alert.alert("Error", "Failed to delete highlight");
+    }
+  }
+
   function handleGoToBookmark(bm: Bookmark) {
     if (bm.position.cfi) {
       sendToWebView("goToLocation", { cfi: bm.position.cfi });
@@ -599,9 +614,19 @@ export default function ReaderScreen() {
         onClose={() => setShowTocDrawer(false)}
         toc={toc}
         bookmarks={bookmarks}
+        notes={notes}
+        highlights={highlights}
         onGoToChapter={handleGoToChapter}
         onJumpToBookmark={handleGoToBookmark}
         onDeleteBookmark={(id) => handleDeleteBookmark(id)}
+        onJumpToNote={(n) => {
+          if (n.position.cfi) sendToWebView("goToLocation", { cfi: n.position.cfi });
+          else sendToWebView("goToLocation", { fraction: n.position.percentage / 100 });
+        }}
+        onJumpToHighlight={(h) => {
+          if (h.cfiRange) sendToWebView("goToLocation", { cfi: h.cfiRange });
+        }}
+        onDeleteHighlight={handleDeleteHighlight}
         theme={{ bg: theme.bg, fg: theme.fg }}
       />
 
@@ -619,7 +644,6 @@ export default function ReaderScreen() {
         onHighlight={handleHighlight}
         onBookmark={handleBookmarkFromMenu}
         onNote={handleNoteFromMenu}
-        onDraw={handleDrawFromMenu}
         onCopy={handleCopy}
         onLookup={handleLookup}
         lookupProviders={lookupProviders}
