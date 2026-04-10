@@ -9,6 +9,9 @@ export function getReaderHtml(bookUrl: string): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond&family=Fira+Mono&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Open+Sans&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
@@ -105,25 +108,37 @@ export function getReaderHtml(bookUrl: string): string {
 
     function buildThemeCSS(theme) {
       const eink = !!theme.isEink;
+      const bg = theme.bg || '#fff';
+      const fg = theme.fg || '#111';
+      const fs = theme.fontSize || 16;
+      const lh = theme.lineHeight || 1.6;
+      const fw = theme.fontWeight || 400;
+      const ff = theme.fontFamily || '';
+
       return [
-        'html {',
-        '  background: ' + (theme.bg || '#fff') + ' !important;',
-        '  color: ' + (theme.fg || '#111') + ' !important;',
-        '  font-size: ' + (theme.fontSize || 16) + 'px !important;',
-        '  line-height: ' + (theme.lineHeight || 1.6) + ' !important;',
-        '  font-weight: ' + (theme.fontWeight || 400) + ' !important;',
-        theme.fontFamily ? '  font-family: ' + theme.fontFamily + ' !important;' : '',
+        // Load Google Fonts in the section iframe
+        "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond&family=Fira+Mono&family=Literata&family=Lora&family=Merriweather&family=Noto+Serif&family=Open+Sans&family=Roboto&family=Roboto+Slab&family=Source+Serif+4&display=swap');",
+        // Root styles
+        'html { background: ' + bg + ' !important; }',
+        // Force ALL elements: color, bg transparent, typography
+        '* {',
+        '  color: ' + fg + ' !important;',
+        '  background-color: transparent !important;',
+        '  line-height: ' + lh + ' !important;',
+        '  font-weight: ' + fw + ' !important;',
+        ff ? '  font-family: ' + ff + ' !important;' : '',
         '}',
-        'body { background: inherit !important; color: inherit !important; font-family: inherit !important; font-weight: inherit !important; }',
-        '* { color: ' + (theme.fg || '#111') + ' !important; }',
-        'p, li, td, th, dd, dt { line-height: inherit !important; }',
-        'img { max-width: 100% !important; height: auto !important; }',
+        // Restore html bg (wildcard made it transparent)
+        'html, body { background-color: ' + bg + ' !important; }',
+        // Font size on root (em-based content scales from this)
+        'html { font-size: ' + fs + 'px !important; }',
+        // Images
+        'img { max-width: 100% !important; height: auto !important; background-color: transparent !important; }',
+        // Links
+        'a, a:link, a:visited { text-decoration: underline; }',
+        // E-ink extras
         eink
           ? [
-              'html, body, h1, h2, h3, h4, h5, h6, p, li, blockquote,',
-              'th, td, strong, em, b, i, cite, span { color: #000 !important; }',
-              'a, a:link, a:visited { color: #000 !important; text-decoration: underline !important; }',
-              'code, kbd, pre, samp { color: #000 !important; background: #eee !important; }',
               'img { filter: grayscale(100%) contrast(1.15); }',
               '* { text-shadow: none !important; box-shadow: none !important; }',
             ].join('\\n')
@@ -331,8 +346,10 @@ export function getReaderHtml(bookUrl: string): string {
             }
           } catch {}
 
-          const w = screen.width;
-          const x = e.screenX;
+          // Use the parent window's innerWidth (reliable viewport width)
+          // and screenX (absolute screen coordinate) for zone detection.
+          const w = window.innerWidth || screen.width;
+          const x = e.screenX ?? e.clientX;
           if (tapToTurn) {
             if (x < w * 0.2) { view.prev(); return; }
             if (x > w * 0.8) { view.next(); return; }
