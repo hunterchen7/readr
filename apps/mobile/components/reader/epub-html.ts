@@ -472,7 +472,19 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         view.addEventListener('relocate', (e) => {
           const d = e.detail;
           const frac = d.fraction ?? 0;
-          const secIdx = d.index ?? 0;
+
+          // d.index isn't reliably the section index — compute it from
+          // the section fractions that foliate exposes.
+          const sectionFractions = view.getSectionFractions?.() ?? [];
+          let secIdx = d.index ?? 0;
+          if (sectionFractions.length > 0) {
+            for (let i = sectionFractions.length - 1; i >= 0; i--) {
+              if (frac >= sectionFractions[i]) {
+                secIdx = i;
+                break;
+              }
+            }
+          }
 
           // Use precomputed page counts. Only measure live if precompute
           // hasn't locked the counts yet.
@@ -502,19 +514,15 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           // Current page = fraction * totalPages
           const currentPage = Math.max(1, Math.min(totalPages, Math.round(frac * totalPages)));
 
-          // Page within section using foliate's own section fractions
-          // (the overall frac is 0..1 for the book; we need to remap to
-          // 0..1 within the current section)
+          // Page within section from section fraction
           let pageInSection = 1;
           if (pagesInSection > 1) {
-            const sectionFractions = view.getSectionFractions?.() ?? [];
             const sectionStart = sectionFractions[secIdx] ?? (secIdx / (totalSections || 1));
             const sectionEnd = sectionFractions[secIdx + 1] ?? ((secIdx + 1) / (totalSections || 1));
             const sectionSpan = Math.max(0, sectionEnd - sectionStart);
             const sectionFrac = sectionSpan > 0
               ? Math.min(1, Math.max(0, (frac - sectionStart) / sectionSpan))
               : 0;
-            // Map section fraction to 1..pagesInSection
             pageInSection = Math.max(1, Math.min(pagesInSection, Math.ceil(sectionFrac * pagesInSection) || 1));
           }
 
