@@ -165,6 +165,8 @@ export function getReaderHtml(bookUrl: string): string {
         'html, body { background-color: ' + bg + ' !important; }',
         // Font size on root (em-based content scales from this)
         'html { font-size: ' + fs + 'px !important; }',
+        // Margins — applied directly to the section body
+        'body { padding-left: ' + (theme.margin ?? 48) + 'px !important; padding-right: ' + (theme.margin ?? 48) + 'px !important; padding-top: ' + (theme.marginV ?? 24) + 'px !important; padding-bottom: ' + (theme.marginV ?? 24) + 'px !important; }',
         // Images
         'img { max-width: 100% !important; height: auto !important; background-color: transparent !important; }',
         // Links

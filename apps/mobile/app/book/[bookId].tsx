@@ -156,10 +156,14 @@ export default function BookDetailScreen() {
 
         {/* Actions */}
         <View style={styles.actions}>
-          <Pressable style={styles.primaryBtn} onPress={handleRead}>
-            <BookOpen size={18} color={colors.primaryFg} />
-            <Text style={styles.primaryBtnText}>
-              {downloaded ? "Read" : "Download & Read"}
+          <Pressable
+            style={[styles.primaryBtn, !downloaded && styles.primaryBtnDisabled]}
+            onPress={downloaded ? handleRead : undefined}
+            disabled={!downloaded}
+          >
+            <BookOpen size={18} color={downloaded ? colors.primaryFg : colors.textMuted} />
+            <Text style={[styles.primaryBtnText, !downloaded && styles.primaryBtnTextDisabled]}>
+              Read
             </Text>
           </Pressable>
 
@@ -256,10 +260,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.sm,
     backgroundColor: colors.primary,
+  },
+  primaryBtnDisabled: {
+    backgroundColor: colors.backgroundSecondary,
     borderRadius: 10,
     paddingVertical: 14,
   },
   primaryBtnText: { color: colors.primaryFg, fontSize: fontSize.lg, fontWeight: "600" },
+  primaryBtnTextDisabled: { color: colors.textMuted },
   secondaryBtn: {
     flexDirection: "row",
     alignItems: "center",

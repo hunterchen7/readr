@@ -730,7 +730,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingBottom: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "transparent",
   },
   headerOverlay: {
     position: "absolute",
@@ -753,7 +753,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#e0e0e0",
+    borderTopColor: "transparent",
   },
   progressTrack: {
     height: 4,
