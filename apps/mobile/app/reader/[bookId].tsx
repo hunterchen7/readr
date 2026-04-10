@@ -1,11 +1,11 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { View, Text, ActivityIndicator, StyleSheet, Pressable, FlatList, Alert } from "react-native";
+import { View, Text, ActivityIndicator, StyleSheet, Pressable, Alert } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
-import { ArrowLeft, Bookmark as BookmarkIcon, BookOpen, List, StickyNote, Volume2, VolumeX, Settings } from "lucide-react-native";
+import { Bookmark as BookmarkIcon, BookOpen, Settings } from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -19,10 +19,11 @@ import { useDisplay } from "../../contexts/DisplayContext";
 import { ContextMenu } from "../../components/reader/ContextMenu";
 import { NotesPanel } from "../../components/reader/NotesPanel";
 import { GotoDialog } from "../../components/reader/GotoDialog";
+import { TocDrawer } from "../../components/reader/TocDrawer";
+import { SettingsDropdown } from "../../components/reader/SettingsDropdown";
 import { TtsBar } from "../../components/reader/TtsBar";
 import { useTtsStore } from "../../lib/tts-store";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
-import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
 import {
   upsertProgress,
   getProgress,
@@ -57,6 +58,8 @@ export default function ReaderScreen() {
   const display = useDisplay();
   const insets = useSafeAreaInsets();
   const [showControls, setShowControls] = useState(false);
+  const [showTocDrawer, setShowTocDrawer] = useState(false);
+  const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
   );
@@ -77,13 +80,11 @@ export default function ReaderScreen() {
 
   // Notes state
   const [showTypedNote, setShowTypedNote] = useState(false);
-  const [showHandwriting, setShowHandwriting] = useState(false);
 
   // Bookmarks + highlights + notes state
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [showBookmarks, setShowBookmarks] = useState(false);
   const [showNotesPanel, setShowNotesPanel] = useState(false);
 
   // In-book search state
@@ -420,16 +421,6 @@ export default function ReaderScreen() {
     }
   }
 
-  async function handleSaveHandwriting(strokes: import("@readr/shared").Stroke[], penConfig: import("@readr/shared").PenConfig) {
-    if (!bookId || !currentPosition) return;
-    try {
-      const n = await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
-      setNotes((prev) => [n, ...prev]);
-      setShowHandwriting(false);
-    } catch {
-      Alert.alert("Error", "Failed to save note");
-    }
-  }
 
   // ─── Bookmark handlers ────────────────────────────────────────────
 
@@ -458,7 +449,7 @@ export default function ReaderScreen() {
     } else if (bm.position.page != null) {
       sendToWebView("goToLocation", { page: bm.position.page });
     }
-    setShowBookmarks(false);
+    setShowTocDrawer(false);
   }
 
   // ─── Render ────────────────────────────────────────────────────────
@@ -498,24 +489,32 @@ export default function ReaderScreen() {
           { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
         ]}
       >
-        <Pressable onPress={() => router.back()} style={styles.headerButton} accessibilityLabel="Go back">
-          <ArrowLeft size={20} color={theme.fg} />
+        <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
+          <BookOpen size={20} color={theme.fg} />
         </Pressable>
         <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
           {book.title ?? "Reading"}
         </Text>
         <View style={styles.headerActions}>
-          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
-            <BookOpen size={20} color={theme.fg} />
-          </Pressable>
           <Pressable onPress={handleCreateBookmark} style={styles.headerButton} accessibilityLabel="Add bookmark">
             <BookmarkIcon size={20} color={theme.fg} />
           </Pressable>
-          <Pressable onPress={() => setShowControls(true)} style={styles.headerButton} accessibilityLabel="Reader settings">
+          <Pressable onPress={() => setShowSettingsDropdown((s) => !s)} style={styles.headerButton} accessibilityLabel="Reader settings">
             <Settings size={20} color={theme.fg} />
           </Pressable>
         </View>
       </View>
+
+      {/* Settings dropdown — positioned below header */}
+      {showSettingsDropdown ? (
+        <SettingsDropdown
+          visible={showSettingsDropdown}
+          onClose={() => setShowSettingsDropdown(false)}
+          theme={theme}
+          onThemeChange={handleThemeChange}
+          isEink={display.isEink}
+        />
+      ) : null}
 
       <WebView
         ref={webviewRef}
@@ -549,18 +548,15 @@ export default function ReaderScreen() {
           </Text>
         </Pressable>
 
-      <ReaderControls
-        visible={showControls}
-        theme={theme}
+      <TocDrawer
+        visible={showTocDrawer}
+        onClose={() => setShowTocDrawer(false)}
         toc={toc}
-        progress={progress}
-        onClose={() => setShowControls(false)}
-        onThemeChange={handleThemeChange}
+        bookmarks={bookmarks}
         onGoToChapter={handleGoToChapter}
-        onSearch={handleSearch}
-        searchResults={searchResults}
-        searchLoading={searchLoading}
-        onJumpToResult={handleJumpToResult}
+        onJumpToBookmark={handleGoToBookmark}
+        onDeleteBookmark={(id) => handleDeleteBookmark(id)}
+        theme={{ bg: theme.bg, fg: theme.fg }}
       />
 
       <ContextMenu
@@ -579,12 +575,6 @@ export default function ReaderScreen() {
         visible={showTypedNote}
         onSave={handleSaveTypedNote}
         onCancel={() => setShowTypedNote(false)}
-      />
-
-      <HandwritingCanvas
-        visible={showHandwriting}
-        onSave={handleSaveHandwriting}
-        onCancel={() => setShowHandwriting(false)}
       />
 
       <NotesPanel
@@ -626,57 +616,6 @@ export default function ReaderScreen() {
         onStop={handleStopTts}
       />
 
-      {/* Bookmarks panel */}
-      {showBookmarks ? (
-        <View
-          style={[
-            styles.bookmarksPanel,
-            { top: insets.top + 52 },
-          ]}
-        >
-          <View style={styles.bookmarksPanelHeader}>
-            <Text style={styles.bookmarksPanelTitle}>
-              Bookmarks ({bookmarks.length})
-            </Text>
-            <Pressable onPress={() => setShowBookmarks(false)}>
-              <Text style={styles.bookmarksPanelClose}>✕</Text>
-            </Pressable>
-          </View>
-          {bookmarks.length === 0 ? (
-            <Text style={styles.bookmarksEmpty}>
-              No bookmarks yet. Tap 🔖 to add one.
-            </Text>
-          ) : (
-            <FlatList
-              data={bookmarks}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={styles.bookmarkRow}
-                  onPress={() => handleGoToBookmark(item)}
-                  onLongPress={() => {
-                    Alert.alert("Delete Bookmark?", item.label ?? "This bookmark", [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Delete",
-                        style: "destructive",
-                        onPress: () => handleDeleteBookmark(item.id),
-                      },
-                    ]);
-                  }}
-                >
-                  <Text style={styles.bookmarkLabel} numberOfLines={1}>
-                    {item.label ?? `Page ${item.position.page ?? Math.round(item.position.percentage)}%`}
-                  </Text>
-                  <Text style={styles.bookmarkMeta}>
-                    {Math.round(item.position.percentage)}%
-                  </Text>
-                </Pressable>
-              )}
-            />
-          )}
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -716,39 +655,4 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.05)",
   },
   progressText: { fontSize: 11, opacity: 0.5 },
-  bookmarksPanel: {
-    position: "absolute",
-    // top is computed inline from insets.top + header height at the
-    // call site so it slides in below the header on notched devices.
-    right: 8,
-    width: 280,
-    maxHeight: 400,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 5,
-    padding: 12,
-  },
-  bookmarksPanelHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  bookmarksPanelTitle: { fontSize: 15, fontWeight: "600" },
-  bookmarksPanelClose: { fontSize: 18, padding: 4, color: "#666" },
-  bookmarksEmpty: { color: "#999", textAlign: "center", paddingVertical: 16, fontSize: 13 },
-  bookmarkRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#eee",
-  },
-  bookmarkLabel: { flex: 1, fontSize: 14, marginRight: 8 },
-  bookmarkMeta: { fontSize: 12, color: "#999" },
 });
