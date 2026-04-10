@@ -30,10 +30,11 @@ export function getReaderHtml(bookUrl: string): string {
     @font-face { font-family: 'IBM Plex Mono'; src: url('file:///android_asset/fonts/IBMPlexMono.ttf'); }
   </style>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { margin: 0; padding: 0; box-sizing: border-box; border: none; outline: none; }
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
     #viewer { width: 100%; height: 100%; background: var(--bg, #fff); }
     foliate-view { width: 100%; height: 100%; background: var(--bg, #fff); }
+    iframe { border: none !important; outline: none !important; }
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
       height: 100%; font-family: system-ui, sans-serif; padding: 24px; text-align: center;

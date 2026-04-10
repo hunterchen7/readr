@@ -543,7 +543,7 @@ export default function ReaderScreen() {
             style={[
               styles.header,
               styles.headerOverlay,
-              { backgroundColor: theme.bg, paddingTop: insets.top + 8, borderBottomColor: theme.fg + "22" },
+              { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
             ]}
           >
             <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
@@ -564,7 +564,7 @@ export default function ReaderScreen() {
             onPress={() => setShowGotoDialog(true)}
             style={[
               styles.progressOverlay,
-              { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8), borderTopColor: theme.fg + "22" },
+              { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
             ]}
           >
             {/* Scrubber track */}
@@ -573,50 +573,15 @@ export default function ReaderScreen() {
               <View style={[styles.progressDot, { left: `${progress}%` }]} />
             </View>
 
-            {/* Info rows */}
-            <View style={styles.progressInfoRow}>
-              <Text style={[styles.progressLabel, { color: theme.fg }]} numberOfLines={1}>
-                {currentPosition?.chapter ?? ""}
-              </Text>
-              <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                {progress}%
-              </Text>
-            </View>
-            {currentPage != null && totalPages != null && totalPages > 0 ? (
-              <>
-                <View style={styles.progressInfoRow}>
-                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                    Page {currentPage} of {totalPages}
-                  </Text>
-                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                    {totalPages - currentPage} left in book
-                  </Text>
-                </View>
-                {(() => {
-                  // Estimate chapter end page from TOC
-                  if (!currentPosition?.chapter || toc.length < 2) return null;
-                  // chapter is stored as number in BookPosition but we set it
-                  // from tocItem.label (string) — cast for comparison
-                  const chapterLabel = String(currentPosition.chapter ?? "");
-                  const idx = toc.findIndex((t) => t.label === chapterLabel);
-                  if (idx < 0) return null;
-                  const chapPages = Math.round(totalPages / toc.length);
-                  const chapEnd = Math.min(totalPages, (idx + 1) * chapPages);
-                  const chapStart = idx * chapPages;
-                  const pagesLeftInChap = Math.max(0, chapEnd - currentPage);
-                  return (
-                    <View style={styles.progressInfoRow}>
-                      <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                        Ch. {idx + 1} of {toc.length}  ·  ends ~p.{chapEnd}
-                      </Text>
-                      <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                        ~{pagesLeftInChap} left in ch.
-                      </Text>
-                    </View>
-                  );
-                })()}
-              </>
-            ) : null}
+            {/* Compact info: chapter + page/percent on one line */}
+            <Text style={[styles.progressLabel, { color: theme.fg }]} numberOfLines={1}>
+              {currentPosition?.chapter ?? ""}
+            </Text>
+            <Text style={[styles.progressLabel, { color: theme.fg }]}>
+              {currentPage != null && totalPages != null && totalPages > 0
+                ? `p.${currentPage}/${totalPages}  ·  ${progress}%`
+                : `${progress}%`}
+            </Text>
           </Pressable>
         </>
       ) : (
@@ -729,8 +694,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 8,
     paddingBottom: 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "transparent",
   },
   headerOverlay: {
     position: "absolute",
@@ -752,8 +715,6 @@ const styles = StyleSheet.create({
     zIndex: 10,
     paddingHorizontal: 16,
     paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "transparent",
   },
   progressTrack: {
     height: 4,
