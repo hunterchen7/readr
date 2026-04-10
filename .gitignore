@@ -13,6 +13,8 @@ build/
 .expo/
 ios/
 android/
+# Prevent expo prebuild / copy scripts from recursively nesting the project
+apps/mobile/apps/
 
 # Environment
 .env
