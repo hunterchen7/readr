@@ -30,11 +30,11 @@ export function getReaderHtml(bookUrl: string): string {
     @font-face { font-family: 'IBM Plex Mono'; src: url('file:///android_asset/fonts/IBMPlexMono.ttf'); }
   </style>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; border: none; outline: none; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
     #viewer { width: 100%; height: 100%; background: var(--bg, #fff); }
-    foliate-view { width: 100%; height: 100%; background: var(--bg, #fff); }
-    iframe { border: none !important; outline: none !important; }
+    foliate-view { width: 100%; height: 100%; background: var(--bg, #fff); border: none; }
+    iframe { border: none; }
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
       height: 100%; font-family: system-ui, sans-serif; padding: 24px; text-align: center;
@@ -59,12 +59,9 @@ export function getReaderHtml(bookUrl: string): string {
     // handler to scrape text for TTS playback.
     let currentSectionDoc = null;
 
-    // Exact page counting — tracks column count per section
+    // Page counting — measures CSS column widths per section
     let sectionPageCounts = {}; // { sectionIndex: pageCount }
     let currentSectionIndex = 0;
-    let pageInCurrentSection = 1;
-    let lastRelocateCfi = '';
-    let lastRelocateSection = -1;
 
     function post(type, payload) {
       window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
@@ -297,8 +294,8 @@ export function getReaderHtml(bookUrl: string): string {
     async function init() {
       try {
         const [{ makeBook }, { Overlayer }] = await Promise.all([
-          import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/view.js'),
-          import('https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/overlayer.js'),
+          import('file:///android_asset/js/view.js'),
+          import('file:///android_asset/js/overlayer.js'),
         ]);
 
         const blob = await fetchFile(BOOK_URL);
@@ -329,94 +326,39 @@ export function getReaderHtml(bookUrl: string): string {
           const frac = d.fraction ?? 0;
           const secIdx = d.index ?? 0;
 
-          // Track page within section by counting turns
+          // Measure this section's page count from CSS columns
+          const vw = view.clientWidth || window.innerWidth;
           let pagesInSection = sectionPageCounts[secIdx] ?? 1;
           try {
-            if (currentSectionDoc) {
-              const body = currentSectionDoc.body || currentSectionDoc.documentElement;
-              const vw = currentSectionDoc.documentElement.clientWidth;
-              if (body && vw > 0) {
-                pagesInSection = Math.max(1, Math.round(body.scrollWidth / vw));
-                sectionPageCounts[secIdx] = pagesInSection;
-              }
-            }
-          } catch {}
-
-          // Compute page from CSS transform in the shadow root
-          // foliate doesn't scroll — it transforms containers
-          try {
-            const vw = view.clientWidth || window.innerWidth;
-            // Re-measure section pages using viewport width (not section clientWidth which is the full column layout width)
-            if (currentSectionDoc) {
+            if (currentSectionDoc && vw > 0) {
               const sw = currentSectionDoc.documentElement.scrollWidth || currentSectionDoc.body?.scrollWidth || 0;
-              if (sw > 0 && vw > 0) {
+              if (sw > 0) {
                 pagesInSection = Math.max(1, Math.round(sw / vw));
                 sectionPageCounts[secIdx] = pagesInSection;
               }
             }
-            // Read transform/scroll from shadow root to find current column
-            const sr = view.shadowRoot;
-            if (sr) {
-              for (const el of sr.querySelectorAll('*')) {
-                // Check scrollLeft first
-                if (el.scrollLeft > 10) {
-                  pageInCurrentSection = Math.round(el.scrollLeft / vw) + 1;
-                  break;
-                }
-                // Check CSS transform (matrix, translate, translate3d, translateX)
-                const t = getComputedStyle(el).transform;
-                if (t && t !== 'none') {
-                  let tx = 0;
-                  // matrix(a,b,c,d,tx,ty) or matrix3d(...)
-                  const mxMatch = t.match(/matrix(?:3d)?\\(([^)]+)\\)/);
-                  if (mxMatch) {
-                    const vals = mxMatch[1].split(',').map(Number);
-                    tx = Math.abs(vals.length > 12 ? vals[12] : vals[4] ?? 0);
-                  }
-                  // translateX(Npx) or translate(Npx, ...) or translate3d(Npx, ...)
-                  if (!tx) {
-                    const txMatch = t.match(/translate(?:X|3d)?\\(\\s*(-?[\\d.]+)/);
-                    if (txMatch) tx = Math.abs(parseFloat(txMatch[1]));
-                  }
-                  if (tx > 10 && vw > 0) {
-                    pageInCurrentSection = Math.round(tx / vw) + 1;
-                    break;
-                  }
-                }
-              }
-            }
-            // Fallback: check section doc's own scroll containers
-            if (pageInCurrentSection <= 1 && currentSectionDoc) {
-              const html = currentSectionDoc.documentElement;
-              const body = currentSectionDoc.body;
-              const sl = Math.max(html?.scrollLeft ?? 0, body?.scrollLeft ?? 0, html?.parentElement?.scrollLeft ?? 0);
-              if (sl > 10 && vw > 0) {
-                pageInCurrentSection = Math.round(sl / vw) + 1;
-              }
-            }
           } catch {}
-          if (secIdx !== lastRelocateSection) {
-            lastRelocateSection = secIdx;
-          }
-          const pageInSection = Math.max(1, Math.min(pagesInSection, pageInCurrentSection));
 
-          // Sum pages from all measured sections for total, estimate unmeasured
-          const totalSections = book?.sections?.length ?? 20;
-          let measuredPages = 0;
+          // Compute total pages and current page from fraction
+          const totalSections = book?.sections?.length ?? 1;
+          let measuredTotal = 0;
           let measuredCount = 0;
           for (const k in sectionPageCounts) {
-            measuredPages += sectionPageCounts[k];
+            measuredTotal += sectionPageCounts[k];
             measuredCount++;
           }
-          const avgPagesPerSection = measuredCount > 0 ? measuredPages / measuredCount : 5;
-          const totalPages = Math.round(measuredPages + (totalSections - measuredCount) * avgPagesPerSection);
+          const avgPerSection = measuredCount > 0 ? measuredTotal / measuredCount : 5;
+          const totalPages = Math.round(measuredTotal + (totalSections - measuredCount) * avgPerSection);
 
-          // Pages before current section
+          // Current page = fraction * totalPages (simple, always correct)
+          const currentPage = Math.max(1, Math.round(frac * totalPages));
+
+          // Page within section = currentPage - pages before this section
           let pagesBefore = 0;
           for (let i = 0; i < secIdx; i++) {
-            pagesBefore += sectionPageCounts[i] ?? Math.round(avgPagesPerSection);
+            pagesBefore += sectionPageCounts[i] ?? Math.round(avgPerSection);
           }
-          const currentPage = pagesBefore + pageInSection;
+          const pageInSection = Math.max(1, Math.min(pagesInSection, currentPage - pagesBefore));
 
           post('progressUpdated', {
             percentage: Math.round(frac * 100),

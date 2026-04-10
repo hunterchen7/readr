@@ -2,33 +2,33 @@ const { withDangerousMod } = require("expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
 
-module.exports = function copyFontsPlugin(config) {
+/** Copy bundled fonts and JS libs to android assets during prebuild */
+module.exports = function copyAssetsPlugin(config) {
   return withDangerousMod(config, [
     "android",
     (cfg) => {
-      const srcDir = path.join(cfg.modRequest.projectRoot, "assets", "fonts");
-      const destDir = path.join(
+      const root = cfg.modRequest.projectRoot;
+      const androidAssets = path.join(
         cfg.modRequest.platformProjectRoot,
-        "app",
-        "src",
-        "main",
-        "assets",
-        "fonts"
+        "app", "src", "main", "assets"
       );
 
-      if (!fs.existsSync(destDir)) {
-        fs.mkdirSync(destDir, { recursive: true });
-      }
-
-      if (fs.existsSync(srcDir)) {
-        for (const file of fs.readdirSync(srcDir)) {
-          if (file.endsWith(".ttf") || file.endsWith(".otf") || file.endsWith(".woff2")) {
-            fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
-          }
-        }
-      }
+      // Copy fonts
+      copyDir(path.join(root, "assets", "fonts"), path.join(androidAssets, "fonts"), [".ttf", ".otf", ".woff2"]);
+      // Copy JS (foliate-js)
+      copyDir(path.join(root, "assets", "js"), path.join(androidAssets, "js"), [".js"]);
 
       return cfg;
     },
   ]);
 };
+
+function copyDir(src, dest, exts) {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const file of fs.readdirSync(src)) {
+    if (exts.some((e) => file.endsWith(e))) {
+      fs.copyFileSync(path.join(src, file), path.join(dest, file));
+    }
+  }
+}
