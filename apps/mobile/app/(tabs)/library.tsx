@@ -435,7 +435,7 @@ function renderCard(
           </View>
         ) : (
           <View style={styles.cloudBadge}>
-            <Text style={styles.cloudBadgeText}>☁ Tap to download</Text>
+            <Text style={styles.cloudBadgeText}>☁ Not downloaded</Text>
           </View>
         )}
       </View>

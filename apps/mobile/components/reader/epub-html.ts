@@ -102,53 +102,69 @@ export function getReaderHtml(bookUrl: string): string {
       try { handleRNMessage(JSON.parse(e.data)); } catch {}
     });
 
+    // Current theme CSS — injected into every section document
+    let currentThemeCSS = '';
+    let currentTheme = {};
+
+    function buildThemeCSS(theme) {
+      const eink = !!theme.isEink;
+      return [
+        'html {',
+        '  background: ' + (theme.bg || '#fff') + ' !important;',
+        '  color: ' + (theme.fg || '#111') + ' !important;',
+        '  font-size: ' + (theme.fontSize || 16) + 'px !important;',
+        '  line-height: ' + (theme.lineHeight || 1.6) + ' !important;',
+        '  font-weight: ' + (theme.fontWeight || 400) + ' !important;',
+        theme.fontFamily ? '  font-family: ' + theme.fontFamily + ' !important;' : '',
+        '}',
+        'body { background: inherit !important; color: inherit !important; font-family: inherit !important; font-weight: inherit !important; }',
+        'p, li, td, th, dd, dt { line-height: inherit !important; }',
+        'img { max-width: 100% !important; height: auto !important; }',
+        eink
+          ? [
+              'html, body, h1, h2, h3, h4, h5, h6, p, li, blockquote,',
+              'th, td, strong, em, b, i, cite, span { color: #000 !important; }',
+              'a, a:link, a:visited { color: #000 !important; text-decoration: underline !important; }',
+              'code, kbd, pre, samp { color: #000 !important; background: #eee !important; }',
+              'img { filter: grayscale(100%) contrast(1.15); }',
+              '* { text-shadow: none !important; box-shadow: none !important; }',
+            ].join('\\n')
+          : '',
+      ].join('\\n');
+    }
+
+    function injectThemeIntoDoc(doc) {
+      if (!doc || !currentThemeCSS) return;
+      try {
+        let style = doc.getElementById('readr-theme');
+        if (!style) {
+          style = doc.createElement('style');
+          style.id = 'readr-theme';
+          (doc.head || doc.documentElement).appendChild(style);
+        }
+        style.textContent = currentThemeCSS;
+      } catch {}
+    }
+
     function applyTheme(theme) {
+      currentTheme = theme;
       const root = document.documentElement;
       root.style.setProperty('--bg', theme.bg || '#fff');
       root.style.setProperty('--fg', theme.fg || '#111');
-      root.style.setProperty('--font-weight', String(theme.fontWeight || 400));
       document.body.style.background = theme.bg || '#fff';
       tapToTurn = theme.tapToTurn !== false;
 
+      currentThemeCSS = buildThemeCSS(theme);
+
       if (!view) return;
 
-      // Page edge margin — foliate-js reads this attribute on the view element.
+      // Margin — foliate reads this attribute
       if (theme.margin != null) {
-        view.renderer?.setAttribute?.('margin', String(theme.margin) + 'px');
+        view.setAttribute('margin', String(theme.margin) + 'px');
       }
 
-      const eink = !!theme.isEink;
-      view.renderer?.setStyles?.({
-        style: [
-          'html {',
-          '  --bg: ' + (theme.bg || '#fff') + ';',
-          '  --fg: ' + (theme.fg || '#111') + ';',
-          '  background: var(--bg);',
-          '  color: var(--fg);',
-          '  font-size: ' + (theme.fontSize || 16) + 'px;',
-          '  line-height: ' + (theme.lineHeight || 1.6) + ';',
-          '  font-weight: ' + (theme.fontWeight || 400) + ';',
-          theme.fontFamily ? '  font-family: ' + theme.fontFamily + ';' : '',
-          '}',
-          'body { font-family: inherit; font-weight: inherit; }',
-          'p { line-height: inherit; }',
-          'img { max-width: 100%; height: auto; }',
-          // e-ink overrides: force full-contrast text and kill colored
-          // headings that look washed out after the daltonizer.
-          eink
-            ? [
-                'html, body, h1, h2, h3, h4, h5, h6, p, li, blockquote,',
-                'th, td, strong, em, b, i, cite, span { color: #000 !important; }',
-                'a, a:link, a:visited, a:hover, a:active { color: #000 !important; text-decoration: underline !important; }',
-                'code, kbd, pre, samp { color: #000 !important; background: #eee !important; }',
-                'blockquote { border-left: 3px solid #000 !important; }',
-                'hr { border-color: #000 !important; }',
-                'img { filter: grayscale(100%) contrast(1.15); }',
-                '* { text-shadow: none !important; box-shadow: none !important; }',
-              ].join('\\n')
-            : '',
-        ].join('\\n'),
-      });
+      // Inject CSS into the current section document
+      if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
     }
 
     async function performSearch(query) {
@@ -240,7 +256,10 @@ export function getReaderHtml(bookUrl: string): string {
         // can scrape its text. Foliate fires 'load' with { doc, index }
         // for every newly-loaded section.
         view.addEventListener('load', (e) => {
-          if (e.detail?.doc) currentSectionDoc = e.detail.doc;
+          if (e.detail?.doc) {
+            currentSectionDoc = e.detail.doc;
+            injectThemeIntoDoc(currentSectionDoc);
+          }
         });
 
         // Handle text selection via the view's selection event
