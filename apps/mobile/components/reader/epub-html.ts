@@ -62,6 +62,9 @@ export function getReaderHtml(bookUrl: string): string {
     // Exact page counting — tracks column count per section
     let sectionPageCounts = {}; // { sectionIndex: pageCount }
     let currentSectionIndex = 0;
+    let pageInCurrentSection = 1;
+    let lastRelocateFraction = 0;
+    let lastRelocateSection = -1;
 
     function post(type, payload) {
       window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
@@ -326,8 +329,7 @@ export function getReaderHtml(bookUrl: string): string {
           const frac = d.fraction ?? 0;
           const secIdx = d.index ?? 0;
 
-          // Compute page within section from the relocate fraction
-          let pageInSection = 1;
+          // Track page within section by counting turns
           let pagesInSection = sectionPageCounts[secIdx] ?? 1;
           try {
             if (currentSectionDoc) {
@@ -338,16 +340,19 @@ export function getReaderHtml(bookUrl: string): string {
                 sectionPageCounts[secIdx] = pagesInSection;
               }
             }
-            // Use d.fraction within the section: foliate provides section-level
-            // fraction via (overall fraction - section start) / section size.
-            // Simpler: if we know total sections and overall fraction, estimate
-            // position within the current section's pages.
-            if (pagesInSection > 1) {
-              const totalSecs = book?.sections?.length ?? 1;
-              const secFrac = frac * totalSecs - secIdx; // 0..1 within section
-              pageInSection = Math.max(1, Math.min(pagesInSection, Math.ceil(secFrac * pagesInSection)));
-            }
           } catch {}
+
+          if (secIdx !== lastRelocateSection) {
+            // New section — reset page counter
+            pageInCurrentSection = frac > lastRelocateFraction ? 1 : pagesInSection;
+            lastRelocateSection = secIdx;
+          } else if (frac > lastRelocateFraction + 0.0001) {
+            pageInCurrentSection = Math.min(pagesInSection, pageInCurrentSection + 1);
+          } else if (frac < lastRelocateFraction - 0.0001) {
+            pageInCurrentSection = Math.max(1, pageInCurrentSection - 1);
+          }
+          lastRelocateFraction = frac;
+          const pageInSection = pageInCurrentSection;
 
           // Sum pages from all measured sections for total, estimate unmeasured
           const totalSections = book?.sections?.length ?? 20;
