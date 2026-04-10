@@ -281,6 +281,29 @@ export function getReaderHtml(bookUrl: string): string {
 
       // Inject CSS into the current section document
       if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
+
+      // After CSS changes reflow the columns — clear page counts and
+      // re-measure after layout settles, then re-post progress.
+      sectionPageCounts = {};
+      setTimeout(() => {
+        remeasureCurrentSection();
+        if (view?.lastLocation) {
+          view.dispatchEvent(new CustomEvent('relocate', { detail: view.lastLocation }));
+        }
+      }, 300);
+    }
+
+    function remeasureCurrentSection() {
+      if (!currentSectionDoc || !view) return;
+      const vw = view.clientWidth || window.innerWidth;
+      if (vw <= 0) return;
+      try {
+        const sw = currentSectionDoc.documentElement.scrollWidth
+                 || currentSectionDoc.body?.scrollWidth || 0;
+        if (sw > 0) {
+          sectionPageCounts[currentSectionIndex] = Math.max(1, Math.round(sw / vw));
+        }
+      } catch {}
     }
 
     async function performSearch(query) {
@@ -424,15 +447,7 @@ export function getReaderHtml(bookUrl: string): string {
 
             // Count pages (CSS columns) in this section after layout
             currentSectionIndex = e.detail.index;
-            setTimeout(() => {
-              try {
-                const body = currentSectionDoc.body || currentSectionDoc.documentElement;
-                const vw = currentSectionDoc.documentElement.clientWidth;
-                if (body && vw > 0) {
-                  sectionPageCounts[e.detail.index] = Math.max(1, Math.round(body.scrollWidth / vw));
-                }
-              } catch {}
-            }, 200);
+            setTimeout(() => remeasureCurrentSection(), 200);
 
             // Clicks inside foliate's section iframes don't bubble to the
             // parent document.  Attach our tap handler directly so
