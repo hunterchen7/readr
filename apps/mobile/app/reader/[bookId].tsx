@@ -309,8 +309,19 @@ export default function ReaderScreen() {
             page: msg.payload.currentPage ?? msg.payload.page,
           };
           setCurrentPosition(position);
-          setCurrentPage(msg.payload.currentPage ?? null);
-          setTotalPages(msg.payload.totalPages ?? null);
+          // Use foliate page numbers if available, otherwise estimate from toc size
+          const rawPage = msg.payload.currentPage;
+          const rawTotal = msg.payload.totalPages;
+          if (typeof rawPage === "number" && typeof rawTotal === "number" && rawTotal > 0 && !Number.isNaN(rawPage)) {
+            setCurrentPage(rawPage);
+            setTotalPages(rawTotal);
+          } else if (pct > 0) {
+            // Estimate: use chapter count * ~10 pages per chapter as a proxy
+            const chapCount = toc.length || 20;
+            const est = Math.max(chapCount * 10, 100);
+            setTotalPages(est);
+            setCurrentPage(Math.max(1, Math.round((pct / 100) * est)));
+          }
           if (bookId) {
             upsertProgress(bookId, position);
           }
