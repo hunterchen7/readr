@@ -265,15 +265,10 @@ export function getReaderHtml(bookUrl: string): string {
             currentSectionDoc = e.detail.doc;
             injectThemeIntoDoc(currentSectionDoc);
 
-            post('debug', { msg: 'section loaded, attaching handlers to iframe doc' });
-
             // Clicks inside foliate's section iframes don't bubble to the
             // parent document.  Attach our tap handler directly so
             // page-turn and toggle-controls work from inside the content.
-            currentSectionDoc.addEventListener('click', (e) => {
-              post('debug', { msg: 'section click at x=' + e.clientX });
-              handleTap(e);
-            });
+            currentSectionDoc.addEventListener('click', handleTap);
 
             // Suppress native Android context menu so our custom RN
             // menu (Highlight / Bookmark / Note / Copy / Lookup) shows.
@@ -297,10 +292,7 @@ export function getReaderHtml(bookUrl: string): string {
                   const contents = view.renderer?.getContents?.() ?? [];
                   const content = contents.find(c => c.doc.contains(range.startContainer));
                   if (content) cfi = view.getCFI(content.index, range) ?? '';
-                } catch (err) {
-                  post('debug', { msg: 'CFI error: ' + err });
-                }
-                post('debug', { msg: 'selection: ' + sel.toString().slice(0, 30) + ', cfi=' + (cfi ? 'yes' : 'no') });
+                } catch {}
                 post('selectionChanged', { text: sel.toString(), cfi });
               } else {
                 post('selectionCleared', {});
