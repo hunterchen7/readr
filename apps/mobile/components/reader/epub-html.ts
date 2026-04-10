@@ -354,21 +354,44 @@ export function getReaderHtml(bookUrl: string): string {
                 sectionPageCounts[secIdx] = pagesInSection;
               }
             }
-            // Read transform from shadow root to find current column
+            // Read transform/scroll from shadow root to find current column
             const sr = view.shadowRoot;
             if (sr) {
               for (const el of sr.querySelectorAll('*')) {
+                // Check scrollLeft first
+                if (el.scrollLeft > 10) {
+                  pageInCurrentSection = Math.round(el.scrollLeft / vw) + 1;
+                  break;
+                }
+                // Check CSS transform (matrix, translate, translate3d, translateX)
                 const t = getComputedStyle(el).transform;
                 if (t && t !== 'none') {
-                  const parts = t.replace(/[^0-9.,-]/g, '').split(',');
-                  if (parts.length >= 5) {
-                    const tx = Math.abs(parseFloat(parts[4]));
-                    if (tx > 10 && vw > 0) {
-                      pageInCurrentSection = Math.round(tx / vw) + 1;
-                      break;
-                    }
+                  let tx = 0;
+                  // matrix(a,b,c,d,tx,ty) or matrix3d(...)
+                  const mxMatch = t.match(/matrix(?:3d)?\\(([^)]+)\\)/);
+                  if (mxMatch) {
+                    const vals = mxMatch[1].split(',').map(Number);
+                    tx = Math.abs(vals.length > 12 ? vals[12] : vals[4] ?? 0);
+                  }
+                  // translateX(Npx) or translate(Npx, ...) or translate3d(Npx, ...)
+                  if (!tx) {
+                    const txMatch = t.match(/translate(?:X|3d)?\\(\\s*(-?[\\d.]+)/);
+                    if (txMatch) tx = Math.abs(parseFloat(txMatch[1]));
+                  }
+                  if (tx > 10 && vw > 0) {
+                    pageInCurrentSection = Math.round(tx / vw) + 1;
+                    break;
                   }
                 }
+              }
+            }
+            // Fallback: check section doc's own scroll containers
+            if (pageInCurrentSection <= 1 && currentSectionDoc) {
+              const html = currentSectionDoc.documentElement;
+              const body = currentSectionDoc.body;
+              const sl = Math.max(html?.scrollLeft ?? 0, body?.scrollLeft ?? 0, html?.parentElement?.scrollLeft ?? 0);
+              if (sl > 10 && vw > 0) {
+                pageInCurrentSection = Math.round(sl / vw) + 1;
               }
             }
           } catch {}
