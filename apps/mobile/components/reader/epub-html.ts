@@ -63,7 +63,7 @@ export function getReaderHtml(bookUrl: string): string {
     let sectionPageCounts = {}; // { sectionIndex: pageCount }
     let currentSectionIndex = 0;
     let pageInCurrentSection = 1;
-    let lastRelocateFraction = 0;
+    let lastRelocateCfi = '';
     let lastRelocateSection = -1;
 
     function post(type, payload) {
@@ -342,16 +342,20 @@ export function getReaderHtml(bookUrl: string): string {
             }
           } catch {}
 
+          const cfi = d.cfi ?? '';
           if (secIdx !== lastRelocateSection) {
-            // New section — reset page counter
-            pageInCurrentSection = frac > lastRelocateFraction ? 1 : pagesInSection;
+            // New section — start at page 1 (or last page if going backward)
+            pageInCurrentSection = (cfi > lastRelocateCfi || !lastRelocateCfi) ? 1 : pagesInSection;
             lastRelocateSection = secIdx;
-          } else if (frac > lastRelocateFraction + 0.0001) {
-            pageInCurrentSection = Math.min(pagesInSection, pageInCurrentSection + 1);
-          } else if (frac < lastRelocateFraction - 0.0001) {
-            pageInCurrentSection = Math.max(1, pageInCurrentSection - 1);
+          } else if (cfi && cfi !== lastRelocateCfi) {
+            // Same section, different position — determine direction from CFI
+            if (cfi > lastRelocateCfi) {
+              pageInCurrentSection = Math.min(pagesInSection, pageInCurrentSection + 1);
+            } else {
+              pageInCurrentSection = Math.max(1, pageInCurrentSection - 1);
+            }
           }
-          lastRelocateFraction = frac;
+          lastRelocateCfi = cfi;
           const pageInSection = pageInCurrentSection;
 
           // Sum pages from all measured sections for total, estimate unmeasured
