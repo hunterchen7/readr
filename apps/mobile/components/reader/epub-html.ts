@@ -253,18 +253,12 @@ export function getReaderHtml(bookUrl: string): string {
         // so the reader can render "12 / 345".
         view.addEventListener('relocate', (e) => {
           const d = e.detail;
-          // Try to get page numbers from foliate, fall back to estimation
-          let curPage = d.location?.current ?? d.pageItem?.current ?? null;
-          let totPages = d.location?.total ?? d.pageItem?.total ?? null;
-
-          // If foliate doesn't provide page numbers, estimate from fraction
-          if (totPages == null && d.fraction != null && d.fraction > 0) {
-            // Rough estimate: assume ~250 words per page, ~300 pages for average book.
-            // Better: estimate from the section count if available.
-            const secTotal = d.section?.total ?? book?.sections?.length ?? 20;
-            totPages = Math.max(secTotal * 8, 50); // rough: 8 pages per section
-            curPage = Math.max(1, Math.round(d.fraction * totPages));
-          }
+          // Page numbers: prefer foliate's, fall back to section-based estimate
+          const frac = d.fraction ?? 0;
+          const secCount = book?.sections?.length ?? 20;
+          const estTotal = Math.max(secCount * 8, 100);
+          const curPage = d.location?.current ?? d.pageItem?.current ?? Math.max(1, Math.round(frac * estTotal));
+          const totPages = d.location?.total ?? d.pageItem?.total ?? estTotal;
 
           post('progressUpdated', {
             percentage: Math.round((d.fraction ?? 0) * 100),
