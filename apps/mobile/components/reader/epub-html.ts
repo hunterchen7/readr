@@ -326,7 +326,7 @@ export function getReaderHtml(bookUrl: string): string {
           const frac = d.fraction ?? 0;
           const secIdx = d.index ?? 0;
 
-          // Compute exact page within current section from scroll position
+          // Compute page within section from the relocate fraction
           let pageInSection = 1;
           let pagesInSection = sectionPageCounts[secIdx] ?? 1;
           try {
@@ -336,10 +336,16 @@ export function getReaderHtml(bookUrl: string): string {
               if (body && vw > 0) {
                 pagesInSection = Math.max(1, Math.round(body.scrollWidth / vw));
                 sectionPageCounts[secIdx] = pagesInSection;
-                // Current page = how far scrolled in this section
-                const scrollPos = body.parentElement?.scrollLeft ?? body.scrollLeft ?? 0;
-                pageInSection = Math.max(1, Math.round(scrollPos / vw) + 1);
               }
+            }
+            // Use d.fraction within the section: foliate provides section-level
+            // fraction via (overall fraction - section start) / section size.
+            // Simpler: if we know total sections and overall fraction, estimate
+            // position within the current section's pages.
+            if (pagesInSection > 1) {
+              const totalSecs = book?.sections?.length ?? 1;
+              const secFrac = frac * totalSecs - secIdx; // 0..1 within section
+              pageInSection = Math.max(1, Math.min(pagesInSection, Math.ceil(secFrac * pagesInSection)));
             }
           } catch {}
 

@@ -570,20 +570,18 @@ export default function ReaderScreen() {
               <View style={[styles.progressDot, { left: `${progress}%` }]} />
             </View>
 
-            {/* Line 1: chapter name */}
             <Text style={[styles.progressLabel, { color: theme.fg }]} numberOfLines={1}>
               {currentPosition?.chapter ?? ""}
             </Text>
-            {/* Line 2: chapter progress + book page */}
             <View style={styles.progressInfoRow}>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
                 {pageInSection != null && pagesInSection != null
                   ? `${pageInSection}/${pagesInSection} in ch.`
-                  : `${progress}%`}
+                  : ""}
               </Text>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
                 {currentPage != null && totalPages != null && totalPages > 0
-                  ? `p. ${currentPage} of ${totalPages}`
+                  ? `p. ${currentPage} of ${totalPages}  ·  ${progress}%`
                   : `${progress}%`}
               </Text>
             </View>
