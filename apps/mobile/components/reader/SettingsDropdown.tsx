@@ -229,13 +229,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             {/* Horizontal margin */}
             <Text style={[styles.label, { color: muted }]}>Horizontal margin</Text>
             <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.max(8, theme.margin - 8) })}>
+              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.max(0, theme.margin - 4) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>-</Text>
               </Pressable>
               <View style={styles.stepperValue}>
                 <Text style={[styles.stepperValueText, { color: fg }]}>{theme.margin}px</Text>
               </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.min(128, theme.margin + 8) })}>
+              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.min(128, theme.margin + 4) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>+</Text>
               </Pressable>
             </View>
@@ -243,13 +243,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             {/* Vertical margin */}
             <Text style={[styles.label, { color: muted }]}>Vertical margin</Text>
             <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.max(0, (theme.marginV ?? 24) - 8) })}>
+              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.max(0, (theme.marginV ?? 24) - 4) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>-</Text>
               </Pressable>
               <View style={styles.stepperValue}>
                 <Text style={[styles.stepperValueText, { color: fg }]}>{theme.marginV ?? 24}px</Text>
               </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(96, (theme.marginV ?? 24) + 8) })}>
+              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(96, (theme.marginV ?? 24) + 4) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>+</Text>
               </Pressable>
             </View>

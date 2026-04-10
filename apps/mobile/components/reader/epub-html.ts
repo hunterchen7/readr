@@ -32,8 +32,8 @@ export function getReaderHtml(bookUrl: string): string {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: var(--bg, #fff); color: var(--fg, #111); }
-    #viewer { width: 100%; height: 100%; }
-    foliate-view { width: 100%; height: 100%; }
+    #viewer { width: 100%; height: 100%; background: var(--bg, #fff); }
+    foliate-view { width: 100%; height: 100%; background: var(--bg, #fff); }
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
       height: 100%; font-family: system-ui, sans-serif; padding: 24px; text-align: center;
@@ -197,22 +197,42 @@ export function getReaderHtml(bookUrl: string): string {
       const root = document.documentElement;
       root.style.setProperty('--bg', theme.bg || '#fff');
       root.style.setProperty('--fg', theme.fg || '#111');
-      document.body.style.background = theme.bg || '#fff';
-      // Also color the viewer container and foliate-view
+      const bgColor = theme.bg || '#fff';
+      document.body.style.background = bgColor;
+      root.style.background = bgColor;
+      // Color every container between the RN WebView and the book content
       const viewer = document.getElementById('viewer');
-      if (viewer) viewer.style.background = theme.bg || '#fff';
-      if (view) view.style.background = theme.bg || '#fff';
+      if (viewer) viewer.style.background = bgColor;
+      if (view) {
+        view.style.background = bgColor;
+        view.style.setProperty('--bg', bgColor);
+        // Inject into foliate's shadow root to kill internal borders/gaps
+        try {
+          const sr = view.shadowRoot;
+          if (sr) {
+            let srStyle = sr.getElementById('readr-sr-theme');
+            if (!srStyle) {
+              srStyle = document.createElement('style');
+              srStyle.id = 'readr-sr-theme';
+              sr.appendChild(srStyle);
+            }
+            srStyle.textContent = '*, :host { background: ' + bgColor + ' !important; border-color: transparent !important; column-rule-color: transparent !important; }';
+          }
+        } catch {}
+      }
       tapToTurn = theme.tapToTurn !== false;
 
       currentThemeCSS = buildThemeCSS(theme);
 
       if (!view) return;
 
-      // Horizontal margin — foliate reads this attribute
+      // Margins — set attribute for foliate AND apply CSS directly
       if (theme.margin != null) {
-        view.setAttribute('margin', String(theme.margin) + 'px');
+        const m = String(theme.margin) + 'px';
+        view.setAttribute('margin', m);
+        view.style.paddingLeft = m;
+        view.style.paddingRight = m;
       }
-      // Vertical margin via CSS padding on the view
       if (theme.marginV != null) {
         view.style.paddingTop = theme.marginV + 'px';
         view.style.paddingBottom = theme.marginV + 'px';
