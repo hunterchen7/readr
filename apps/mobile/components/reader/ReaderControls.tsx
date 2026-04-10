@@ -8,8 +8,10 @@ export interface ReaderTheme {
   fontSize: number;
   lineHeight: number;
   fontFamily: string;
-  /** Page edge margin in pixels (passed through to foliate-js renderer). */
+  /** Horizontal page margin in pixels. */
   margin: number;
+  /** Vertical page margin in pixels. */
+  marginV: number;
   /** Tap left/right edges to turn pages. When false, tap anywhere opens the controls. */
   tapToTurn: boolean;
   /** 100 = normal weight. 300 = light, 700 = bold. Applied via CSS font-weight. */
@@ -28,6 +30,7 @@ export const DEFAULT_THEME: ReaderTheme = {
   lineHeight: 1.6,
   fontFamily: "Georgia, serif",
   margin: 48,
+  marginV: 24,
   tapToTurn: true,
   fontWeight: 400,
   brightness: null,
@@ -41,6 +44,7 @@ export const EINK_THEME: ReaderTheme = {
   lineHeight: 1.7,
   fontFamily: "Georgia, serif",
   margin: 72,
+  marginV: 32,
   tapToTurn: true,
   fontWeight: 500,
   brightness: null,

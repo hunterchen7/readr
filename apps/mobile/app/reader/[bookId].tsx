@@ -309,12 +309,8 @@ export default function ReaderScreen() {
             page: msg.payload.currentPage ?? msg.payload.page,
           };
           setCurrentPosition(position);
-          if (typeof msg.payload.currentPage === "number") {
-            setCurrentPage(msg.payload.currentPage);
-          }
-          if (typeof msg.payload.totalPages === "number") {
-            setTotalPages(msg.payload.totalPages);
-          }
+          setCurrentPage(msg.payload.currentPage ?? null);
+          setTotalPages(msg.payload.totalPages ?? null);
           if (bookId) {
             upsertProgress(bookId, position);
           }
@@ -560,38 +556,39 @@ export default function ReaderScreen() {
               { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
             ]}
           >
-            {/* Scrubber track with dot */}
+            {/* Scrubber track */}
             <View style={styles.progressTrack}>
               <View style={[styles.progressFill, { width: `${progress}%` }]} />
               <View style={[styles.progressDot, { left: `${progress}%` }]} />
             </View>
 
-            {/* Chapter name */}
-            {currentPosition?.chapter ? (
-              <Text style={[styles.progressChapter, { color: theme.fg }]} numberOfLines={1}>
-                {currentPosition.chapter}
-              </Text>
-            ) : null}
-
-            {/* Page and percentage info */}
+            {/* Info rows */}
             <View style={styles.progressInfoRow}>
-              {currentPage != null && totalPages != null ? (
-                <>
-                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                    Page {currentPage} of {totalPages}
-                  </Text>
-                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                    {totalPages - currentPage} pages left
-                  </Text>
-                </>
-              ) : null}
+              <Text style={[styles.progressLabel, { color: theme.fg }]} numberOfLines={1}>
+                {currentPosition?.chapter ?? ""}
+              </Text>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
                 {progress}%
               </Text>
             </View>
+            {currentPage != null && totalPages != null ? (
+              <View style={styles.progressInfoRow}>
+                <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                  Page {currentPage} of {totalPages}
+                </Text>
+                <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                  {totalPages - currentPage} left
+                </Text>
+              </View>
+            ) : null}
           </Pressable>
         </>
-      ) : null}
+      ) : (
+        /* Minimal progress bar always visible at bottom */
+        <View style={[styles.miniProgress, { backgroundColor: theme.bg + "cc" }]}>
+          <View style={[styles.miniProgressFill, { width: `${progress}%`, backgroundColor: theme.fg + "33" }]} />
+        </View>
+      )}
 
       <TocDrawer
         visible={showTocDrawer}
@@ -755,4 +752,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   progressLabel: { fontSize: 11, opacity: 0.5 },
+  miniProgress: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    zIndex: 5,
+  },
+  miniProgressFill: {
+    height: 3,
+  },
 });
