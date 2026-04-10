@@ -68,6 +68,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
 
     // Page counting — measures CSS column widths per section
     let sectionPageCounts = {}; // { sectionIndex: pageCount }
+    let sectionPageCountsLocked = false; // true after precompute finishes
     let currentSectionIndex = 0;
 
     function post(type, payload) {
@@ -319,6 +320,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
       // After CSS changes reflow the columns — clear page counts and
       // re-precompute all sections, then re-post progress.
       sectionPageCounts = {};
+      sectionPageCountsLocked = false;
       setTimeout(async () => {
         remeasureCurrentSection();
         await precomputeAllPages();
@@ -397,6 +399,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
       // Post the final total
       let totalPages = 0;
       for (let i = 0; i < total; i++) totalPages += sectionPageCounts[i] ?? 1;
+      sectionPageCountsLocked = true;
       post('debug', { msg: 'precompute done: ' + measured + '/' + total + ' sections, ' + totalPages + ' pages' });
       post('pagesComputed', { totalPages, measured, total });
     }
@@ -471,13 +474,10 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           const frac = d.fraction ?? 0;
           const secIdx = d.index ?? 0;
 
-          // After measuring current section, extrapolate all others
-          precomputeAllPages();
-
-          // Use page counts
-          // Also measure current section live if not yet precomputed
+          // Use precomputed page counts. Only measure live if precompute
+          // hasn't locked the counts yet.
           const vw = view.clientWidth || window.innerWidth;
-          if (!sectionPageCounts[secIdx] && currentSectionDoc && vw > 0) {
+          if (!sectionPageCountsLocked && !sectionPageCounts[secIdx] && currentSectionDoc && vw > 0) {
             try {
               const sw = currentSectionDoc.documentElement.scrollWidth || currentSectionDoc.body?.scrollWidth || 0;
               if (sw > 0) sectionPageCounts[secIdx] = Math.max(1, Math.round(sw / vw));

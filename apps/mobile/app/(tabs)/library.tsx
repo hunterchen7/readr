@@ -52,6 +52,8 @@ const FILTER_LABELS: Record<FilterKey, string> = {
   downloaded: "Downloaded",
 };
 
+const GRID_COLUMNS = 4;
+
 function formatRelative(ts: number): string {
   const ago = Math.max(0, Date.now() - ts);
   const mins = Math.floor(ago / 60_000);
@@ -75,7 +77,13 @@ export default function LibraryScreen() {
   const setView = useLibraryPrefs((s) => s.setView);
 
   const { width: screenWidth } = useWindowDimensions();
-  const numColumns = Math.max(2, Math.floor(screenWidth / 180));
+  const gridCardWidth = useMemo(() => {
+    const horizontalPadding = spacing.md * 2;
+    const totalGap = spacing.md * (GRID_COLUMNS - 1);
+    return Math.floor(
+      (screenWidth - horizontalPadding - totalGap) / GRID_COLUMNS,
+    );
+  }, [screenWidth]);
 
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -364,11 +372,11 @@ export default function LibraryScreen() {
       ) : view === "grid" ? (
         <FlatList
           data={visibleBooks}
-          numColumns={numColumns}
+          numColumns={GRID_COLUMNS}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={styles.row}
-          key={`grid-${numColumns}`}
+          key={`grid-${GRID_COLUMNS}`}
           refreshControl={
             <RefreshControl
               refreshing={isRefetching}
@@ -377,7 +385,9 @@ export default function LibraryScreen() {
               }
             />
           }
-          renderItem={({ item }) => renderCard(item, handleBookPress)}
+          renderItem={({ item }) =>
+            renderCard(item, handleBookPress, gridCardWidth)
+          }
         />
       ) : (
         <FlatList
@@ -403,10 +413,11 @@ export default function LibraryScreen() {
 function renderCard(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
+  width: number,
 ) {
   const downloading = item.downloadProgress !== null;
   return (
-    <Pressable style={styles.card} onPress={() => onPress(item)}>
+    <Pressable style={[styles.card, { width }]} onPress={() => onPress(item)}>
       <View style={[styles.cover, !item.downloaded && styles.coverDimmed]}>
         {item.coverUrl ? (
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
@@ -572,8 +583,12 @@ const styles = StyleSheet.create({
 
   // Grid view
   grid: { padding: spacing.md },
-  row: { gap: spacing.md },
-  card: { flex: 1, marginBottom: spacing.lg },
+  row: {
+    gap: spacing.md,
+    justifyContent: "flex-start",
+    alignItems: "flex-start",
+  },
+  card: { marginBottom: spacing.lg },
   cover: {
     aspectRatio: 2 / 3,
     backgroundColor: colors.backgroundSecondary,
