@@ -1,10 +1,7 @@
-import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, Modal, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import {
-  ReaderTheme,
-  DEFAULT_THEME,
-  EINK_THEME,
-} from "./ReaderControls";
+import { useDisplay } from "../../contexts/DisplayContext";
+import { ReaderTheme } from "./ReaderControls";
 import { colors, spacing, fontSize } from "../../lib/theme";
 
 const THEME_PRESETS = [
@@ -28,16 +25,6 @@ const FONT_WEIGHTS = [
   { label: "Bold", value: 700 },
 ] as const;
 
-const FONT_SIZE_MIN = 12;
-const FONT_SIZE_MAX = 32;
-const LINE_HEIGHT_MIN = 1.2;
-const LINE_HEIGHT_MAX = 2.4;
-const LINE_HEIGHT_STEP = 0.1;
-
-function clamp(n: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, n));
-}
-
 interface SettingsDropdownProps {
   visible: boolean;
   onClose: () => void;
@@ -46,290 +33,215 @@ interface SettingsDropdownProps {
   isEink: boolean;
 }
 
-export function SettingsDropdown({
-  visible,
-  onClose,
-  theme,
-  onThemeChange,
-  isEink,
-}: SettingsDropdownProps) {
+export function SettingsDropdown({ visible, onClose, theme, onThemeChange, isEink }: SettingsDropdownProps) {
+  const display = useDisplay();
   const insets = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
+  const drawerWidth = Math.min(320, screenWidth * 0.8);
 
-  if (!visible) return null;
+  function update(partial: Partial<ReaderTheme>) {
+    onThemeChange({ ...theme, ...partial });
+  }
 
   const presets = isEink
     ? THEME_PRESETS.filter((p) => p.label !== "Dark")
     : THEME_PRESETS;
 
   return (
-    <>
-      {/* Backdrop */}
-      <Pressable
-        style={StyleSheet.absoluteFill}
-        onPress={onClose}
-      />
+    <Modal
+      visible={visible}
+      transparent
+      animationType={display.animationsEnabled ? "slide" : "none"}
+      onRequestClose={onClose}
+    >
+      <View style={styles.overlay}>
+        {/* Backdrop — tap to close */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
-      {/* Dropdown panel */}
-      <View
-        style={[
-          styles.panel,
-          {
-            top: insets.top + 52,
-          },
-        ]}
-      >
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
+        {/* Right-aligned drawer */}
+        <View
+          style={[
+            styles.drawer,
+            {
+              width: drawerWidth,
+              paddingTop: insets.top + spacing.md,
+              paddingBottom: insets.bottom + spacing.md,
+              right: 0,
+            },
+          ]}
         >
-          {/* Theme presets */}
-          <Text style={styles.sectionLabel}>Theme</Text>
-          <View style={styles.row}>
-            {presets.map((p) => (
-              <Pressable
-                key={p.label}
-                style={[
-                  styles.presetButton,
-                  {
-                    backgroundColor: p.bg,
-                    borderColor: p.bg === theme.bg && p.fg === theme.fg
-                      ? colors.text
-                      : colors.border,
-                  },
-                ]}
-                onPress={() => onThemeChange({ ...theme, bg: p.bg, fg: p.fg })}
-              >
-                <Text style={{ color: p.fg, fontSize: fontSize.xs }}>
-                  {p.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <Text style={styles.drawerTitle}>Settings</Text>
 
-          {/* Font family */}
-          <Text style={styles.sectionLabel}>Font</Text>
-          <View style={styles.row}>
-            {FONT_FAMILIES.map((f) => {
-              const active = theme.fontFamily === f.value;
-              return (
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Theme presets */}
+            <Text style={styles.label}>Theme</Text>
+            <View style={styles.row}>
+              {presets.map((p) => (
+                <Pressable
+                  key={p.label}
+                  style={[
+                    styles.presetBtn,
+                    { backgroundColor: p.bg, borderColor: theme.bg === p.bg ? colors.text : colors.border },
+                    theme.bg === p.bg && styles.presetBtnActive,
+                  ]}
+                  onPress={() => update({ bg: p.bg, fg: p.fg })}
+                >
+                  <Text style={[styles.presetLabel, { color: p.fg }]}>{p.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {/* Font family */}
+            <Text style={styles.label}>Font</Text>
+            <View style={styles.row}>
+              {FONT_FAMILIES.map((f) => (
                 <Pressable
                   key={f.label}
                   style={[
-                    styles.chipButton,
-                    active && styles.chipButtonActive,
+                    styles.chipBtn,
+                    theme.fontFamily === f.value && styles.chipBtnActive,
                   ]}
-                  onPress={() => onThemeChange({ ...theme, fontFamily: f.value })}
+                  onPress={() => update({ fontFamily: f.value })}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      active && styles.chipTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.chipLabel, theme.fontFamily === f.value && styles.chipLabelActive]}>
                     {f.label}
                   </Text>
                 </Pressable>
-              );
-            })}
-          </View>
+              ))}
+            </View>
 
-          {/* Font size */}
-          <Text style={styles.sectionLabel}>
-            Font Size: {theme.fontSize}px
-          </Text>
-          <View style={styles.stepperRow}>
-            <Pressable
-              style={styles.stepperButton}
-              onPress={() =>
-                onThemeChange({
-                  ...theme,
-                  fontSize: clamp(theme.fontSize - 1, FONT_SIZE_MIN, FONT_SIZE_MAX),
-                })
-              }
-            >
-              <Text style={styles.stepperText}>A-</Text>
-            </Pressable>
-            <Text style={styles.stepperValue}>{theme.fontSize}</Text>
-            <Pressable
-              style={styles.stepperButton}
-              onPress={() =>
-                onThemeChange({
-                  ...theme,
-                  fontSize: clamp(theme.fontSize + 1, FONT_SIZE_MIN, FONT_SIZE_MAX),
-                })
-              }
-            >
-              <Text style={[styles.stepperText, { fontSize: 18 }]}>A+</Text>
-            </Pressable>
-          </View>
+            {/* Font size */}
+            <Text style={styles.label}>Size: {theme.fontSize}px</Text>
+            <View style={styles.stepperRow}>
+              <Pressable style={styles.stepperBtn} onPress={() => update({ fontSize: Math.max(12, theme.fontSize - 2) })}>
+                <Text style={styles.stepperText}>A-</Text>
+              </Pressable>
+              <View style={styles.stepperValue}>
+                <Text style={styles.stepperValueText}>{theme.fontSize}</Text>
+              </View>
+              <Pressable style={styles.stepperBtn} onPress={() => update({ fontSize: Math.min(32, theme.fontSize + 2) })}>
+                <Text style={[styles.stepperText, { fontWeight: "700" }]}>A+</Text>
+              </Pressable>
+            </View>
 
-          {/* Line spacing */}
-          <Text style={styles.sectionLabel}>
-            Line Spacing: {theme.lineHeight.toFixed(1)}
-          </Text>
-          <View style={styles.stepperRow}>
-            <Pressable
-              style={styles.stepperButton}
-              onPress={() =>
-                onThemeChange({
-                  ...theme,
-                  lineHeight:
-                    Math.round(
-                      clamp(
-                        theme.lineHeight - LINE_HEIGHT_STEP,
-                        LINE_HEIGHT_MIN,
-                        LINE_HEIGHT_MAX,
-                      ) * 10,
-                    ) / 10,
-                })
-              }
-            >
-              <Text style={styles.stepperText}>-</Text>
-            </Pressable>
-            <Text style={styles.stepperValue}>
-              {theme.lineHeight.toFixed(1)}
-            </Text>
-            <Pressable
-              style={styles.stepperButton}
-              onPress={() =>
-                onThemeChange({
-                  ...theme,
-                  lineHeight:
-                    Math.round(
-                      clamp(
-                        theme.lineHeight + LINE_HEIGHT_STEP,
-                        LINE_HEIGHT_MIN,
-                        LINE_HEIGHT_MAX,
-                      ) * 10,
-                    ) / 10,
-                })
-              }
-            >
-              <Text style={styles.stepperText}>+</Text>
-            </Pressable>
-          </View>
+            {/* Line spacing */}
+            <Text style={styles.label}>Line spacing: {theme.lineHeight.toFixed(1)}</Text>
+            <View style={styles.stepperRow}>
+              <Pressable style={styles.stepperBtn} onPress={() => update({ lineHeight: Math.max(1.2, +(theme.lineHeight - 0.1).toFixed(1)) })}>
+                <Text style={styles.stepperText}>-</Text>
+              </Pressable>
+              <View style={styles.stepperValue}>
+                <Text style={styles.stepperValueText}>{theme.lineHeight.toFixed(1)}</Text>
+              </View>
+              <Pressable style={styles.stepperBtn} onPress={() => update({ lineHeight: Math.min(2.4, +(theme.lineHeight + 0.1).toFixed(1)) })}>
+                <Text style={styles.stepperText}>+</Text>
+              </Pressable>
+            </View>
 
-          {/* Font weight */}
-          <Text style={styles.sectionLabel}>Weight</Text>
-          <View style={styles.row}>
-            {FONT_WEIGHTS.map((w) => {
-              const active = theme.fontWeight === w.value;
-              return (
+            {/* Weight */}
+            <Text style={styles.label}>Weight</Text>
+            <View style={styles.row}>
+              {FONT_WEIGHTS.map((w) => (
                 <Pressable
-                  key={w.value}
+                  key={w.label}
                   style={[
-                    styles.chipButton,
-                    active && styles.chipButtonActive,
+                    styles.chipBtn,
+                    theme.fontWeight === w.value && styles.chipBtnActive,
                   ]}
-                  onPress={() => onThemeChange({ ...theme, fontWeight: w.value })}
+                  onPress={() => update({ fontWeight: w.value })}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      active && styles.chipTextActive,
-                      { fontWeight: String(w.value) as "300" | "400" | "500" | "700" },
-                    ]}
-                  >
+                  <Text style={[styles.chipLabel, theme.fontWeight === w.value && styles.chipLabelActive]}>
                     {w.label}
                   </Text>
                 </Pressable>
-              );
-            })}
-          </View>
-        </ScrollView>
+              ))}
+            </View>
+
+            {/* Margin */}
+            <Text style={styles.label}>Margin: {theme.margin}px</Text>
+            <View style={styles.stepperRow}>
+              <Pressable style={styles.stepperBtn} onPress={() => update({ margin: Math.max(16, theme.margin - 16) })}>
+                <Text style={styles.stepperText}>-</Text>
+              </Pressable>
+              <View style={styles.stepperValue}>
+                <Text style={styles.stepperValueText}>{theme.margin}</Text>
+              </View>
+              <Pressable style={styles.stepperBtn} onPress={() => update({ margin: Math.min(128, theme.margin + 16) })}>
+                <Text style={styles.stepperText}>+</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </View>
       </View>
-    </>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  panel: {
-    position: "absolute",
-    right: spacing.lg,
-    width: 300,
-    maxHeight: 420,
+  overlay: { flex: 1, flexDirection: "row", justifyContent: "flex-end" },
+  drawer: {
     backgroundColor: colors.background,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
+    height: "100%",
+    paddingHorizontal: spacing.lg,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: -2, height: 0 },
     shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowRadius: 8,
+    elevation: 10,
   },
-  scroll: {
-    flex: 1,
+  drawerTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.lg,
   },
-  scrollContent: {
-    padding: spacing.lg,
-    paddingBottom: spacing.xxl,
-  },
-  sectionLabel: {
+  label: {
     fontSize: fontSize.xs,
+    fontWeight: "600",
     color: colors.textMuted,
-    marginBottom: spacing.sm,
-    marginTop: spacing.xs,
     textTransform: "uppercase",
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
   },
   row: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: spacing.sm,
-    marginBottom: spacing.lg,
   },
-  presetButton: {
+  presetBtn: {
     flex: 1,
-    padding: spacing.md,
+    minWidth: 60,
+    paddingVertical: spacing.sm,
     borderRadius: 8,
-    borderWidth: 2,
+    borderWidth: 1.5,
     alignItems: "center",
   },
-  chipButton: {
-    flex: 1,
-    padding: spacing.md,
+  presetBtnActive: { borderWidth: 2 },
+  presetLabel: { fontSize: fontSize.sm, fontWeight: "500" },
+  chipBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    backgroundColor: colors.background,
-  },
-  chipButtonActive: {
-    borderColor: colors.text,
     backgroundColor: colors.backgroundSecondary,
   },
-  chipText: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-  },
-  chipTextActive: {
-    color: colors.text,
-    fontWeight: "600",
-  },
+  chipBtnActive: { backgroundColor: colors.text },
+  chipLabel: { fontSize: fontSize.sm, color: colors.text },
+  chipLabelActive: { color: colors.primaryFg },
   stepperRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    marginBottom: spacing.lg,
+    gap: spacing.sm,
   },
-  stepperButton: {
-    flex: 1,
+  stepperBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
-    padding: spacing.md,
+    justifyContent: "center",
     alignItems: "center",
   },
-  stepperText: {
-    fontSize: fontSize.lg,
-    fontWeight: "600",
-    color: colors.text,
-  },
-  stepperValue: {
-    fontSize: fontSize.md,
-    fontWeight: "500",
-    color: colors.text,
-    minWidth: 32,
-    textAlign: "center",
-  },
+  stepperText: { fontSize: fontSize.lg, color: colors.text },
+  stepperValue: { flex: 1, alignItems: "center" },
+  stepperValueText: { fontSize: fontSize.md, color: colors.textSecondary },
 });

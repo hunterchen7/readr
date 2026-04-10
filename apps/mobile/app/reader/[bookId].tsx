@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
-import { Bookmark as BookmarkIcon, BookOpen, Settings } from "lucide-react-native";
+import { BookOpen, Settings } from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -495,26 +495,10 @@ export default function ReaderScreen() {
         <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
           {book.title ?? "Reading"}
         </Text>
-        <View style={styles.headerActions}>
-          <Pressable onPress={handleCreateBookmark} style={styles.headerButton} accessibilityLabel="Add bookmark">
-            <BookmarkIcon size={20} color={theme.fg} />
-          </Pressable>
-          <Pressable onPress={() => setShowSettingsDropdown((s) => !s)} style={styles.headerButton} accessibilityLabel="Reader settings">
-            <Settings size={20} color={theme.fg} />
-          </Pressable>
-        </View>
+        <Pressable onPress={() => setShowSettingsDropdown(true)} style={styles.headerButton} accessibilityLabel="Reader settings">
+          <Settings size={20} color={theme.fg} />
+        </Pressable>
       </View>
-
-      {/* Settings dropdown — positioned below header */}
-      {showSettingsDropdown ? (
-        <SettingsDropdown
-          visible={showSettingsDropdown}
-          onClose={() => setShowSettingsDropdown(false)}
-          theme={theme}
-          onThemeChange={handleThemeChange}
-          isEink={display.isEink}
-        />
-      ) : null}
 
       <WebView
         ref={webviewRef}
@@ -557,6 +541,14 @@ export default function ReaderScreen() {
         onJumpToBookmark={handleGoToBookmark}
         onDeleteBookmark={(id) => handleDeleteBookmark(id)}
         theme={{ bg: theme.bg, fg: theme.fg }}
+      />
+
+      <SettingsDropdown
+        visible={showSettingsDropdown}
+        onClose={() => setShowSettingsDropdown(false)}
+        theme={theme}
+        onThemeChange={handleThemeChange}
+        isEink={display.isEink}
       />
 
       <ContextMenu
