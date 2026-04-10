@@ -104,7 +104,17 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  // Must produce valid UUID v4 — the server schema uses uuid primary keys
+  // and the sync validator requires z.string().uuid().
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  // Manual UUID v4 fallback for Hermes/older RN runtimes.
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 let cachedDeviceId: string | null = null;
@@ -158,7 +168,16 @@ export async function upsertProgress(
   const database = await getDb();
   const deviceId = getDeviceId();
   const now = new Date().toISOString();
-  const id = generateId();
+
+  // Use the existing row's id if one exists so the sync queue entity ID is
+  // stable across repeated updates to the same book. This lets
+  // deduplicateQueue() collapse consecutive page-turn events into a single
+  // push instead of flooding the server.
+  const existing = await database.getFirstAsync<{ id: string }>(
+    "SELECT id FROM reading_progress WHERE book_id = ? AND device_id = ?",
+    [bookId, deviceId],
+  );
+  const id = existing?.id ?? generateId();
 
   await database.runAsync(
     `INSERT INTO reading_progress (id, book_id, device_id, position, updated_at, synced)

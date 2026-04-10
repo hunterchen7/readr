@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, isNotNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { badRequest, forbidden } from "../lib/errors.js";
@@ -51,11 +51,23 @@ emailPublicRouter.post("/email/recover/start", async (c) => {
   if (!parsed.success) throw badRequest("Valid email required");
   const email = parsed.data.email.toLowerCase();
 
-  const [user] = await db
+  // Only match users that have actually verified this email. Without
+  // this filter a stale unverified row could shadow the real account.
+  const matchingUsers = await db
     .select({ id: schema.users.id })
     .from(schema.users)
-    .where(eq(schema.users.email, email))
-    .limit(1);
+    .where(
+      and(
+        eq(schema.users.email, email),
+        isNotNull(schema.users.emailVerifiedAt),
+      ),
+    )
+    .limit(2); // fetch 2 to detect ambiguity
+
+  // If multiple verified accounts share the same email we can't safely
+  // pick one — but we still return 200 to avoid leaking info. The user
+  // won't receive a recovery email in this ambiguous case.
+  const user = matchingUsers.length === 1 ? matchingUsers[0] : undefined;
 
   if (user) {
     const code = generateVerificationCode();
@@ -133,12 +145,24 @@ emailPublicRouter.post("/email/login", async (c) => {
   if (!parsed.success) throw badRequest("Valid email required");
   const email = parsed.data.email.toLowerCase();
 
-  // Find or create user for this email
-  let [user] = await db
+  // Only consider users that have verified this email so we never
+  // resolve to a stale unverified row from a different device.
+  const matchingUsers = await db
     .select({ id: schema.users.id })
     .from(schema.users)
-    .where(eq(schema.users.email, email))
-    .limit(1);
+    .where(
+      and(
+        eq(schema.users.email, email),
+        isNotNull(schema.users.emailVerifiedAt),
+      ),
+    )
+    .limit(2);
+
+  if (matchingUsers.length > 1) {
+    throw badRequest("Multiple accounts are associated with this email. Please use device-token login or contact support.");
+  }
+
+  let user = matchingUsers[0] as { id: string } | undefined;
 
   if (!user) {
     // Auto-create user with a generated token
