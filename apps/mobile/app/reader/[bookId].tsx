@@ -513,31 +513,7 @@ export default function ReaderScreen() {
     );
   }, [bookmarks, currentPosition]);
 
-  const chapterPageLabel = useMemo(() => {
-    if (
-      pageInSection == null ||
-      pagesInSection == null ||
-      pagesInSection <= 0
-    ) {
-      return "";
-    }
-    return `chapter p. ${pageInSection}/${pagesInSection}`;
-  }, [pageInSection, pagesInSection]);
-
-  const bookPageLabel = useMemo(() => {
-    if (currentPage == null || totalPages == null || totalPages <= 0) {
-      return `${progress}%`;
-    }
-    return `p. ${currentPage}/${totalPages}  ·  ${progress}%`;
-  }, [currentPage, totalPages, progress]);
-
-  const pagesLeftLabel = useMemo(() => {
-    if (currentPage == null || totalPages == null || totalPages <= 0) {
-      return "";
-    }
-    const remaining = Math.max(0, totalPages - currentPage);
-    return `${remaining} left`;
-  }, [currentPage, totalPages]);
+  // No separate memos — compute inline in JSX
 
   async function handleToggleBookmark() {
     if (!bookId || !currentPosition) return;
@@ -638,10 +614,14 @@ export default function ReaderScreen() {
             </Text>
             <View style={styles.progressInfoRow}>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                {chapterPageLabel || pagesLeftLabel}
+                {pageInSection != null && pagesInSection != null && pagesInSection > 0
+                  ? `${pageInSection}/${pagesInSection} in ch.`
+                  : ""}
               </Text>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                {bookPageLabel}
+                {currentPage != null && totalPages != null && totalPages > 0
+                  ? `p. ${currentPage}/${totalPages}  ·  ${progress}%`
+                  : `${progress}%`}
               </Text>
             </View>
           </Pressable>
