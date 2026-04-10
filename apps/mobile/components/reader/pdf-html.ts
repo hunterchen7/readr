@@ -322,8 +322,8 @@ export function getPdfReaderHtml(bookUrl: string): string {
     let pdfjsLib;
     async function init() {
       try {
-        pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.min.mjs');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4/build/pdf.worker.min.mjs';
+        pdfjsLib = await import('file:///android_asset/js/pdf.min.mjs');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'file:///android_asset/js/pdf.worker.min.mjs';
 
         const loadingTask = pdfjsLib.getDocument(BOOK_URL);
         pdfDoc = await loadingTask.promise;

@@ -15,8 +15,8 @@ module.exports = function copyAssetsPlugin(config) {
 
       // Copy fonts
       copyDir(path.join(root, "assets", "fonts"), path.join(androidAssets, "fonts"), [".ttf", ".otf", ".woff2"]);
-      // Copy JS (foliate-js)
-      copyDir(path.join(root, "assets", "js"), path.join(androidAssets, "js"), [".js"]);
+      // Copy JS (foliate-js, pdfjs, vendor deps)
+      copyDir(path.join(root, "assets", "js"), path.join(androidAssets, "js"), [".js", ".mjs"]);
 
       return cfg;
     },
@@ -26,9 +26,13 @@ module.exports = function copyAssetsPlugin(config) {
 function copyDir(src, dest, exts) {
   if (!fs.existsSync(src)) return;
   fs.mkdirSync(dest, { recursive: true });
-  for (const file of fs.readdirSync(src)) {
-    if (exts.some((e) => file.endsWith(e))) {
-      fs.copyFileSync(path.join(src, file), path.join(dest, file));
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDir(srcPath, destPath, exts);
+    } else if (exts.some((e) => entry.name.endsWith(e))) {
+      fs.copyFileSync(srcPath, destPath);
     }
   }
 }
