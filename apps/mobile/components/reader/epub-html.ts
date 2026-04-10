@@ -248,16 +248,28 @@ export function getReaderHtml(bookUrl: string): string {
             if (!srStyle) {
               srStyle = document.createElement('style');
               srStyle.id = 'readr-sr-theme';
-              sr.appendChild(srStyle);
+              sr.prepend(srStyle);
             }
-            srStyle.textContent = [
-              ':host, *, div, iframe { background:' + bgColor + '!important; border-color:transparent!important; column-rule-color:transparent!important; }',
-            ].join('');
-          }
-          // Also iterate direct children of shadow root
-          if (sr) for (const el of sr.querySelectorAll('*')) {
-            el.style.background = bgColor;
-            el.style.borderColor = 'transparent';
+            srStyle.textContent =
+              ':host{background:' + bgColor + '!important}' +
+              '*{background:' + bgColor + '!important;border-color:transparent!important;column-rule-color:transparent!important}' +
+              'iframe{border:none!important}';
+            // Also force inline on every existing element right now
+            for (const el of sr.querySelectorAll('*')) {
+              el.style.setProperty('background', bgColor, 'important');
+              el.style.setProperty('border-color', 'transparent', 'important');
+            }
+            // Watch for new elements foliate adds dynamically
+            if (!sr._readrObserver) {
+              sr._readrObserver = new MutationObserver(() => {
+                const bg = currentTheme?.bg || '#fff';
+                for (const el of sr.querySelectorAll('*')) {
+                  el.style.setProperty('background', bg, 'important');
+                  el.style.setProperty('border-color', 'transparent', 'important');
+                }
+              });
+              sr._readrObserver.observe(sr, { childList: true, subtree: true });
+            }
           }
         } catch {}
       }
