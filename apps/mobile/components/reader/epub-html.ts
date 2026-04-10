@@ -502,15 +502,20 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           // Current page = fraction * totalPages
           const currentPage = Math.max(1, Math.min(totalPages, Math.round(frac * totalPages)));
 
-          // Page within section from fraction
+          // Page within section using foliate's own section fractions
+          // (the overall frac is 0..1 for the book; we need to remap to
+          // 0..1 within the current section)
           let pageInSection = 1;
           if (pagesInSection > 1) {
-            // Pages before this section
-            let pagesBefore = 0;
-            for (let i = 0; i < secIdx; i++) {
-              pagesBefore += sectionPageCounts[i] ?? pagesInSection;
-            }
-            pageInSection = Math.max(1, Math.min(pagesInSection, currentPage - pagesBefore));
+            const sectionFractions = view.getSectionFractions?.() ?? [];
+            const sectionStart = sectionFractions[secIdx] ?? (secIdx / (totalSections || 1));
+            const sectionEnd = sectionFractions[secIdx + 1] ?? ((secIdx + 1) / (totalSections || 1));
+            const sectionSpan = Math.max(0, sectionEnd - sectionStart);
+            const sectionFrac = sectionSpan > 0
+              ? Math.min(1, Math.max(0, (frac - sectionStart) / sectionSpan))
+              : 0;
+            // Map section fraction to 1..pagesInSection
+            pageInSection = Math.max(1, Math.min(pagesInSection, Math.ceil(sectionFrac * pagesInSection) || 1));
           }
 
           post('progressUpdated', {
