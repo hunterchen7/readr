@@ -4,10 +4,20 @@ import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { scopeToUser } from "../middleware/user-scope.js";
 import { upsertProgressSchema } from "@readr/shared";
+import { forbidden } from "../lib/errors.js";
 
 type Variables = { userId: string };
 
 const app = new Hono<{ Variables: Variables }>();
+
+/** Verify the authenticated user owns the book, or throw 403. */
+async function assertBookOwnership(bookId: string, userId: string) {
+  const [row] = await db
+    .select({ id: schema.books.id })
+    .from(schema.books)
+    .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)));
+  if (!row) throw forbidden("Book does not belong to user");
+}
 
 // GET /api/books/:id/progress (below) — but first, a batch endpoint
 // mounted via index.ts at /api/progress/all to avoid /:id conflict.
@@ -34,6 +44,7 @@ app.get("/:id/progress", async (c) => {
 app.put("/:id/progress", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
+  await assertBookOwnership(bookId, userId);
   const body = upsertProgressSchema.parse(await c.req.json());
 
   const [progress] = await db

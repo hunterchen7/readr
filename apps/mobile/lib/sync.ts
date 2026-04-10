@@ -243,10 +243,39 @@ export async function runSync(): Promise<{
     pushResult = await pushChanges(deduplicated);
 
     if (pushResult) {
-      // Clear the queue up to the latest entry
-      const maxId = Math.max(...queue.map((e) => e.id ?? 0));
-      if (maxId > 0) {
-        await clearSyncQueue(maxId);
+      // Build a set of conflicted/failed entity keys so we can keep them
+      const conflictedKeys = new Set(
+        pushResult.conflicts.map((c) => `${c.entityType}:${c.entityId}`),
+      );
+
+      // Only remove queue items that were NOT conflicted. Items whose
+      // entity appears in the conflicts array stay in the queue for retry.
+      // Items that errored silently (neither accepted nor conflicted) also
+      // stay because they weren't counted as accepted.
+      const acceptedCount = pushResult.accepted;
+      const totalPushed = deduplicated.length;
+      const failedCount = totalPushed - acceptedCount - pushResult.conflicts.length;
+
+      if (failedCount <= 0 && pushResult.conflicts.length === 0) {
+        // Everything was accepted — clear the entire queue
+        const maxId = Math.max(...queue.map((e) => e.id ?? 0));
+        if (maxId > 0) {
+          await clearSyncQueue(maxId);
+        }
+      } else {
+        // Partial success — remove only accepted items
+        const db = await getDb();
+        const idsToRemove = queue
+          .filter((e) => !conflictedKeys.has(`${e.entityType}:${e.entityId}`))
+          .map((e) => e.id)
+          .filter((id): id is number => id != null);
+
+        // Remove up to the accepted count (in queue order) to avoid
+        // clearing items that silently failed on the server.
+        const safeIds = idsToRemove.slice(0, acceptedCount);
+        for (const id of safeIds) {
+          await db.runAsync("DELETE FROM sync_queue WHERE id = ?", [id]);
+        }
       }
     }
   }

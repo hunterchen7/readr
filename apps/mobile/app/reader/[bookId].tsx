@@ -636,7 +636,7 @@ export default function ReaderScreen() {
         onSave={async (strokes, penConfig) => {
           if (!bookId || !currentPosition) return;
           try {
-            const n = await createNote(bookId, currentPosition, "handwritten", JSON.stringify({ strokes, penConfig }));
+            const n = await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
             setNotes((prev) => [n, ...prev]);
           } catch {}
           setShowDrawing(false);

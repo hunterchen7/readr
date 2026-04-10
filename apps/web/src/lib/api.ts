@@ -121,7 +121,7 @@ export async function emailLoginVerify(email: string, code: string): Promise<str
 
 // Progress
 export function getProgress(bookId: string) {
-  return apiFetch<{ positions: { position: { percentage: number; cfi?: string }; deviceId: string }[] }>(
+  return apiFetch<{ positions: { position: { percentage: number; cfi?: string }; deviceId: string; updatedAt?: string }[] }>(
     `/api/books/${bookId}/progress`,
   );
 }

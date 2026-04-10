@@ -100,6 +100,34 @@ export function getReaderHtml(bookUrl: string): string {
           post('pageText', { text });
           break;
         }
+        case 'copyToClipboard': {
+          const text = data.payload.text || '';
+          if (text) {
+            try {
+              navigator.clipboard.writeText(text).catch(() => {
+                // Fallback for environments where clipboard API is blocked
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+              });
+            } catch {
+              const ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.left = '-9999px';
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand('copy');
+              document.body.removeChild(ta);
+            }
+          }
+          break;
+        }
         case 'addHighlight': {
           // RN sends either { cfi } (live selection) or { cfiRange } (replay).
           const cfi = data.payload.cfi || data.payload.cfiRange;

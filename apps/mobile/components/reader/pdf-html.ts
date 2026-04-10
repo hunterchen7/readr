@@ -112,6 +112,33 @@ export function getPdfReaderHtml(bookUrl: string): string {
         case 'addHighlight':
           drawHighlight(data.payload);
           break;
+        case 'copyToClipboard': {
+          const textToCopy = data.payload.text || '';
+          if (textToCopy) {
+            try {
+              navigator.clipboard.writeText(textToCopy).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = textToCopy;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+              });
+            } catch {
+              const ta = document.createElement('textarea');
+              ta.value = textToCopy;
+              ta.style.position = 'fixed';
+              ta.style.left = '-9999px';
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand('copy');
+              document.body.removeChild(ta);
+            }
+          }
+          break;
+        }
         case 'search':
           performSearch(data.payload.query);
           break;

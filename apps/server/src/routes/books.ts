@@ -47,11 +47,18 @@ app.get("/", async (c) => {
     conditions.push(eq(schema.files.format, query.format));
   }
 
-  // Subquery for latest progress percentage per book
+  // Subquery for latest progress percentage per book (most recent, not max)
   const progressSq = db
     .select({
       bookId: schema.readingProgress.bookId,
-      percentage: sql<number>`max((${schema.readingProgress.position}->>'percentage')::int)`.as("progress_pct"),
+      percentage: sql<number>`(
+        SELECT (rp2.position->>'percentage')::int
+        FROM reading_progress rp2
+        WHERE rp2.book_id = ${schema.readingProgress.bookId}
+          AND rp2.user_id = ${userId}
+        ORDER BY rp2.updated_at DESC
+        LIMIT 1
+      )`.as("progress_pct"),
     })
     .from(schema.readingProgress)
     .where(eq(schema.readingProgress.userId, userId))

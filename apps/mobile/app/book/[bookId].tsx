@@ -69,11 +69,8 @@ export default function BookDetailScreen() {
 
   function handleRead() {
     if (!bookId) return;
-    if (!downloaded) {
-      // Download first, then open
-      handleDownload().then(() => router.push(`/reader/${bookId}`));
-      return;
-    }
+    // The reader falls back to the server downloadUrl when localPath
+    // is null, so we can open it regardless of download state.
     router.push(`/reader/${bookId}`);
   }
 
@@ -157,12 +154,11 @@ export default function BookDetailScreen() {
         {/* Actions */}
         <View style={styles.actions}>
           <Pressable
-            style={[styles.primaryBtn, !downloaded && styles.primaryBtnDisabled]}
-            onPress={downloaded ? handleRead : undefined}
-            disabled={!downloaded}
+            style={styles.primaryBtn}
+            onPress={handleRead}
           >
-            <BookOpen size={18} color={downloaded ? colors.primaryFg : colors.textMuted} />
-            <Text style={[styles.primaryBtnText, !downloaded && styles.primaryBtnTextDisabled]}>
+            <BookOpen size={18} color={colors.primaryFg} />
+            <Text style={styles.primaryBtnText}>
               Read
             </Text>
           </Pressable>

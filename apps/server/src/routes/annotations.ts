@@ -9,11 +9,20 @@ import {
   createNoteSchema,
   updateAnnotationSchema,
 } from "@readr/shared";
-import { notFound } from "../lib/errors.js";
+import { notFound, forbidden } from "../lib/errors.js";
 
 type Variables = { userId: string };
 
 const app = new Hono<{ Variables: Variables }>();
+
+/** Verify the authenticated user owns the book, or throw 403. */
+async function assertBookOwnership(bookId: string, userId: string) {
+  const [row] = await db
+    .select({ id: schema.books.id })
+    .from(schema.books)
+    .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)));
+  if (!row) throw forbidden("Book does not belong to user");
+}
 
 // GET /api/books/:id/annotations
 app.get("/books/:id/annotations", async (c) => {
@@ -71,6 +80,7 @@ app.get("/books/:id/annotations", async (c) => {
 app.post("/books/:id/bookmarks", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
+  await assertBookOwnership(bookId, userId);
   const body = createBookmarkSchema.parse(await c.req.json());
 
   const [bookmark] = await db
@@ -85,6 +95,7 @@ app.post("/books/:id/bookmarks", async (c) => {
 app.post("/books/:id/highlights", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
+  await assertBookOwnership(bookId, userId);
   const body = createHighlightSchema.parse(await c.req.json());
 
   const [highlight] = await db
@@ -99,6 +110,7 @@ app.post("/books/:id/highlights", async (c) => {
 app.post("/books/:id/notes", async (c) => {
   const userId = c.get("userId");
   const bookId = c.req.param("id");
+  await assertBookOwnership(bookId, userId);
   const body = createNoteSchema.parse(await c.req.json());
 
   const [note] = await db

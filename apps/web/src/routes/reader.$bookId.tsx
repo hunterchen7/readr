@@ -52,7 +52,15 @@ function WebReaderPage() {
   useEffect(() => {
     getProgress(bookId).then(({ positions }) => {
       if (positions.length > 0) {
-        const latest = positions.sort((a, b) => (b.position.percentage ?? 0) - (a.position.percentage ?? 0))[0];
+        // Use the most recently updated position, not the highest percentage.
+        // The server returns positions with updatedAt; fall back to percentage
+        // if updatedAt is unavailable.
+        const latest = positions.sort((a, b) => {
+          const aTime = a.updatedAt ?? "";
+          const bTime = b.updatedAt ?? "";
+          if (aTime || bTime) return bTime > aTime ? 1 : bTime < aTime ? -1 : 0;
+          return (b.position.percentage ?? 0) - (a.position.percentage ?? 0);
+        })[0];
         if (latest.position.cfi) savedCfiRef.current = latest.position.cfi;
         setProgress(latest.position.percentage ?? 0);
       }

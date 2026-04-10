@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { and, gte, sql, desc } from "drizzle-orm";
+import { and, eq, gte, sql, desc } from "drizzle-orm";
 import { scopeToUser } from "../middleware/user-scope.js";
-import { badRequest } from "../lib/errors.js";
+import { badRequest, forbidden } from "../lib/errors.js";
 
 type Variables = { userId: string };
 
@@ -20,6 +20,15 @@ const sessionSchema = z.object({
 
 const statsRouter = new Hono<{ Variables: Variables }>();
 
+/** Verify the authenticated user owns the book, or throw 403. */
+async function assertBookOwnership(bookId: string, userId: string) {
+  const [row] = await db
+    .select({ id: schema.books.id })
+    .from(schema.books)
+    .where(and(eq(schema.books.id, bookId), scopeToUser.books(userId)));
+  if (!row) throw forbidden("Book does not belong to user");
+}
+
 // POST /stats/sessions — log a reading session
 statsRouter.post("/stats/sessions", async (c) => {
   const userId = c.get("userId");
@@ -27,6 +36,7 @@ statsRouter.post("/stats/sessions", async (c) => {
   const parsed = sessionSchema.safeParse(raw);
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? "Invalid session data");
   const body = parsed.data;
+  await assertBookOwnership(body.bookId, userId);
 
   const [session] = await db
     .insert(schema.readingSessions)
