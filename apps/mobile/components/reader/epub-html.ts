@@ -342,21 +342,40 @@ export function getReaderHtml(bookUrl: string): string {
             }
           } catch {}
 
-          const cfi = d.cfi ?? '';
-          if (secIdx !== lastRelocateSection) {
-            // New section — start at page 1 (or last page if going backward)
-            pageInCurrentSection = (cfi > lastRelocateCfi || !lastRelocateCfi) ? 1 : pagesInSection;
-            lastRelocateSection = secIdx;
-          } else if (cfi && cfi !== lastRelocateCfi) {
-            // Same section, different position — determine direction from CFI
-            if (cfi > lastRelocateCfi) {
-              pageInCurrentSection = Math.min(pagesInSection, pageInCurrentSection + 1);
-            } else {
-              pageInCurrentSection = Math.max(1, pageInCurrentSection - 1);
+          // Compute page from the actual CSS transform/scroll in foliate's shadow DOM
+          try {
+            const sr = view.shadowRoot;
+            if (sr) {
+              // Foliate uses a container with CSS transform for pagination
+              const els = sr.querySelectorAll('div');
+              for (const el of els) {
+                const t = getComputedStyle(el).transform;
+                if (t && t !== 'none') {
+                  const m = t.match(/matrix\\(([^)]+)\\)/);
+                  if (m) {
+                    const tx = Math.abs(parseFloat(m[1].split(',')[4]));
+                    const vw = el.clientWidth || view.clientWidth;
+                    if (vw > 0 && tx > 0) {
+                      pageInCurrentSection = Math.round(tx / vw) + 1;
+                      break;
+                    }
+                  }
+                }
+                // Also check scrollLeft
+                if (el.scrollLeft > 0) {
+                  const vw = el.clientWidth || view.clientWidth;
+                  if (vw > 0) {
+                    pageInCurrentSection = Math.round(el.scrollLeft / vw) + 1;
+                    break;
+                  }
+                }
+              }
             }
+          } catch {}
+          if (secIdx !== lastRelocateSection) {
+            lastRelocateSection = secIdx;
           }
-          lastRelocateCfi = cfi;
-          const pageInSection = pageInCurrentSection;
+          const pageInSection = Math.max(1, Math.min(pagesInSection, pageInCurrentSection));
 
           // Sum pages from all measured sections for total, estimate unmeasured
           const totalSections = book?.sections?.length ?? 20;
