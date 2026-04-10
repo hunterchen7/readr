@@ -200,15 +200,14 @@ export function getReaderHtml(bookUrl: string): string {
       root.style.setProperty('--bg', theme.bg || '#fff');
       root.style.setProperty('--fg', theme.fg || '#111');
       const bgColor = theme.bg || '#fff';
-      document.body.style.background = bgColor;
-      root.style.background = bgColor;
-      // Color every container between the RN WebView and the book content
+      // Force background on every element in the chain
+      root.style.cssText = 'background:' + bgColor + '!important';
+      document.body.style.cssText = 'background:' + bgColor + '!important;margin:0;padding:0';
       const viewer = document.getElementById('viewer');
-      if (viewer) viewer.style.background = bgColor;
+      if (viewer) viewer.style.cssText = 'width:100%;height:100%;background:' + bgColor;
       if (view) {
         view.style.background = bgColor;
-        view.style.setProperty('--bg', bgColor);
-        // Inject into foliate's shadow root to kill internal borders/gaps
+        // Force into shadow root (foliate uses mode:'open')
         try {
           const sr = view.shadowRoot;
           if (sr) {
@@ -218,7 +217,14 @@ export function getReaderHtml(bookUrl: string): string {
               srStyle.id = 'readr-sr-theme';
               sr.appendChild(srStyle);
             }
-            srStyle.textContent = '*, :host { background: ' + bgColor + ' !important; border-color: transparent !important; column-rule-color: transparent !important; }';
+            srStyle.textContent = [
+              ':host, *, div, iframe { background:' + bgColor + '!important; border-color:transparent!important; column-rule-color:transparent!important; }',
+            ].join('');
+          }
+          // Also iterate direct children of shadow root
+          if (sr) for (const el of sr.querySelectorAll('*')) {
+            el.style.background = bgColor;
+            el.style.borderColor = 'transparent';
           }
         } catch {}
       }
