@@ -321,7 +321,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
       sectionPageCounts = {};
       setTimeout(async () => {
         remeasureCurrentSection();
-        await extrapolateAllPages();
+        await precomputeAllPages();
         if (view?.lastLocation) {
           view.dispatchEvent(new CustomEvent('relocate', { detail: view.lastLocation }));
         }
@@ -341,55 +341,64 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
       } catch {}
     }
 
-    // Extrapolate page counts for ALL sections from measured ones.
-    // We can only measure the current section's scrollWidth accurately
-    // (foliate doesn't expose a way to load arbitrary section DOMs).
-    // So we use section byte sizes as proportional weights: if section A
-    // is 2x the bytes of section B, it likely has ~2x the pages.
-    function extrapolateAllPages() {
-      if (!book?.sections || !view) return;
+    // Measure page counts for ALL sections by loading each section's
+    // document via createDocument(), injecting theme CSS, and measuring
+    // scrollWidth in a hidden container. This gives exact page counts.
+    let _precomputeRunning = false;
+    async function precomputeAllPages() {
+      if (_precomputeRunning || !book?.sections || !view) return;
+      _precomputeRunning = true;
 
-      // Collect byte sizes for each section
-      const sizes = [];
-      let totalSize = 0;
-      for (let i = 0; i < book.sections.length; i++) {
-        // Try to get section size from the book metadata
-        const sec = book.sections[i];
-        const size = sec.size || sec.linear?.length || sec.content?.length || 1000;
-        sizes.push(size);
-        totalSize += size;
-      }
+      const vw = view.clientWidth || window.innerWidth;
+      const vh = view.clientHeight || window.innerHeight || 800;
+      if (vw <= 0) { _precomputeRunning = false; return; }
 
-      // Find a measured section to use as reference
-      let refIndex = -1;
-      let refPages = 0;
-      let refSize = 0;
-      for (const k in sectionPageCounts) {
-        const idx = parseInt(k);
-        if (sectionPageCounts[idx] > 1 && sizes[idx] > 0) {
-          refIndex = idx;
-          refPages = sectionPageCounts[idx];
-          refSize = sizes[idx];
-          break;
+      const total = book.sections.length;
+      let measured = 0;
+
+      for (let i = 0; i < total; i++) {
+        if (sectionPageCounts[i]) { measured++; continue; }
+        try {
+          const section = book.sections[i];
+          const doc = await section.createDocument();
+          if (!doc || !doc.body) { sectionPageCounts[i] = 1; measured++; continue; }
+
+          // Create a hidden measuring container with the same column layout
+          const el = document.createElement('div');
+          el.style.cssText =
+            'position:fixed;left:-99999px;top:0;' +
+            'width:' + vw + 'px;height:' + vh + 'px;' +
+            'column-width:' + vw + 'px;column-fill:auto;' +
+            'overflow:hidden;visibility:hidden;';
+          // Apply current theme styles
+          if (currentThemeCSS) {
+            const style = document.createElement('style');
+            style.textContent = currentThemeCSS;
+            el.appendChild(style);
+          }
+          // Clone the section body content
+          el.innerHTML += doc.body.innerHTML;
+          document.body.appendChild(el);
+
+          const sw = el.scrollWidth;
+          sectionPageCounts[i] = Math.max(1, Math.round(sw / vw));
+          measured++;
+
+          document.body.removeChild(el);
+        } catch (err) {
+          post('debug', { msg: 'precompute section ' + i + ' failed: ' + (err?.message || err) });
+          sectionPageCounts[i] = 1;
+          measured++;
         }
       }
 
-      if (refIndex < 0 || refSize <= 0) return; // no reference yet
+      _precomputeRunning = false;
 
-      // pages-per-byte ratio from the reference section
-      const ratio = refPages / refSize;
-
-      // Extrapolate all unmeasured sections
-      for (let i = 0; i < book.sections.length; i++) {
-        if (sectionPageCounts[i]) continue; // keep actual measurements
-        sectionPageCounts[i] = Math.max(1, Math.round(sizes[i] * ratio));
-      }
-
-      let total = 0;
-      for (let i = 0; i < book.sections.length; i++) {
-        total += sectionPageCounts[i] ?? 1;
-      }
-      post('pagesComputed', { totalPages: total, sections: book.sections.length });
+      // Post the final total
+      let totalPages = 0;
+      for (let i = 0; i < total; i++) totalPages += sectionPageCounts[i] ?? 1;
+      post('debug', { msg: 'precompute done: ' + measured + '/' + total + ' sections, ' + totalPages + ' pages' });
+      post('pagesComputed', { totalPages, measured, total });
     }
 
     async function performSearch(query) {
@@ -463,7 +472,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           const secIdx = d.index ?? 0;
 
           // After measuring current section, extrapolate all others
-          extrapolateAllPages();
+          precomputeAllPages();
 
           // Use page counts
           // Also measure current section live if not yet precomputed
@@ -624,7 +633,8 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         // Report ready
         post('ready', {});
 
-        // Page extrapolation happens on first relocate after measuring the current section
+        // Precompute all section page counts after first section renders
+        setTimeout(() => precomputeAllPages(), 1000);
 
         // Report TOC
         if (book.toc) {
