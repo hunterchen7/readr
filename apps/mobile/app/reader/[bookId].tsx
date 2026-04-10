@@ -582,15 +582,40 @@ export default function ReaderScreen() {
                 {progress}%
               </Text>
             </View>
-            {currentPage != null && totalPages != null ? (
-              <View style={styles.progressInfoRow}>
-                <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                  Page {currentPage} of {totalPages}
-                </Text>
-                <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                  {totalPages - currentPage} left
-                </Text>
-              </View>
+            {currentPage != null && totalPages != null && totalPages > 0 ? (
+              <>
+                <View style={styles.progressInfoRow}>
+                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                    Page {currentPage} of {totalPages}
+                  </Text>
+                  <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                    {totalPages - currentPage} left in book
+                  </Text>
+                </View>
+                {(() => {
+                  // Estimate chapter end page from TOC
+                  if (!currentPosition?.chapter || toc.length < 2) return null;
+                  // chapter is stored as number in BookPosition but we set it
+                  // from tocItem.label (string) — cast for comparison
+                  const chapterLabel = String(currentPosition.chapter ?? "");
+                  const idx = toc.findIndex((t) => t.label === chapterLabel);
+                  if (idx < 0) return null;
+                  const chapPages = Math.round(totalPages / toc.length);
+                  const chapEnd = Math.min(totalPages, (idx + 1) * chapPages);
+                  const chapStart = idx * chapPages;
+                  const pagesLeftInChap = Math.max(0, chapEnd - currentPage);
+                  return (
+                    <View style={styles.progressInfoRow}>
+                      <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                        Ch. {idx + 1} of {toc.length}  ·  ends ~p.{chapEnd}
+                      </Text>
+                      <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                        ~{pagesLeftInChap} left in ch.
+                      </Text>
+                    </View>
+                  );
+                })()}
+              </>
             ) : null}
           </Pressable>
         </>
