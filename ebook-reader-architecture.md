@@ -1,1374 +1,1128 @@
-# 📖 Open Source E-Book Reader — Implementation Spec
+# Readr -- Architecture Document
 
-> This document is the single source of truth for building the e-book reader app.
-> It is designed to be followed sequentially by an AI coding agent (Claude Code).
-> Each phase builds on the previous one. Do not skip phases.
+> This document is the source of truth for the Readr e-book reader project.
+> It describes what actually exists in the codebase as of the date below.
+> Planned-but-not-yet-implemented features are called out in a dedicated
+> section at the bottom.
+>
+> **Last updated:** 2026-04-10
 
-## Project Overview
+---
 
-A cross-platform e-book reader with cloud sync, a web dashboard for file management, and AI-powered text-to-speech. Designed for the Supernote A5X's e-ink display but fully usable on phones. Open source and self-hostable.
+## 1. Project Overview
+
+Readr is a cross-platform e-book reader with cloud sync, a web dashboard for
+file management, and optional AI-powered text-to-speech. The mobile reader is
+built for the Supernote A5X e-ink display but works on any Android/iOS phone.
 
 **Targets:**
-- Android APK (sideloaded onto Supernote A5X + phone)
-- iOS app (phone)
-- Web dashboard (file upload/management, accessible from any browser)
 
-**Repository name:** `reader`
+- Android APK (sideloaded onto Supernote A5X, or any Android phone)
+- iOS app (phone/tablet)
+- Web dashboard (file upload, library management, reader)
+
+**Repository name:** `readr`
 **License:** AGPL-3.0 (server), MIT (client packages)
 
 ---
 
-## 1. Monorepo Structure
+## 2. Monorepo Structure
 
 ```
-reader/
-├── apps/
-│   ├── mobile/                    # React Native (Expo) app
-│   │   ├── app/                   # Expo Router file-based routes
-│   │   │   ├── (auth)/            # Auth screens (login, register)
-│   │   │   ├── (tabs)/            # Main tab navigator
-│   │   │   │   ├── library/       # Book library grid/list
-│   │   │   │   ├── reading/       # Active reading stats
-│   │   │   │   └── settings/      # App settings
-│   │   │   └── reader/            # Reader screen (EPUB + PDF)
-│   │   │       └── [bookId].tsx
-│   │   ├── components/
-│   │   │   ├── reader/
-│   │   │   │   ├── EpubReader.tsx
-│   │   │   │   ├── PdfReader.tsx
-│   │   │   │   ├── ReaderControls.tsx
-│   │   │   │   ├── ContextMenu.tsx
-│   │   │   │   ├── TableOfContents.tsx
-│   │   │   │   └── reader-webview/
-│   │   │   │       ├── epub.html   # Injected HTML for foliate-js WebView
-│   │   │   │       └── pdf.html    # Injected HTML for pdf.js WebView
-│   │   │   ├── notes/
-│   │   │   │   ├── HandwritingCanvas.tsx  # Skia-based drawing
-│   │   │   │   ├── TypedNoteEditor.tsx
-│   │   │   │   ├── NotesList.tsx
-│   │   │   │   └── PenToolbar.tsx
-│   │   │   ├── audio/
-│   │   │   │   ├── AudioPlayer.tsx
-│   │   │   │   ├── PlaybackControls.tsx
-│   │   │   │   └── TTSSettings.tsx
-│   │   │   └── ui/                # Shared UI primitives
-│   │   ├── contexts/
-│   │   │   ├── DisplayContext.tsx  # E-ink mode detection + settings
-│   │   │   ├── AuthContext.tsx
-│   │   │   └── SyncContext.tsx
-│   │   ├── hooks/
-│   │   ├── lib/
-│   │   │   ├── sync.ts            # Sync engine client
-│   │   │   ├── storage.ts         # SQLite + file system helpers
-│   │   │   ├── api.ts             # API client (typed)
-│   │   │   └── tts.ts             # TTS client (server + on-device)
-│   │   ├── app.json
-│   │   ├── metro.config.js
-│   │   ├── tsconfig.json
-│   │   └── package.json
-│   │
-│   ├── web/                       # Web dashboard (React + Vite)
-│   │   ├── src/
-│   │   │   ├── routes/
-│   │   │   │   ├── login.tsx
-│   │   │   │   ├── library.tsx
-│   │   │   │   ├── upload.tsx
-│   │   │   │   ├── book.$bookId.tsx
-│   │   │   │   ├── tts-queue.tsx
-│   │   │   │   └── settings.tsx
-│   │   │   ├── components/
-│   │   │   │   ├── BookCard.tsx
-│   │   │   │   ├── UploadDropzone.tsx
-│   │   │   │   ├── MetadataEditor.tsx
-│   │   │   │   └── TTSJobList.tsx
-│   │   │   ├── lib/
-│   │   │   │   └── api.ts         # Shared API client
-│   │   │   ├── main.tsx
-│   │   │   └── index.html
-│   │   ├── vite.config.ts
-│   │   ├── tailwind.config.ts
-│   │   ├── tsconfig.json
-│   │   └── package.json
-│   │
-│   └── server/                    # Backend API (Node.js + Hono)
-│       ├── src/
-│       │   ├── index.ts           # App entry point
-│       │   ├── routes/
-│       │   │   ├── auth.ts        # better-auth routes
-│       │   │   ├── books.ts       # CRUD + upload/download
-│       │   │   ├── progress.ts    # Reading progress
-│       │   │   ├── annotations.ts # Bookmarks, highlights, notes
-│       │   │   ├── sync.ts        # Sync pull/push endpoints
-│       │   │   ├── tts.ts         # TTS job management + audio streaming
-│       │   │   └── lookup.ts      # Lookup provider CRUD
-│       │   ├── db/
-│       │   │   ├── schema.ts      # Drizzle schema (all tables)
-│       │   │   ├── migrate.ts     # Migration runner
-│       │   │   └── index.ts       # DB client export
-│       │   ├── services/
-│       │   │   ├── storage.ts     # R2/S3 abstraction (upload, download, presigned URLs)
-│       │   │   ├── book-processor.ts  # Metadata extraction, cover gen
-│       │   │   ├── tts-queue.ts   # BullMQ job producer
-│       │   │   └── sync.ts        # Sync engine server-side logic
-│       │   ├── middleware/
-│       │   │   ├── auth.ts        # Auth middleware (extract user from session)
-│       │   │   └── user-scope.ts  # Enforce user_id on all queries
-│       │   └── lib/
-│       │       ├── env.ts         # Environment variable validation (zod)
-│       │       └── errors.ts      # Error types + handler
-│       ├── drizzle.config.ts
-│       ├── tsconfig.json
-│       └── package.json
-│
-├── packages/
-│   ├── shared/                    # Shared types + constants
-│   │   ├── src/
-│   │   │   ├── types.ts           # Book, User, Annotation, TTS types
-│   │   │   ├── constants.ts       # Highlight colors, default providers, etc.
-│   │   │   ├── validators.ts      # Zod schemas for API payloads
-│   │   │   └── index.ts
-│   │   ├── tsconfig.json
-│   │   └── package.json
-│   │
-│   └── sync-engine/               # Lightweight sync logic (isomorphic)
-│       ├── src/
-│       │   ├── lww.ts             # Last-write-wins merge for progress
-│       │   ├── set.ts             # Add/tombstone set merge for annotations
-│       │   ├── queue.ts           # Offline change queue
-│       │   └── index.ts
-│       ├── tsconfig.json
-│       └── package.json
-│
-├── services/
-│   └── tts-worker/                # Python TTS inference service
-│       ├── worker.py              # Main worker: pulls from Redis queue
-│       ├── engines/
-│       │   ├── chatterbox_engine.py   # Chatterbox (Turbo + Original)
-│       │   ├── kokoro_engine.py       # Kokoro (fast streaming)
-│       │   └── base.py                # Engine interface
-│       ├── api.py                 # FastAPI server for real-time streaming
-│       ├── requirements.txt
-│       ├── Dockerfile
-│       └── download_models.py     # Script to download model weights on first run
-│
-├── deploy/
-│   ├── docker-compose.yml         # Simple self-host (all-in-one)
-│   ├── docker-compose.dev.yml     # Development with hot reload
-│   ├── docker-compose.gpu.yml     # Override to add TTS worker with GPU
-│   ├── Dockerfile.server          # Node.js API server
-│   ├── Dockerfile.web             # Nginx + static web build
-│   ├── Dockerfile.tts             # Python TTS worker with CUDA
-│   ├── Caddyfile                  # Reverse proxy config
-│   ├── .env.example               # All required env vars documented
-│   └── helm/
-│       └── reader/
-│           ├── Chart.yaml
-│           ├── values.yaml
-│           └── templates/
-│               ├── deployment-api.yaml
-│               ├── deployment-web.yaml
-│               ├── deployment-tts.yaml
-│               ├── service.yaml
-│               ├── ingress.yaml
-│               ├── configmap.yaml
-│               └── secrets.yaml
-│
-├── docs/
-│   ├── self-hosting.md
-│   ├── api.md                     # Auto-generated from OpenAPI
-│   └── contributing.md
-│
-├── turbo.json
-├── pnpm-workspace.yaml
-├── package.json
-├── .gitignore
-├── .env.example
-└── README.md
+readr/
+  apps/
+    mobile/          React Native (Expo SDK 54, expo-router)
+    web/             React + Vite + TanStack Router/Query + Tailwind v4
+    server/          Hono API on Node.js
+  packages/
+    shared/          Shared types, constants, Zod validators
+    sync-engine/     Isomorphic LWW merge, set merge, queue dedup
+  services/
+    tts-worker/      Python FastAPI + BullMQ Redis queue worker
+  deploy/
+    docker-compose.yml       Full production stack
+    docker-compose.dev.yml   Infrastructure only (Postgres, Redis, MinIO)
+    docker-compose.gpu.yml   TTS worker with GPU passthrough
+    Dockerfile.server        API server container
+    Dockerfile.web           Web client (Vite build -> nginx)
+    Caddyfile                Optional reverse proxy
+    nginx.conf               SPA + static asset config for web container
+    CLOUDFLARE.md            Cloudflare tunnel deployment notes
+    OLARES.md                Olares box deployment notes
+  package.json               Root workspace config
+  pnpm-workspace.yaml        Workspace package list
+  turbo.json                 Turborepo task config
+  tsconfig.base.json         Shared TS config
+  CLAUDE.md                  AI coding agent guidelines
 ```
+
+**Tooling:**
+
+| Tool        | Version / Notes                                     |
+|-------------|-----------------------------------------------------|
+| pnpm        | 10.27.0 (corepack-managed)                          |
+| Turborepo   | v2                                                  |
+| TypeScript  | ~5.6, strict mode                                   |
+| React       | 19.1.0 (pnpm override across all workspaces)        |
+| Node.js     | 22 (Dockerfile base image)                          |
 
 ---
 
-## 2. Technology Stack — Exact Packages
+## 3. Authentication
 
-### Monorepo
-```
-pnpm (>=9)
-turborepo (latest)
-typescript (~5.6)
-```
+Readr uses a bearer-token model. There are no passwords, no sessions, and no
+OAuth. The token IS the user's primary key.
 
-### Mobile App (`apps/mobile`)
-```json
-{
-  "dependencies": {
-    "expo": "~52",
-    "expo-router": "~4",
-    "expo-sqlite": "~15",
-    "expo-file-system": "~18",
-    "expo-speech": "~13",                          // OS-native TTS (Siri/Google) for on-device fallback
-    "react-native": "~0.76",
-    "react-native-webview": "^13",
-    "@niccolosalvato/react-native-pdf-viewer": "^1",
-    "@shopify/react-native-skia": "^1",
-    "react-native-track-player": "^4",
-    "react-native-inappbrowser-reborn": "^3",
-    "react-native-gesture-handler": "~2.20",
-    "react-native-reanimated": "~3.16",
-    "zustand": "^5",
-    "@better-auth/expo": "latest",
-    "zod": "^3"
-  }
-}
-```
+### How it works
 
-### Web Dashboard (`apps/web`)
-```json
-{
-  "dependencies": {
-    "react": "^19",
-    "react-dom": "^19",
-    "@tanstack/react-router": "^1",
-    "@tanstack/react-query": "^5",
-    "tailwindcss": "^4",
-    "shadcn": "latest",
-    "tus-js-client": "^4",
-    "@better-auth/react": "latest",
-    "zod": "^3"
-  },
-  "devDependencies": {
-    "vite": "^6",
-    "@vitejs/plugin-react": "^4",
-    "typescript": "~5.6"
-  }
-}
-```
+1. **First launch (mobile):** The client generates a long random alphanumeric
+   string (minimum 16 chars, `[A-Za-z0-9_-]+`), POSTs it to
+   `POST /api/register`, and stores it in SecureStore.
+2. **Every subsequent request:** The client sends `Authorization: Bearer <token>`.
+3. **Server auth middleware** (`apps/server/src/middleware/auth.ts`): Extracts
+   the token from the header, does an index seek on `users.id` (the PK).
+   Returns 401 if the token doesn't match a row.
+4. **Token = user ID:** The `users.id` column is `text`, not UUID. The token
+   string is the primary key. `c.get("userId")` in route handlers returns
+   the token itself.
 
-### Backend API (`apps/server`)
-```json
-{
-  "dependencies": {
-    "hono": "^4",
-    "@hono/node-server": "^1",
-    "better-auth": "latest",
-    "drizzle-orm": "^0.39",
-    "postgres": "^3",
-    "@aws-sdk/client-s3": "^3",
-    "@aws-sdk/s3-request-presigner": "^3",
-    "bullmq": "^5",
-    "ioredis": "^5",
-    "epub-metadata": "^3",
-    "pdf-parse": "^1",
-    "sharp": "^0.33",
-    "zod": "^3",
-    "@hono/zod-openapi": "^0.18",
-    "tus-node-server": "^1"
-  },
-  "devDependencies": {
-    "drizzle-kit": "^0.30",
-    "tsx": "^4",
-    "typescript": "~5.6"
-  }
-}
-```
+### Email flows (optional)
 
-### TTS Worker (`services/tts-worker`)
-```
-# requirements.txt
-chatterbox-tts>=0.1
-kokoro>=0.9
-fastapi>=0.115
-uvicorn>=0.34
-redis>=5
-boto3>=1.35
-pydub>=0.25
-torch>=2.4
-torchaudio>=2.4
-```
+Email is an opt-in recovery/login mechanism powered by **Resend**. The feature
+is entirely disabled when `RESEND_API_KEY` is unset. When enabled:
+
+- **Attach email** (authenticated): `POST /api/email/attach` sends a 6-digit
+  OTP. `POST /api/email/verify` stamps `emailVerifiedAt` on the user row.
+- **Recover token** (unauthenticated): `POST /api/email/recover/start` sends
+  an OTP to a verified email. `POST /api/email/recover/finish` consumes the
+  code and emails the device token to the user.
+- **Email login** (unauthenticated): `POST /api/email/login` sends an OTP.
+  If no verified user exists for the email, one is auto-created with a
+  generated token. `POST /api/email/login/verify` returns the bearer token.
+
+Verification codes are 6-digit zero-padded strings, cryptographically random,
+stored in the `email_verifications` table, and expire after 15 minutes.
+
+### Rate limiting
+
+In-memory token-bucket rate limiter (`apps/server/src/middleware/rate-limit.ts`):
+
+| Preset    | Window   | Max requests | Key                    |
+|-----------|----------|--------------|------------------------|
+| `api`     | 1 minute | 120          | userId or IP           |
+| `upload`  | 1 hour   | 20           | userId or IP           |
+
+Rate limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset`) are set on every response. Returns 429 when exceeded.
 
 ---
 
-## 3. Environment Variables
+## 4. Database
+
+**Engine:** PostgreSQL 16 (Alpine image in Docker)
+**ORM:** Drizzle ORM 0.41+ with `postgres` driver (postgres.js)
+**Schema file:** `apps/server/src/db/schema.ts`
+**Connection:** `apps/server/src/db/index.ts`
+
+### Tables
+
+#### `users`
+
+| Column            | Type        | Notes                                      |
+|-------------------|-------------|---------------------------------------------|
+| `id`              | text PK     | The bearer token itself                     |
+| `name`            | text        | Optional display name                       |
+| `email`           | text        | Optional recovery email (not unique)        |
+| `email_verified_at` | timestamp | Stamped on successful OTP verification     |
+| `storage_quota_mb`  | integer   | Default 1024                               |
+| `storage_used_mb`   | integer   | Default 0, updated on upload/delete        |
+| `created_at`      | timestamp   | DEFAULT now()                               |
+| `updated_at`      | timestamp   | DEFAULT now()                               |
+
+#### `email_verifications`
+
+| Column       | Type        | Notes                                           |
+|--------------|-------------|-------------------------------------------------|
+| `id`         | uuid PK     | DEFAULT random                                  |
+| `email`      | text        | NOT NULL                                        |
+| `code`       | text        | 6-digit zero-padded                             |
+| `purpose`    | text        | `'attach'` / `'recover'` / `'login'`            |
+| `user_id`    | text        | Set for attach, null for recover until consumed  |
+| `expires_at` | timestamp   | 15 minutes from creation                        |
+| `consumed_at`| timestamp   | Stamped on use                                  |
+| `created_at` | timestamp   | DEFAULT now()                                   |
+
+#### `files`
+
+Content-addressable file storage. One row per SHA-256 hash of book bytes,
+shared across all users. Metadata is extracted once on first upload.
+
+| Column           | Type     | Notes                                        |
+|------------------|----------|----------------------------------------------|
+| `id`             | uuid PK  | DEFAULT random                               |
+| `sha256`         | text     | UNIQUE, NOT NULL                             |
+| `s3_key`         | text     | `files/<sha256>.<format>`                    |
+| `cover_key`      | text     | `covers/<sha256>.jpg` (nullable)             |
+| `size`           | bigint   | File size in bytes                           |
+| `format`         | text     | `'epub'` or `'pdf'`                          |
+| `ref_count`      | integer  | Number of books rows pointing here           |
+| `title`          | text     | Extracted from EPUB OPF / PDF Info dict      |
+| `author`         | text     | Extracted from Dublin Core / PDF Info dict    |
+| `language`       | text     | Extracted metadata                           |
+| `total_chapters` | integer  | EPUB spine itemref count / PDF page count    |
+| `metadata`       | jsonb    | Additional raw metadata                      |
+| `created_at`     | timestamp| DEFAULT now()                                |
+
+#### `books`
+
+Per-user reference to a file. User-facing title/author come from the joined
+`files` row with optional per-user overrides via `title_override` /
+`author_override`.
+
+| Column           | Type     | Notes                                        |
+|------------------|----------|----------------------------------------------|
+| `id`             | uuid PK  | DEFAULT random                               |
+| `user_id`        | text FK  | -> users.id, CASCADE delete                  |
+| `file_id`        | uuid FK  | -> files.id                                  |
+| `title_override` | text     | Per-user rename, null = inherit from files    |
+| `author_override`| text     | Per-user rename, null = inherit from files    |
+| `uploaded_at`    | timestamp| DEFAULT now()                                |
+
+**Indexes:** `books_user_idx(user_id)`, `books_user_file_idx(user_id, file_id)` UNIQUE
+
+#### `reading_progress`
+
+| Column      | Type     | Notes                                             |
+|-------------|----------|---------------------------------------------------|
+| `id`        | uuid PK  | DEFAULT random                                    |
+| `book_id`   | uuid FK  | -> books.id, CASCADE delete                       |
+| `user_id`   | text FK  | -> users.id, CASCADE delete                       |
+| `device_id` | text     | NOT NULL                                          |
+| `position`  | jsonb    | `{ chapter?, cfi?, page?, percentage }`           |
+| `updated_at`| timestamp| DEFAULT now()                                     |
+
+**Unique index:** `progress_unique_idx(book_id, user_id, device_id)`
+
+#### `bookmarks`
+
+| Column      | Type      | Notes                                       |
+|-------------|-----------|---------------------------------------------|
+| `id`        | uuid PK   | DEFAULT random                              |
+| `book_id`   | uuid FK   | -> books.id, CASCADE delete                 |
+| `user_id`   | text FK   | -> users.id, CASCADE delete                 |
+| `position`  | jsonb     | BookPosition object                         |
+| `label`     | text      | Optional user label                         |
+| `created_at`| timestamp | DEFAULT now()                               |
+| `deleted_at`| timestamp | Soft-delete tombstone                       |
+
+#### `highlights`
+
+| Column       | Type      | Notes                                      |
+|--------------|-----------|--------------------------------------------|
+| `id`         | uuid PK   | DEFAULT random                             |
+| `book_id`    | uuid FK   | -> books.id, CASCADE delete                |
+| `user_id`    | text FK   | -> users.id, CASCADE delete                |
+| `cfi_range`  | text      | EPUB CFI range string, NOT NULL            |
+| `text_content`| text     | Selected text                              |
+| `note`       | text      | Optional note attached to highlight        |
+| `color`      | text      | Default `'yellow'`, one of 5 colors        |
+| `created_at` | timestamp | DEFAULT now()                              |
+| `deleted_at` | timestamp | Soft-delete tombstone                      |
+
+**Highlight colors:** `yellow`, `green`, `blue`, `pink`, `purple`
+
+#### `notes`
+
+| Column       | Type      | Notes                                      |
+|--------------|-----------|--------------------------------------------|
+| `id`         | uuid PK   | DEFAULT random                             |
+| `book_id`    | uuid FK   | -> books.id, CASCADE delete                |
+| `user_id`    | text FK   | -> users.id, CASCADE delete                |
+| `position`   | jsonb     | BookPosition object                        |
+| `note_type`  | text      | `'typed'` or `'handwritten'`               |
+| `text_content`| text     | Text for typed notes                       |
+| `strokes`    | jsonb     | Array of `{ points[], color, width }`      |
+| `pen_config` | jsonb     | `{ color, width }`                         |
+| `created_at` | timestamp | DEFAULT now()                              |
+| `updated_at` | timestamp | DEFAULT now()                              |
+| `deleted_at` | timestamp | Soft-delete tombstone                      |
+
+Stroke points contain `{ x, y, pressure }`. Handwriting strokes are rendered
+client-side as SVG paths.
+
+#### `lookup_providers`
+
+Per-user configurable search/lookup URLs shown in the reader context menu.
+
+| Column        | Type     | Notes                                       |
+|---------------|----------|---------------------------------------------|
+| `id`          | uuid PK  | DEFAULT random                              |
+| `user_id`     | text FK  | -> users.id, CASCADE delete                 |
+| `name`        | text     | NOT NULL                                    |
+| `icon`        | text     | Emoji or icon identifier                    |
+| `url_template`| text     | Must contain `{{query}}`                    |
+| `enabled`     | boolean  | Default true                                |
+| `sort_order`  | integer  | Default 0                                   |
+| `is_builtin`  | boolean  | Default false                               |
+
+**Built-in providers** (defined in `packages/shared/src/constants.ts`):
+Google, Wikipedia, Google Translate, Merriam-Webster Dictionary.
+
+#### `tts_jobs`
+
+| Column          | Type      | Notes                                    |
+|-----------------|-----------|------------------------------------------|
+| `id`            | uuid PK   | DEFAULT random                           |
+| `book_id`       | uuid FK   | -> books.id, CASCADE delete              |
+| `user_id`       | text FK   | -> users.id, CASCADE delete              |
+| `status`        | text      | `queued` / `processing` / `done` / `failed` |
+| `engine`        | text      | Default `'chatterbox-turbo'`             |
+| `chapters_total`| integer   | Total chapters to process                |
+| `chapters_done` | integer   | Default 0                                |
+| `voice_config`  | jsonb     | `{ voiceId?, exaggeration?, speed? }`    |
+| `error`         | text      | Error message if failed                  |
+| `created_at`    | timestamp | DEFAULT now()                            |
+| `completed_at`  | timestamp | Stamped when all chapters are done       |
+
+#### `tts_audio_chunks`
+
+| Column         | Type     | Notes                                      |
+|----------------|----------|--------------------------------------------|
+| `id`           | uuid PK  | DEFAULT random                             |
+| `job_id`       | uuid FK  | -> tts_jobs.id, CASCADE delete             |
+| `chapter_index`| integer  | NOT NULL                                   |
+| `audio_key`    | text     | S3 key, NOT NULL                           |
+| `duration_ms`  | integer  | Audio duration in milliseconds             |
+| `format`       | text     | Default `'opus'`                           |
+
+#### `collections`
+
+| Column       | Type      | Notes                                      |
+|--------------|-----------|--------------------------------------------|
+| `id`         | uuid PK   | DEFAULT random                             |
+| `user_id`    | text FK   | -> users.id, CASCADE delete                |
+| `name`       | text      | NOT NULL                                   |
+| `description`| text      | Optional                                   |
+| `color`      | text      | Optional color identifier                  |
+| `sort_order` | integer   | Default 0                                  |
+| `created_at` | timestamp | DEFAULT now()                              |
+
+#### `book_collections`
+
+Join table between books and collections.
+
+| Column         | Type      | Notes                                    |
+|----------------|-----------|------------------------------------------|
+| `id`           | uuid PK   | DEFAULT random                           |
+| `book_id`      | uuid FK   | -> books.id, CASCADE delete              |
+| `collection_id`| uuid FK   | -> collections.id, CASCADE delete        |
+| `added_at`     | timestamp | DEFAULT now()                            |
+
+**Unique index:** `book_collection_unique_idx(book_id, collection_id)`
+
+#### `reading_sessions`
+
+| Column            | Type      | Notes                                  |
+|-------------------|-----------|----------------------------------------|
+| `id`              | uuid PK   | DEFAULT random                         |
+| `user_id`         | text FK   | -> users.id, CASCADE delete            |
+| `book_id`         | uuid FK   | -> books.id, CASCADE delete            |
+| `started_at`      | timestamp | NOT NULL                               |
+| `ended_at`        | timestamp | Nullable                               |
+| `duration_minutes`| integer   | Session length                         |
+| `pages_read`      | integer   | Nullable                               |
+| `start_percentage`| integer   | 0-100, nullable                        |
+| `end_percentage`  | integer   | 0-100, nullable                        |
+
+#### `sync_log`
+
+Append-only log of all sync operations. Used by the pull endpoint to send
+changes to clients.
+
+| Column       | Type      | Notes                                       |
+|--------------|-----------|---------------------------------------------|
+| `id`         | serial PK | Auto-incrementing                            |
+| `user_id`    | text FK   | -> users.id, CASCADE delete                  |
+| `entity_type`| text      | `bookmark` / `highlight` / `note` / `progress` |
+| `entity_id`  | uuid      | NOT NULL                                     |
+| `operation`  | text      | `create` / `update` / `delete`               |
+| `payload`    | jsonb     | Full entity payload                          |
+| `device_id`  | text      | Origin device                                |
+| `timestamp`  | timestamp | DEFAULT now(), NOT NULL                      |
+
+**Index:** `sync_log_user_ts_idx(user_id, timestamp)`
+
+### Migrations
+
+Drizzle Kit is used for schema management:
 
 ```bash
-# .env.example
-
-# === Database ===
-DATABASE_URL=postgresql://reader:password@localhost:5432/reader
-
-# === Redis ===
-REDIS_URL=redis://localhost:6379
-
-# === S3-Compatible Storage (Cloudflare R2) ===
-S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-S3_BUCKET=reader-files
-S3_ACCESS_KEY=<r2-access-key-id>
-S3_SECRET_KEY=<r2-secret-access-key>
-S3_REGION=auto                           # R2 uses "auto"
-S3_FORCE_PATH_STYLE=true                # Required for R2
-
-# === Auth (better-auth) ===
-BETTER_AUTH_SECRET=<random-32-char-string>
-BETTER_AUTH_URL=http://localhost:3000     # Backend URL (internal)
-PUBLIC_URL=http://localhost               # Public-facing URL (Tailscale hostname in prod, e.g. https://my-server.tailnet-abc.ts.net)
-BETTER_AUTH_TRUSTED_ORIGINS=http://localhost,http://localhost:8080,exp://localhost:8081
-
-# === TTS Worker ===
-TTS_ENABLED=true                          # Set false if no GPU available
-TTS_DEFAULT_ENGINE=chatterbox-turbo       # chatterbox | chatterbox-turbo | kokoro
-TTS_MODEL_DIR=/models                     # Where model weights are stored
-TTS_STREAM_ENGINE=kokoro                  # Engine used for real-time streaming
-
-# === App Config ===
-PORT=3000
-NODE_ENV=development
-LOG_LEVEL=debug
-MAX_UPLOAD_SIZE_MB=500
-DEFAULT_STORAGE_QUOTA_MB=1024            # 1 GB default for new users, overridable per user in DB
+pnpm --filter @readr/server db:generate   # Generate migration SQL
+pnpm --filter @readr/server db:migrate    # Apply migrations
+pnpm --filter @readr/server db:push       # Push schema directly (dev)
+pnpm --filter @readr/server db:studio     # Open Drizzle Studio
 ```
 
 ---
 
-## 4. Database Schema (Drizzle)
+## 5. API Server
 
-File: `apps/server/src/db/schema.ts`
+**Framework:** Hono v4 on Node.js 22, served via `@hono/node-server`
+**Entry point:** `apps/server/src/index.ts`
+**Run command (dev):** `tsx watch --env-file=.env src/index.ts`
 
-```typescript
-import { pgTable, uuid, text, timestamp, integer, bigint, jsonb, boolean, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
+### Middleware stack (applied in order)
 
-export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  email: text("email").unique().notNull(),
-  name: text("name"),
-  emailVerified: boolean("email_verified").default(false),
-  image: text("image"),
-  storageQuotaMb: integer("storage_quota_mb").default(1024),  // 1 GB default, admin can increase per user
-  storageUsedMb: integer("storage_used_mb").default(0),       // Tracked on upload/delete
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+1. `hono/logger` -- Request logging on all routes
+2. `hono/cors` -- Wildcard CORS for `/api/*` (bearer token, not cookies)
+3. **Auth middleware** -- Applied to `/api/*` AFTER public routes
+4. **Rate limiter** -- Applied to `/api/*` AFTER auth
 
-// better-auth requires these tables — the exact schema depends on
-// the better-auth version. Use `npx @better-auth/cli generate` to
-// produce the session, account, and verification tables. Merge them
-// into this file after generation.
+### Route map
 
-// Content-addressable file storage — deduplicates across all users.
-// Multiple books can reference the same file if the content hash matches.
-export const files = pgTable("files", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  sha256: text("sha256").unique().notNull(),    // SHA-256 hash of file content
-  s3Key: text("s3_key").notNull(),              // S3 object key: files/{sha256}.{ext}
-  coverKey: text("cover_key"),                  // S3 key: covers/{sha256}.jpg
-  size: bigint("size", { mode: "number" }).notNull(),
-  format: text("format").notNull(),             // 'epub' | 'pdf'
-  refCount: integer("ref_count").default(1),    // Number of books referencing this file
-  createdAt: timestamp("created_at").defaultNow(),
-});
+Public (no auth required):
 
-export const books = pgTable("books", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  fileId: uuid("file_id").references(() => files.id).notNull(),  // Reference to deduplicated file
-  title: text("title"),
-  author: text("author"),
-  language: text("language"),
-  totalChapters: integer("total_chapters"),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
-  uploadedAt: timestamp("uploaded_at").defaultNow(),
-}, (table) => [
-  index("books_user_idx").on(table.userId),
-  uniqueIndex("books_user_file_idx").on(table.userId, table.fileId),  // Prevent same user adding same file twice
-]);
+| Method | Path                         | Handler file      | Description                        |
+|--------|------------------------------|-------------------|------------------------------------|
+| GET    | `/health`                    | index.ts          | Health check, version, uptime      |
+| POST   | `/api/register`              | register.ts       | Create user row (idempotent)       |
+| GET    | `/api/email/status`          | email.ts          | Is email feature enabled?          |
+| POST   | `/api/email/login`           | email.ts          | Start email login (send OTP)       |
+| POST   | `/api/email/login/verify`    | email.ts          | Verify OTP, returns bearer token   |
+| POST   | `/api/email/recover/start`   | email.ts          | Start token recovery (send OTP)    |
+| POST   | `/api/email/recover/finish`  | email.ts          | Verify OTP, emails token to user   |
 
-export const readingProgress = pgTable("reading_progress", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }).notNull(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  deviceId: text("device_id").notNull(),
-  position: jsonb("position").notNull().$type<{
-    chapter?: number;
-    cfi?: string;          // EPUB CFI string
-    page?: number;         // PDF page number
-    percentage: number;    // 0-100 overall progress
-  }>(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-}, (table) => [
-  uniqueIndex("progress_unique_idx").on(table.bookId, table.userId, table.deviceId),
-]);
+Authenticated (require `Authorization: Bearer <token>`):
 
-export const bookmarks = pgTable("bookmarks", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }).notNull(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  position: jsonb("position").notNull(),
-  label: text("label"),
-  createdAt: timestamp("created_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"),            // Soft delete for CRDT tombstones
-});
+| Method | Path                                    | Handler file      | Description                              |
+|--------|-----------------------------------------|-------------------|------------------------------------------|
+| GET    | `/api/books`                            | books.ts          | List library (sort, search, format filter)|
+| POST   | `/api/books`                            | books.ts          | Upload book (multipart/form-data)        |
+| GET    | `/api/books/:id`                        | books.ts          | Book detail + signed download/cover URLs |
+| PATCH  | `/api/books/:id/metadata`               | books.ts          | Per-user rename (title/author override)  |
+| DELETE | `/api/books/:id`                        | books.ts          | Delete from library, decrement refcount  |
+| GET    | `/api/books/:id/progress`               | progress.ts       | Reading positions for a book             |
+| PUT    | `/api/books/:id/progress`               | progress.ts       | Upsert reading position (per device)     |
+| GET    | `/api/books/:id/annotations`            | annotations.ts    | All annotations (bookmarks+highlights+notes) |
+| POST   | `/api/books/:id/bookmarks`              | annotations.ts    | Create bookmark                          |
+| POST   | `/api/books/:id/highlights`             | annotations.ts    | Create highlight                         |
+| POST   | `/api/books/:id/notes`                  | annotations.ts    | Create note                              |
+| PATCH  | `/api/annotations/:id`                  | annotations.ts    | Update any annotation type               |
+| DELETE | `/api/annotations/:id`                  | annotations.ts    | Soft-delete any annotation type          |
+| GET    | `/api/sync/changes`                     | sync.ts           | Pull changes since timestamp             |
+| POST   | `/api/sync/push`                        | sync.ts           | Push local changes                       |
+| GET    | `/api/tts/status`                       | tts.ts            | TTS availability, engines, queue depth   |
+| POST   | `/api/tts/generate`                     | tts.ts            | Queue batch TTS job                      |
+| GET    | `/api/tts/jobs`                         | tts.ts            | List user's TTS jobs                     |
+| GET    | `/api/tts/jobs/:id`                     | tts.ts            | Job detail + audio chunks                |
+| DELETE | `/api/tts/jobs/:id`                     | tts.ts            | Delete job and audio chunks              |
+| GET    | `/api/tts/audio/:bookId/:chapter`       | tts.ts            | Presigned URL for chapter audio          |
+| POST   | `/api/tts/stream`                       | tts.ts            | Proxy streaming TTS via Kokoro           |
+| GET    | `/api/collections`                      | collections.ts    | List collections                         |
+| POST   | `/api/collections`                      | collections.ts    | Create collection                        |
+| PATCH  | `/api/collections/:id`                  | collections.ts    | Update collection                        |
+| DELETE | `/api/collections/:id`                  | collections.ts    | Delete collection + join rows            |
+| POST   | `/api/collections/:id/books`            | collections.ts    | Add book to collection                   |
+| DELETE | `/api/collections/:id/books/:bookId`    | collections.ts    | Remove book from collection              |
+| GET    | `/api/collections/:id/books`            | collections.ts    | List books in collection                 |
+| POST   | `/api/stats/sessions`                   | stats.ts          | Log a reading session                    |
+| GET    | `/api/stats/summary`                    | stats.ts          | Total time, streak, weekly, book count   |
+| GET    | `/api/stats/daily`                      | stats.ts          | Daily reading minutes (last 30 days)     |
+| GET    | `/api/export/annotations/:bookId`       | export.ts         | Export annotations (markdown or JSON)    |
+| POST   | `/api/email/attach`                     | email.ts          | Attach recovery email (send OTP)         |
+| POST   | `/api/email/verify`                     | email.ts          | Verify attach OTP                        |
 
-export const highlights = pgTable("highlights", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }).notNull(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  cfiRange: text("cfi_range").notNull(),
-  textContent: text("text_content"),
-  note: text("note"),
-  color: text("color").default("yellow"),        // yellow | green | blue | pink | purple
-  createdAt: timestamp("created_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"),
-});
+### Services
 
-export const notes = pgTable("notes", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }).notNull(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  position: jsonb("position").notNull(),
-  noteType: text("note_type").notNull(),          // 'typed' | 'handwritten'
-  textContent: text("text_content"),              // For typed notes
-  strokes: jsonb("strokes").$type<{
-    points: { x: number; y: number; pressure: number }[];
-    color: string;
-    width: number;
-  }[]>(),
-  penConfig: jsonb("pen_config").$type<{ color: string; width: number }>(),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"),
-});
+**`apps/server/src/services/storage.ts`** -- S3-compatible object storage
+via `@aws-sdk/client-s3`. Provides `uploadFile`, `getPresignedDownloadUrl`,
+`deleteFile`. When `S3_PUBLIC_ENDPOINT` is set, returns direct URLs instead
+of signed URLs (used for publicly-readable buckets behind CF tunnel).
 
-export const lookupProviders = pgTable("lookup_providers", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  name: text("name").notNull(),
-  icon: text("icon"),                             // Emoji or icon key
-  urlTemplate: text("url_template").notNull(),    // Must contain {{query}}
-  enabled: boolean("enabled").default(true),
-  sortOrder: integer("sort_order").default(0),
-  isBuiltin: boolean("is_builtin").default(false),
-});
+**`apps/server/src/services/book-processor.ts`** -- Metadata extraction:
+- EPUB: JSZip + fast-xml-parser. Reads `META-INF/container.xml` to find the
+  OPF, parses Dublin Core metadata (title, author, language), counts spine
+  itemrefs for chapter count, extracts cover image (EPUB 3 `properties="cover-image"`,
+  EPUB 2 `<meta name="cover">`, or heuristic ID match).
+- PDF: `pdf-parse` for Info dict, `pdftoppm` (poppler-utils, installed in
+  Docker image) for page-1 cover rendering.
+- Covers are normalized to 600x900 progressive JPEG via `sharp`.
+- Content hashing via SHA-256 for deduplication.
 
-export const ttsJobs = pgTable("tts_jobs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookId: uuid("book_id").references(() => books.id, { onDelete: "cascade" }).notNull(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  status: text("status").notNull().default("queued"), // queued | processing | done | failed
-  engine: text("engine").default("chatterbox-turbo"),
-  chaptersTotal: integer("chapters_total"),
-  chaptersDone: integer("chapters_done").default(0),
-  voiceConfig: jsonb("voice_config").$type<{
-    voiceId?: string;
-    exaggeration?: number;    // 0-1, Chatterbox emotion control
-    speed?: number;           // 0.5-2.0
-  }>(),
-  error: text("error"),
-  createdAt: timestamp("created_at").defaultNow(),
-  completedAt: timestamp("completed_at"),
-});
+**`apps/server/src/services/email.ts`** -- Resend SDK wrapper. Feature-gated
+on `RESEND_API_KEY` + `RESEND_FROM` env vars.
 
-export const ttsAudioChunks = pgTable("tts_audio_chunks", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  jobId: uuid("job_id").references(() => ttsJobs.id, { onDelete: "cascade" }).notNull(),
-  chapterIndex: integer("chapter_index").notNull(),
-  audioKey: text("audio_key").notNull(),          // S3 key
-  durationMs: integer("duration_ms"),
-  format: text("format").default("opus"),
-});
+**`apps/server/src/services/tts-queue.ts`** -- BullMQ queue named `tts`.
+Creates DB job row and enqueues per-chapter sub-jobs.
 
-export const syncLog = pgTable("sync_log", {
-  id: serial("id").primaryKey(),
-  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  entityType: text("entity_type").notNull(),      // bookmark | highlight | note | progress
-  entityId: uuid("entity_id").notNull(),
-  operation: text("operation").notNull(),          // create | update | delete
-  payload: jsonb("payload"),
-  deviceId: text("device_id"),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
-}, (table) => [
-  index("sync_log_user_ts_idx").on(table.userId, table.timestamp),
-]);
+**`apps/server/src/lib/redis.ts`** -- IORedis connection with
+`maxRetriesPerRequest: null` (required by BullMQ).
+
+**`apps/server/src/lib/errors.ts`** -- `AppError` class with status code.
+Helpers: `notFound`, `badRequest`, `forbidden`, `conflict`, `payloadTooLarge`.
+
+**`apps/server/src/middleware/user-scope.ts`** -- `scopeToUser` object with
+per-table Drizzle `eq()` helpers. Every data query must use these to ensure
+user isolation.
+
+### Book upload flow
+
+1. Client sends `POST /api/books` with `multipart/form-data` file field.
+2. Server validates format (epub/pdf only), checks size (<= MAX_UPLOAD_SIZE_MB),
+   checks storage quota.
+3. Computes SHA-256 hash of the file buffer.
+4. If a `files` row with that hash exists: reuse it, increment `ref_count`.
+   Reject if user already has a `books` row pointing at this file (409 Conflict).
+5. If new file: upload to S3 (`files/<sha256>.<format>`), extract metadata,
+   upload cover (`covers/<sha256>.jpg`), insert `files` row.
+6. Insert `books` row linking user to file.
+7. Update user's `storage_used_mb`.
+8. Return full book object with presigned download and cover URLs.
+
+### Book delete flow
+
+1. Delete the `books` row.
+2. Decrement `files.ref_count`.
+3. If ref_count reaches 0: delete S3 objects and the `files` row.
+4. Decrease user's `storage_used_mb`.
+
+---
+
+## 6. Mobile App
+
+**Framework:** React Native with Expo SDK 54, expo-router (file-based routing)
+**Entry point:** `apps/mobile/app/_layout.tsx`
+
+### Screen structure
+
+```
+app/
+  _layout.tsx            Root layout (QueryClient, SafeAreaProvider, DisplayProvider)
+  index.tsx              Auth redirect
+  (auth)/
+    _layout.tsx          Auth group layout
+    login.tsx            Login screen (server URL + token or email login)
+  (tabs)/
+    _layout.tsx          Tab bar layout
+    library.tsx          Book grid/list with search, sort, format filter
+    stats.tsx            Reading statistics dashboard
+    settings.tsx         Settings (account, display, e-ink toggle, email attach)
+  book/
+    [bookId].tsx         Book detail screen (metadata, download, delete, annotations)
+  reader/
+    [bookId].tsx         Full-screen reader (WebView-based)
+```
+
+### Reader architecture
+
+The reader is a full-screen WebView that loads an HTML document generated by
+`epub-html.ts` or `pdf-html.ts`. The rendering engine is **foliate-js**,
+bundled as an IIFE via esbuild (zero CDN dependencies).
+
+**Key files:**
+- `apps/mobile/components/reader/epub-html.ts` -- Generates the reader HTML
+- `apps/mobile/components/reader/pdf-html.ts` -- PDF reader HTML
+- `apps/mobile/app/reader/[bookId].tsx` -- Reader screen with WebView
+
+**WebView bridge protocol:** Simple JSON `postMessage` in both directions.
+
+Messages from WebView to React Native (`window.ReactNativeWebView.postMessage`):
+- `ready` -- Book loaded, sends TOC and metadata
+- `relocated` -- Position changed (CFI, percentage, chapter, page numbers)
+- `tocReady` -- Table of contents parsed
+- `selection` -- Text selected (CFI range, text, coordinates)
+- `tap` -- User tapped (coordinates, zone: left/center/right)
+- `search` -- Search results
+- `pageText` -- Current page text (for TTS)
+
+Messages from React Native to WebView (`webViewRef.injectJavaScript`):
+- `setTheme` -- Apply reader theme (colors, font, margins, line height, weight)
+- `goToLocation` -- Navigate to CFI or fraction
+- `goToChapter` -- Navigate to TOC href
+- `prevPage` / `nextPage` -- Turn pages
+- `search` / `clearSearch` -- Full-text search
+- `addHighlight` / `removeHighlight` -- Manage highlights in the DOM
+- `getPageText` -- Request current page text for TTS
+
+**17 bundled Google Fonts** (loaded from `android_asset/fonts/` via `@font-face`):
+Literata, Lora, Merriweather, EB Garamond, Source Serif 4, Noto Serif,
+Crimson Text, Libre Baskerville, Playfair Display, PT Serif, Roboto Slab,
+Roboto, Open Sans, Inter, Nunito, Fira Mono, IBM Plex Mono.
+Plus OpenDyslexic support declared in font family options.
+
+**6 theme presets** (in `SettingsDropdown.tsx`):
+Light (#ffffff/#111111), Sepia (#f8f0e3/#5b4636), Canvas (#d4c5a9/#3a2e1e),
+Gray (#2a2a2a/#cccccc), Dark (#1a1a2e/#e0e0e0), Black (#000000/#c8c8c8).
+
+**ReaderTheme properties:**
+- `bg`, `fg` -- Background/foreground colors
+- `fontSize` -- 12-32px range
+- `lineHeight` -- 1.2-2.4 range (0.1 step)
+- `fontFamily` -- One of the 17+ bundled fonts or system defaults
+- `margin` -- Horizontal margin, 16-128px (8px step)
+- `marginV` -- Vertical margin
+- `tapToTurn` -- Toggle tap-to-turn mode
+- `fontWeight` -- 300 (Light), 400 (Regular), 500 (Medium), 700 (Bold)
+- `brightness` -- 0..1 or null (system)
+
+Reader preferences are persisted to SecureStore (per-device, not synced).
+
+### Components
+
+| Component              | File                                         | Description                              |
+|------------------------|----------------------------------------------|------------------------------------------|
+| ReaderControls         | `components/reader/ReaderControls.tsx`        | Top/bottom bars with progress, chapter   |
+| SettingsDropdown       | `components/reader/SettingsDropdown.tsx`      | Font, theme, margin, spacing settings    |
+| TocDrawer              | `components/reader/TocDrawer.tsx`             | TOC with chapters, bookmarks, notes tabs |
+| ContextMenu            | `components/reader/ContextMenu.tsx`           | Text selection actions (highlight, note, look up) |
+| NotesPanel             | `components/reader/NotesPanel.tsx`            | Create/edit notes (typed or handwriting) |
+| GotoDialog             | `components/reader/GotoDialog.tsx`            | Jump to page/percentage dialog           |
+| TtsBar                 | `components/reader/TtsBar.tsx`                | TTS playback controls                    |
+| HandwritingCanvas      | `components/notes/HandwritingCanvas.tsx`      | SVG-based handwriting input with eraser  |
+| TypedNoteEditor        | `components/notes/TypedNoteEditor.tsx`        | Text note input                          |
+| AudioPlayer            | `components/audio/AudioPlayer.tsx`            | Audio playback UI                        |
+| OnDeviceTTS            | `components/audio/OnDeviceTTS.tsx`            | On-device TTS via expo-speech            |
+
+### State management
+
+**Zustand stores:**
+- `lib/auth-store.ts` -- `useAuthStore`: isAuthenticated, serverUrl, token,
+  checkSession, signOut, loginDirect
+- `lib/tts-store.ts` -- `useTtsStore`: TTS state (idle/playing/paused), rate,
+  pitch, speak/pause/resume/stop via expo-speech. Splits text on sentence
+  boundaries to work within Android's 4000-char TTS buffer.
+- `lib/sync-status.ts` -- `useSyncStatus`: Sync state UI (syncing, last result)
+- `lib/library-prefs.ts` -- `useLibraryPrefs`: Sort order, view mode persistence
+- `contexts/DisplayContext.tsx` -- `useDisplayStore`: E-ink detection and display
+  settings (isEink, animationsEnabled, highContrast, minTapTarget, scrollMode)
+
+**React Query:** Used for all server data fetching (book list, book detail,
+annotations, stats). Configured with 1-minute stale time and 1 retry.
+
+### Local database
+
+**Engine:** expo-sqlite via `openDatabaseSync` (required for Android 16 / API 36
+compatibility -- `openDatabaseAsync` NPEs on this API level).
+
+**File:** `apps/mobile/lib/local-db.ts`
+
+**Tables:**
+
+| Table              | Purpose                                         |
+|--------------------|-------------------------------------------------|
+| `reading_progress` | Per-device reading position per book             |
+| `bookmarks`        | Bookmarks with soft-delete                       |
+| `highlights`       | Highlights with CFI range and color              |
+| `notes`            | Typed and handwritten notes with strokes         |
+| `sync_queue`       | Outbound change queue for push sync              |
+| `downloaded_books` | Locally-cached book binaries for offline reading |
+
+All annotation mutations write to both the local table and `sync_queue`
+simultaneously. The queue is drained during sync pushes.
+
+### Offline book cache
+
+`apps/mobile/lib/book-cache.ts` manages downloading book binaries for offline
+reading. Uses `expo-file-system/legacy` for download with progress callbacks.
+Books are stored at `<documentDirectory>/books/<bookId>.<format>`.
+
+### Offline dictionary
+
+`apps/mobile/lib/dictionary.ts` provides an offline English dictionary with
+~108,000 words across 27 JSON files (~9MB total) bundled in
+`apps/mobile/assets/dictionary/`. Lazy-loads per first letter, caches in
+memory. Includes basic stemming for inflections (plurals, -ing, -ed, -ly).
+
+### Sync engine (client side)
+
+`apps/mobile/lib/sync.ts` runs the full sync cycle:
+
+1. **Pull:** `GET /api/sync/changes?since=<timestamp>` fetches remote changes.
+   Applies them to local SQLite tables.
+2. **Push:** Reads `sync_queue`, deduplicates via `@readr/sync-engine`, POSTs
+   to `/api/sync/push`. Removes accepted entries from the queue.
+3. **Timestamp:** Stores last sync timestamp in SecureStore.
+
+Sync runs automatically on app open when authenticated.
+
+### E-ink support
+
+`contexts/DisplayContext.tsx` auto-detects e-ink devices (Supernote/Ratta,
+ONYX/BOOX, Kobo, Kindle) by checking `NativeModules.PlatformConstants` for
+brand/manufacturer/model strings.
+
+When `isEink: true`:
+- Animations disabled
+- High contrast mode
+- Larger tap targets (64px vs 48px)
+- Paginated scroll mode
+- Reader uses the EINK_THEME preset (larger font, heavier weight, more margin)
+
+---
+
+## 7. Web App
+
+**Framework:** React 19 + Vite 6 + TanStack Router v1 + TanStack Query v5 +
+Tailwind CSS v4
+**Entry point:** `apps/web/src/main.tsx`
+**Icons:** lucide-react
+
+### Route map
+
+```
+src/routes/
+  __root.tsx            Root layout
+  index.tsx             Landing/redirect
+  login.tsx             Login page (server URL + token)
+  library.tsx           Book library grid
+  upload.tsx            Book upload form
+  book.$bookId.tsx      Book detail page
+  reader.$bookId.tsx    Web reader (foliate-js)
+```
+
+### Components
+
+| Component       | File                               | Description                    |
+|-----------------|------------------------------------|--------------------------------|
+| ErrorBoundary   | `src/components/ErrorBoundary.tsx`  | React error boundary           |
+| Toast           | `src/components/Toast.tsx`          | Toast notification system      |
+
+### API client
+
+`apps/web/src/lib/api.ts` mirrors the mobile API client pattern with
+bearer token authentication.
+
+### Web reader
+
+The web reader page (`reader.$bookId.tsx`) uses foliate-js loaded from CDN.
+The reader provides basic EPUB rendering with theme controls.
+
+---
+
+## 8. Shared Packages
+
+### `packages/shared` (`@readr/shared`)
+
+**Exports:** `src/index.ts` re-exports all from types, constants, validators.
+
+**Types** (`src/types.ts`):
+- `User`, `FileRecord`, `Book`, `BookPosition`, `ReadingProgress`
+- `Bookmark`, `Highlight`, `HighlightColor`, `Note`
+- `StrokePoint`, `Stroke`, `PenConfig`
+- `LookupProvider`
+- `TTSJob`, `VoiceConfig`, `TTSAudioChunk`, `TTSStatus`
+- `SyncLogEntry`, `SyncConflict`
+
+**Constants** (`src/constants.ts`):
+- `HIGHLIGHT_COLORS` -- 5-color enum
+- `DEFAULT_LOOKUP_PROVIDERS` -- Google, Wikipedia, Translate, Dictionary
+- `MAX_UPLOAD_SIZE_MB` -- 500
+- `DEFAULT_STORAGE_QUOTA_MB` -- 1024
+- `PRESIGNED_URL_EXPIRY_SECONDS` -- 900 (15 minutes)
+- `TTS_ENGINES` -- `chatterbox`, `chatterbox-turbo`, `kokoro`
+- `TTS_DEFAULT_ENGINE` -- `chatterbox-turbo`
+
+**Validators** (`src/validators.ts`) -- Zod schemas:
+- `bookPositionSchema` -- `{ chapter?, cfi?, page?, percentage }`
+- `listBooksQuerySchema` -- sort enum, search, format filter
+- `updateBookMetadataSchema` -- title/author nullable strings
+- `upsertProgressSchema` -- deviceId + position
+- `createBookmarkSchema`, `createHighlightSchema`, `createNoteSchema`
+- `highlightColorSchema` -- 5-color enum
+- `strokePointSchema`, `strokeSchema`, `penConfigSchema`
+- `updateAnnotationSchema` -- Union of all annotation update fields
+- `syncPullQuerySchema`, `syncLogEntrySchema`, `syncPushSchema`
+- `voiceConfigSchema`, `generateTTSSchema`, `streamTTSSchema`
+- `createLookupProviderSchema`, `updateLookupProviderSchema`
+
+### `packages/sync-engine` (`@readr/sync-engine`)
+
+Isomorphic sync logic used by both the server and the mobile client.
+
+**LWW merge** (`src/lww.ts`):
+- Used for reading progress.
+- Compares client and server timestamps.
+- Newer timestamp wins. Server wins on tie.
+- Returns `{ accepted: boolean, winner: 'client' | 'server' }`.
+
+**Set merge** (`src/set.ts`):
+- Used for annotations (bookmarks, highlights, notes).
+- Rules:
+  - **Create:** Insert if entity doesn't exist. If tombstoned, skip (tombstone wins).
+  - **Delete:** Set `deletedAt`. Tombstone is permanent.
+  - **Update:** Apply if entity exists and is not tombstoned. LWW by timestamp
+    for field conflicts.
+- Returns action: `insert`, `update`, `soft_delete`, or `skip` (with reason).
+- `processBatch` helper for processing arrays of changes.
+
+**Queue dedup** (`src/queue.ts`):
+- `deduplicateQueue`: For the same entity, keep only the latest operation by
+  timestamp. Prevents sending stale intermediate states.
+- `partitionByType`: Group changes by entity type.
+
+**Tests:** Unit tests in `lww.test.ts`, `set.test.ts`, `queue.test.ts`.
+
+---
+
+## 9. TTS Worker
+
+**Framework:** Python FastAPI (streaming API) + standalone Redis queue worker
+**Location:** `services/tts-worker/`
+
+### Components
+
+**`api.py`** -- FastAPI server for health checks and streaming TTS:
+- `GET /health` -- Returns status, available engines list, GPU availability
+- `POST /tts/stream` -- Real-time streaming TTS using Kokoro engine.
+  Returns chunked `audio/ogg` (Opus codec) stream.
+
+**`worker.py`** -- Queue processor:
+- Listens on BullMQ Redis queue `bull:tts:wait` via BRPOP.
+- Processes `generate-chapter` jobs: loads engine, generates audio,
+  encodes to Opus, uploads to S3, updates Postgres progress.
+- Engines loaded lazily and cached in process memory.
+
+**`download_models.py`** -- Script to download model files to `/models/`.
+
+### Engines
+
+| Engine             | Use case                        | Sample rate |
+|--------------------|---------------------------------|-------------|
+| Chatterbox         | High quality, batch processing  | 24 kHz      |
+| Chatterbox Turbo   | Faster variant, default engine  | 24 kHz      |
+| Kokoro             | Real-time streaming, low latency| 24 kHz      |
+
+Engine availability is determined by checking for model files in `TTS_MODEL_DIR`.
+
+### Audio pipeline
+
+1. Text input from job data
+2. Engine generates numpy audio array at 24 kHz
+3. Encoded to Opus format in OGG container via `soundfile`
+4. Uploaded to S3 at `<userId>/tts/<bookId>/<chapterIndex>.opus`
+5. Progress updated in Postgres (`tts_audio_chunks` insert, `tts_jobs` counter)
+
+### Dependencies
+
+```
+redis>=5.0
+boto3>=1.34
+psycopg2-binary>=2.9
+chatterbox-tts>=0.1
+kokoro>=0.1
+fastapi>=0.115
+uvicorn>=0.34
+pydantic>=2.0
+soundfile>=0.12
+numpy>=1.26
+torch>=2.1
 ```
 
 ---
 
-## 5. API Routes
+## 10. Object Storage
 
-All routes require authentication except `/auth/*`. All data access is scoped to the authenticated user.
+**Protocol:** S3-compatible (MinIO for local dev, Cloudflare R2 for production)
+**Client:** `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`
 
-**Security:** R2 is not publicly accessible by default. File access uses short-lived presigned URLs (15 min expiry) generated by the backend after verifying authentication and user ownership. Presigned URLs point directly to R2's endpoint — no proxying needed.
+### Key layout
 
-### Auth
 ```
-POST   /api/auth/sign-up             # Email + password registration
-POST   /api/auth/sign-in/email       # Email + password login
-POST   /api/auth/sign-out            # Logout
-GET    /api/auth/session              # Get current session
-POST   /api/auth/forget-password     # Password reset
-```
-*Routes are handled by better-auth. Mount via `app.on(["POST", "GET"], "/api/auth/**", (c) => auth.handler(c.req.raw))`.*
-
-### Books
-```
-GET    /api/books                     # List user's books
-       Query: ?sort=recent|title|author&search=<term>
-       Response: { books: Book[] }
-
-POST   /api/books                     # Upload new book
-       Body: multipart/form-data { file: File }
-       Response: { book: Book }
-       Notes: Accept .epub and .pdf. Max 500MB.
-              After upload, queue background job for metadata extraction.
-
-GET    /api/books/:id                 # Get book metadata + presigned download URL
-       Response: { book: Book, downloadUrl: string }
-       Notes: downloadUrl is a 15-min presigned S3 URL.
-
-DELETE /api/books/:id                 # Delete book + all associated data + S3 files (if refCount=0)
-
-PATCH  /api/books/:id/metadata        # Update title, author, tags
-       Body: { title?: string, author?: string, metadata?: object }
+files/<sha256>.<format>              Book binary (epub/pdf)
+covers/<sha256>.jpg                  Book cover (600x900 JPEG)
+<userId>/tts/<bookId>/<chapter>.opus TTS audio chunks
 ```
 
-### Reading Progress
-```
-GET    /api/books/:id/progress        # Get all device positions for this book
-       Response: { positions: ReadingProgress[] }
+### URL strategy
 
-PUT    /api/books/:id/progress        # Upsert reading position for current device
-       Body: { deviceId: string, position: { chapter?, cfi?, page?, percentage } }
-```
-
-### Annotations (Bookmarks, Highlights, Notes)
-```
-GET    /api/books/:id/annotations     # All annotations for a book
-       Query: ?type=bookmark|highlight|note
-       Response: { bookmarks: Bookmark[], highlights: Highlight[], notes: Note[] }
-
-POST   /api/books/:id/bookmarks       # Create bookmark
-POST   /api/books/:id/highlights      # Create highlight
-POST   /api/books/:id/notes           # Create note (typed or handwritten)
-       Body for handwritten: { position, noteType: "handwritten", strokes: [...], penConfig }
-
-PATCH  /api/annotations/:id           # Update any annotation
-DELETE /api/annotations/:id           # Soft delete (sets deletedAt)
-```
-
-### Sync
-```
-GET    /api/sync/changes              # Pull changes since last sync
-       Query: ?since=<ISO timestamp>&deviceId=<string>
-       Response: { changes: SyncLogEntry[], serverTimestamp: string }
-
-POST   /api/sync/push                 # Push local changes
-       Body: { changes: SyncLogEntry[] }
-       Response: { accepted: number, conflicts: SyncConflict[] }
-       Notes: Server applies LWW for progress, CRDT merge for annotations.
-```
-
-### TTS
-```
-GET    /api/tts/status                 # TTS service availability
-       Response: {
-         available: boolean,            // true if TTS worker is reachable
-         engines: string[],             // e.g. ["chatterbox", "chatterbox-turbo", "kokoro"]
-         streamingAvailable: boolean,   // true if Kokoro streaming endpoint is reachable
-         queueDepth: number             // Number of pending jobs in the queue
-       }
-       Notes: API server checks by pinging the TTS worker health endpoint
-              and inspecting the BullMQ queue. Clients use this to decide
-              whether to show server TTS UI or default to expo-speech.
-
-POST   /api/tts/generate              # Queue TTS generation for a book
-       Body: { bookId, engine?: string, voiceConfig?: object }
-       Response: { job: TTSJob }
-
-GET    /api/tts/jobs                   # List user's TTS jobs
-       Response: { jobs: TTSJob[] }
-
-GET    /api/tts/jobs/:id              # Job status + progress
-       Response: { job: TTSJob, chunks: TTSAudioChunk[] }
-
-DELETE /api/tts/jobs/:id              # Cancel job + delete generated audio
-
-GET    /api/tts/audio/:bookId/:chapter  # Get presigned URL for chapter audio
-       Response: { url: string } (15-min presigned S3 URL, or 404 if not yet generated)
-
-POST   /api/tts/stream                # Real-time TTS (Kokoro)
-       Body: { text: string, voiceConfig?: object }
-       Response: chunked audio/opus stream
-       Notes: Uses Kokoro for low-latency. For when pre-gen isn't available.
-```
-
-### Lookup Providers
-```
-GET    /api/lookup-providers          # List user's providers
-POST   /api/lookup-providers          # Add custom provider
-PATCH  /api/lookup-providers/:id      # Update (reorder, enable/disable)
-DELETE /api/lookup-providers/:id      # Delete (only non-builtin)
-POST   /api/lookup-providers/reset    # Reset to defaults
-```
+- When `S3_PUBLIC_ENDPOINT` is set: returns direct `<public_base>/<bucket>/<key>`
+  URLs. Used when the bucket is publicly readable (e.g., R2 with public access).
+  Avoids S3v4 host-header mismatches when proxied through Cloudflare tunnel.
+- When unset: returns presigned URLs via `getSignedUrl` with 15-minute expiry.
 
 ---
 
-## 6. Mobile App — Key Implementation Details
+## 11. Environment Variables
 
-### Server Connection
+### Server (`apps/server/.env`)
 
-The mobile app needs an explicit server URL since it's not served from the same origin as the backend.
+| Variable             | Required | Default             | Description                              |
+|----------------------|----------|---------------------|------------------------------------------|
+| `DATABASE_URL`       | Yes      | --                  | PostgreSQL connection string             |
+| `REDIS_URL`          | No       | `redis://localhost:6379` | Redis for BullMQ                    |
+| `TTS_WORKER_URL`     | No       | --                  | TTS API base URL (enables TTS feature)   |
+| `S3_ENDPOINT`        | Yes      | --                  | S3-compatible endpoint URL               |
+| `S3_PUBLIC_ENDPOINT` | No       | --                  | Public-facing S3 URL for presigned URLs  |
+| `S3_BUCKET`          | Yes      | --                  | Bucket name                              |
+| `S3_ACCESS_KEY`      | Yes      | --                  | S3 access key                            |
+| `S3_SECRET_KEY`      | Yes      | --                  | S3 secret key                            |
+| `S3_REGION`          | No       | `auto`              | S3 region                                |
+| `S3_FORCE_PATH_STYLE`| No      | `true`              | Use path-style S3 URLs (for MinIO)       |
+| `PUBLIC_URL`         | No       | --                  | Server's public-facing URL               |
+| `RESEND_API_KEY`     | No       | --                  | Resend API key (enables email feature)   |
+| `RESEND_FROM`        | No       | --                  | From address for outbound email          |
+| `PORT`               | No       | `3000`              | Server listen port                       |
+| `NODE_ENV`           | No       | `development`       | `development` / `production` / `test`    |
+| `LOG_LEVEL`          | No       | `debug`             | `debug` / `info` / `warn` / `error`     |
+| `MAX_UPLOAD_SIZE_MB` | No       | `500`               | Max file upload size                     |
+| `DEFAULT_STORAGE_QUOTA_MB` | No | `1024`              | Default per-user storage quota           |
 
-- **Login screen** includes a "Server URL" text field (e.g., `https://my-server.tailnet-abc.ts.net`). Stored in `expo-secure-store` and persisted across app restarts.
-- All API calls prefix this URL: `${serverUrl}/api/books`, `${serverUrl}/api/sync/changes`, etc.
-- `@better-auth/expo` is initialized with the same `serverUrl` as its `baseURL`.
-- Presigned R2 URLs returned by the API point directly to Cloudflare — the mobile app fetches them over the public internet, no Tailscale needed for downloads.
-- If the server is unreachable, the app works in offline mode (local SQLite data, queued sync changes).
+### TTS Worker
 
-### E-Ink Optimization (Supernote Mode)
-
-The Supernote A5X is a 10.3" e-ink Android tablet. E-ink constraints: slow refresh (~300ms full, ~120ms partial), no color, ghosting.
-
-**`DisplayContext.tsx`** — provides `isEink` boolean and display settings:
-```typescript
-interface DisplaySettings {
-  isEink: boolean;
-  animationsEnabled: boolean;
-  highContrast: boolean;
-  minTapTarget: number;           // 48dp phone, 64dp e-ink
-  scrollMode: "smooth" | "paginated";
-  refreshMode: "normal" | "a2";   // A2 = fastest 1-bit partial refresh
-}
-```
-
-**Detection:** Check `NativeModules.PlatformConstants.Brand` / `Model` for "Ratta" (Supernote manufacturer), or let users toggle in settings. Default to auto-detect.
-
-**When `isEink` is true:**
-- Disable ALL animations (`LayoutAnimation` and `Animated` durations → 0)
-- Force pure black on white palette (no grays for text, no color)
-- Use A2 refresh mode hints where Android exposes them
-- Larger tap targets (48dp → 64dp minimum)
-- Pagination-only scrolling (full page turns, no smooth scroll)
-- Minimal UI chrome — maximize reading area
-- Debounce rapid taps (300ms) since e-ink can't keep up
-
-### EPUB Reader
-
-Render EPUBs in a `WebView` using **foliate-js** (actively maintained epub.js alternative):
-
-1. Bundle `epub-webview/index.html` with foliate-js loaded from local assets
-2. Load the EPUB file from local filesystem into the WebView
-3. Communicate between RN ↔ WebView via `postMessage` / `onMessage`:
-   - RN → WebView: `{ type: "setTheme", payload: { fontSize: 18, bg: "#fff" } }`
-   - RN → WebView: `{ type: "goToChapter", payload: { cfi: "..." } }`
-   - WebView → RN: `{ type: "selectionChanged", payload: { text, cfi, rect } }`
-   - WebView → RN: `{ type: "progressUpdated", payload: { cfi, percentage } }`
-   - WebView → RN: `{ type: "tocLoaded", payload: { chapters: [...] } }`
-4. Pagination via CSS multi-column layout (works well for e-ink page turns)
-5. Theme injection via CSS custom properties
-
-### PDF Reader
-
-Render PDFs in a `WebView` using **pdf.js** — unified WebView approach with EPUB:
-- Same `postMessage` bridge pattern as EPUB reader
-- Full control over rendering for e-ink optimization (A2 refresh hints, no native scroll conflicts)
-- Consistent text selection and context menu behavior across both formats
-
-Features: zoom, margin cropping, horizontal/vertical scroll, night mode (CSS filter).
-
-### Text Selection Context Menu
-
-When text is selected in the reader:
-
-1. **EPUB:** WebView fires `selectionchange` → `postMessage` to RN with `{ text, cfi, rect }`
-2. **PDF:** WebView fires `selectionchange` → same `postMessage` bridge as EPUB
-3. RN renders a native `<ContextMenu>` component near the selection
-
-**Context menu actions:**
-- 🖍 Highlight (opens color picker: yellow, green, blue, pink, purple)
-- 🔖 Bookmark
-- 📝 Note (opens note editor — handwriting or keyboard)
-- 📋 Copy
-- 🔍 Look Up → submenu of configured providers
-
-**E-ink mode:** Menu appears below selection (not floating), larger tap targets, instant show/hide (no animation).
-
-**Highlight rendering on e-ink** (no color available):
-- Yellow → solid underline
-- Green → dashed underline
-- Blue → double underline
-- Pink → dotted underline
-- Purple → wavy underline
-
-**Lookup providers** — stored in user settings, synced across devices:
-```typescript
-interface LookupProvider {
-  id: string;
-  name: string;
-  icon: string;
-  urlTemplate: string;   // e.g. "https://en.wikipedia.org/wiki/Special:Search?search={{query}}"
-  enabled: boolean;
-  order: number;
-}
-```
-Default providers: Google, Wikipedia, Translate, Dictionary.
-Users can add custom providers with any URL containing `{{query}}`.
-Lookups open in an in-app WebView modal (via `react-native-inappbrowser-reborn`).
-
-### Handwritten Notes
-
-For the Supernote A5X stylus and other stylus-equipped devices.
-
-**Input mode detection:**
-- E-ink + stylus detected → canvas first (no keyboard)
-- Phone without stylus → keyboard first
-- Any device → toggle button (✏️ ↔ ⌨️) to switch
-
-**Canvas:** `@shopify/react-native-skia`
-- Draw with `<Canvas>` + `<Path>` elements
-- Track `{ x, y, pressure }` per point per stroke
-- Pen toolbar: 2-3 sizes, color picker, eraser
-- On e-ink: draw strokes via A2 partial refresh for real-time ink, full refresh on canvas close
-
-**Storage format:**
-```typescript
-interface HandwrittenNote {
-  id: string;
-  bookId: string;
-  position: BookPosition;
-  strokes: Stroke[];
-  penConfig: { color: string; width: number };
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface Stroke {
-  points: { x: number; y: number; pressure: number }[];
-  color: string;
-  width: number;
-}
-```
-Stroke data is compact (2-10KB per note). Synced via CRDT pipeline. Preview thumbnails regenerated client-side from stroke data.
-
-**Note list display:** Shows thumbnail previews of handwritten notes alongside typed notes. Tap to open full canvas for editing.
-
-### Audio Player
-
-Use **react-native-track-player** for background audio:
-- Chapter-by-chapter playback from presigned S3 URLs (fetched via `/api/tts/audio/:bookId/:chapter`)
-- Playback speed control (0.5x–3x)
-- Sleep timer (15m, 30m, 45m, 1h, end of chapter)
-- Lock screen controls (play/pause, skip chapter)
-- "Read from here" button: starts TTS at current reading position
-- Position sync: listening position updates reading position and vice versa
-- Quality indicator: "HD" (Chatterbox server) vs "Device" (expo-speech on-device)
-
-### Offline & Storage
-
-- **SQLite** (`expo-sqlite`) for: book metadata cache, reading positions, bookmarks, highlights, notes (including stroke data), offline sync queue
-- **File system** (`expo-file-system`) for: cached book files (EPUB/PDF), downloaded audio files
-- On launch: check connectivity → if online, run sync → pull remote changes, push local queue
-- Books download fully on first open for offline reading
+| Variable          | Required | Default                | Description                   |
+|-------------------|----------|------------------------|-------------------------------|
+| `REDIS_URL`       | No       | `redis://localhost:6379` | Redis connection            |
+| `DATABASE_URL`    | Yes      | --                     | PostgreSQL connection string  |
+| `S3_ENDPOINT`     | Yes      | --                     | S3-compatible endpoint        |
+| `S3_BUCKET`       | Yes      | --                     | Bucket name                   |
+| `S3_ACCESS_KEY`   | Yes      | --                     | S3 access key                 |
+| `S3_SECRET_KEY`   | Yes      | --                     | S3 secret key                 |
+| `S3_REGION`       | No       | `auto`                 | S3 region                     |
+| `TTS_MODEL_DIR`   | No       | `/models`              | Directory containing models   |
+| `TTS_API_PORT`    | No       | `8000`                 | FastAPI server port           |
 
 ---
 
-## 7. Web Dashboard — Key Implementation Details
+## 12. Deployment
 
-React SPA for managing library from any browser. Initially metadata/management only; web-based reader planned for Phase 6.
+### Docker Compose (production)
 
-**Stack:** React 19 + Vite + TanStack Router + TanStack Query + Tailwind CSS + shadcn/ui
+**File:** `deploy/docker-compose.yml`
+**Run:** `docker compose -f deploy/docker-compose.yml up -d --build`
 
-### Pages
+Services:
 
-1. **Login/Register** — better-auth integration with `@better-auth/react`
-2. **Library** — Grid/list toggle of all books. Shows cover, title, author, reading progress bar, format badge
-3. **Upload** — Drag-and-drop zone using `tus-js-client` for resumable chunked uploads. Shows progress bar. Accepts .epub and .pdf
-4. **Book Detail** — Metadata display + edit (title, author, tags, cover). Reading progress per device. Annotations list. TTS status.
-5. **TTS Queue** — List of all TTS jobs with status (queued/processing/done/failed), progress bar per book, engine info, playback preview
-6. **Settings** — Account, connected devices, storage usage, lookup providers, TTS defaults
+| Service      | Image / Build                  | Ports        | Notes                          |
+|--------------|--------------------------------|--------------|--------------------------------|
+| `api`        | `deploy/Dockerfile.server`     | 3000         | Hono API, depends on pg/redis/minio |
+| `web`        | `deploy/Dockerfile.web`        | 8080 -> 80   | Vite build served by nginx     |
+| `postgres`   | postgres:16-alpine             | --           | Internal only, health checked  |
+| `redis`      | redis:7-alpine                 | --           | Internal only                  |
+| `minio`      | minio/minio:latest             | 9000, 9001   | S3 API + web console           |
+| `minio-init` | minio/mc:latest                | --           | One-shot: creates bucket       |
+| `caddy`      | caddy:2-alpine                 | 80, 443      | Optional (profile: `public`)   |
 
-### Deployment
+**Caddy** is optional and only started with `--profile public`. Proxies
+`/api/*` and `/health` to the API server, everything else to the web container.
+Deployments using Cloudflare tunnel skip Caddy.
 
-The web dashboard is a static Vite build. In Docker, it's served by Nginx in its own container. Caddy routes `/` to it. All API calls use relative URLs (`/api/...`) so no build-time API URL config is needed — same-origin via Caddy.
+**Volumes:** `pgdata`, `redisdata`, `miniodata`, `caddy_data`, `caddy_config`
+
+### Docker Compose (development)
+
+**File:** `deploy/docker-compose.dev.yml`
+**Run:** `docker compose -f deploy/docker-compose.dev.yml up -d`
+
+Starts only infrastructure services (Postgres, Redis, MinIO). App services
+are run locally via `pnpm dev`.
+
+MinIO bucket created with `mc anonymous set none` (private, requires presigned
+URLs). Production stack uses `mc anonymous set download` (public read).
+
+### Docker Compose (GPU / TTS)
+
+**File:** `deploy/docker-compose.gpu.yml`
+**Run:** Overlay with: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up`
+
+Adds `tts-worker` service with NVIDIA GPU passthrough (1 GPU). Mounts
+`tts-models` volume at `/models`.
+
+### Dockerfiles
+
+**`deploy/Dockerfile.server`:**
+- Base: `node:22-alpine` with pnpm 10.27.0 via corepack
+- Installs `poppler-utils` for PDF cover rendering
+- Runs TypeScript directly via `tsx` (no pre-compile step)
+- Packages/shared and packages/sync-engine copied as source (resolved at import
+  time by tsx)
+
+**`deploy/Dockerfile.web`:**
+- Base: `node:22-alpine` with pnpm
+- Builds with `vite build`
+- Production stage: `nginx:alpine` serving from `/usr/share/nginx/html`
+- SPA fallback via `nginx.conf`
+- Static assets cached for 1 year with `immutable` header
+
+### Running locally
+
+```bash
+# 1. Start infrastructure
+docker compose -f deploy/docker-compose.dev.yml up -d
+
+# 2. Install dependencies
+pnpm install
+
+# 3. Push database schema
+pnpm --filter @readr/server db:push
+
+# 4. Start all dev servers
+pnpm dev
+
+# Or individually:
+pnpm --filter @readr/server dev    # API server on :3000
+pnpm --filter @readr/web dev       # Web client on :5173
+cd apps/mobile && npx expo start   # Mobile (Expo Go or dev build)
+```
+
+### Turborepo tasks
+
+| Task        | Description                        | Caching |
+|-------------|------------------------------------|---------|
+| `build`     | Build all packages/apps            | Yes     |
+| `dev`       | Start dev servers (persistent)     | No      |
+| `lint`      | Run linters                        | Yes     |
+| `typecheck` | Run TypeScript type checking       | Yes     |
 
 ---
 
-## 8. Backend — Key Implementation Details
+## 13. Sync Protocol
 
-### Auth Setup (better-auth)
+### Pull flow
 
-```typescript
-// apps/server/src/routes/auth.ts
-import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { db } from "../db";
-
-export const auth = betterAuth({
-  database: drizzleAdapter(db, { provider: "pg" }),
-  emailAndPassword: { enabled: true },
-  trustedOrigins: process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",") ?? [],
-  session: {
-    expiresIn: 60 * 60 * 24 * 30, // 30 days
-    cookieCache: {
-      enabled: true,
-      maxAge: 5 * 60, // 5 min — reduces DB queries for session validation
-    },
-  },
-  // Add OAuth later: Google, GitHub
-});
+```
+GET /api/sync/changes?since=<ISO timestamp>&deviceId=<string>
 ```
 
-Generate the required auth tables: `npx @better-auth/cli generate --config apps/server/src/routes/auth.ts`
+Returns all `sync_log` entries for the user newer than `since`, ordered by
+timestamp. Response includes `serverTimestamp` for the client to use in the
+next pull.
 
-### User-Scoped Data Access
+### Push flow
 
-Every query that touches user data MUST be scoped. The auth middleware extracts `userId` from the session and puts it on the Hono context. All route handlers use `c.get("userId")`.
-
-Implement per-table scoping helpers:
-```typescript
-// apps/server/src/middleware/user-scope.ts
-import { eq } from "drizzle-orm";
-import * as schema from "../db/schema";
-
-// Each table that has a userId column gets a scoping helper
-export const scopeToUser = {
-  books: (qb: any, userId: string) => qb.where(eq(schema.books.userId, userId)),
-  bookmarks: (qb: any, userId: string) => qb.where(eq(schema.bookmarks.userId, userId)),
-  highlights: (qb: any, userId: string) => qb.where(eq(schema.highlights.userId, userId)),
-  notes: (qb: any, userId: string) => qb.where(eq(schema.notes.userId, userId)),
-  readingProgress: (qb: any, userId: string) => qb.where(eq(schema.readingProgress.userId, userId)),
-  ttsJobs: (qb: any, userId: string) => qb.where(eq(schema.ttsJobs.userId, userId)),
-  lookupProviders: (qb: any, userId: string) => qb.where(eq(schema.lookupProviders.userId, userId)),
-} as const;
-
-// Usage: scopeToUser.books(db.select().from(schema.books), userId)
+```
+POST /api/sync/push
+Body: { changes: SyncLogEntry[] }
 ```
 
-### File Upload Flow (Content-Addressable Deduplication)
+Each change is processed sequentially:
 
-1. Client uploads file via `POST /api/books` (multipart) or via tus protocol for large files
-2. Server computes SHA-256 hash of the uploaded file while streaming
-3. **Dedup check:** Query `files` table for matching `sha256`
-   - **Hit:** Increment `refCount`, skip S3 upload, create `books` row referencing existing `files` row
-   - **Miss:** Upload to R2 at `files/{sha256}.{ext}`, create `files` row, then create `books` row
-4. Check user's `storageQuotaMb` — reject upload if `storageUsedMb + fileSizeMb > storageQuotaMb`
-   (deduped files still count toward the uploading user's quota)
-5. Server extracts metadata (title, author, cover, language, chapter list):
-   - EPUB: use `epub-metadata` npm package + custom parsing for TOC
-   - PDF: use `pdf-parse` for metadata, `sharp` for cover from first page
-6. Server generates cover thumbnail (300px wide) and uploads to R2 at `covers/{sha256}.jpg` (also deduped)
-7. Server stores metadata in Postgres, updates user's `storageUsedMb`
-8. If TTS auto-generation is enabled, queue a BullMQ job
+1. **Progress** entities use LWW merge (`@readr/sync-engine/lww`).
+   Client timestamp vs. server `updated_at`. Newer wins.
+2. **Annotation** entities (bookmark, highlight, note) use tombstone set
+   merge (`@readr/sync-engine/set`). Looks up existing entity, determines
+   action (insert/update/soft_delete/skip).
+3. Accepted changes are written to the entity table AND appended to `sync_log`.
 
-**On book delete:** Decrement `files.refCount`. Only delete the R2 object when `refCount` reaches 0. Update user's `storageUsedMb` accordingly.
+Response: `{ accepted: number, acceptedEntities: [...], conflicts: [...] }`
 
-### Sync Engine (Server Side)
+### Client-side dedup
 
-**Pull:** `GET /api/sync/changes?since=<timestamp>`
-- Query `sync_log` for all entries where `user_id = currentUser AND timestamp > since`
-- Return changes + current server timestamp
-
-**Push:** `POST /api/sync/push`
-- For each change in the payload:
-  - **progress:** LWW — accept if `change.timestamp > existing.updatedAt`, otherwise discard
-  - **bookmark/highlight/note:** CRDT set — apply create/delete. Conflicts are impossible with tombstone-based sets (add wins, delete is permanent via `deletedAt`)
-- Write accepted changes to the actual tables AND to `sync_log`
-- Return `{ accepted, conflicts }`
-
-### BullMQ Job Queue
-
-```typescript
-// apps/server/src/services/tts-queue.ts
-import { Queue } from "bullmq";
-import { redis } from "../lib/redis";
-
-export const ttsQueue = new Queue("tts", { connection: redis });
-
-export async function queueTTSJob(bookId: string, userId: string, config: TTSConfig) {
-  // Extract chapter texts from the book file (EPUB chapters or PDF pages)
-  const chapters = await extractChapters(bookId);
-
-  const job = await db.insert(ttsJobs).values({
-    bookId, userId,
-    status: "queued",
-    engine: config.engine ?? "chatterbox-turbo",
-    chaptersTotal: chapters.length,
-    voiceConfig: config.voiceConfig,
-  }).returning();
-
-  // Add one sub-job per chapter for granular progress
-  for (const [i, chapter] of chapters.entries()) {
-    await ttsQueue.add("generate-chapter", {
-      jobId: job[0].id,
-      bookId,
-      userId,
-      chapterIndex: i,
-      text: chapter.text,
-      engine: config.engine ?? "chatterbox-turbo",
-      voiceConfig: config.voiceConfig,
-    });
-  }
-
-  return job[0];
-}
-```
+Before pushing, the mobile client runs `deduplicateQueue()` which keeps only
+the latest operation per `entityType:entityId` key. This collapses rapid
+page-turn events into a single progress update.
 
 ---
 
-## 9. TTS Pipeline
+## 14. Security Model
 
-### Architecture
-```
-┌─────────────┐     ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  API Server  │────▶│  BullMQ     │────▶│  TTS Worker  │────▶│ Cloudflare R2│
-│  (Node.js)   │     │  (Redis)    │     │  (Python/GPU) │     │   (audio)    │
-└─────────────┘     └─────────────┘     └──────────────┘     └──────────────┘
-```
-
-### Model Tiers
-
-| Tier | Engine | Params | Use Case | Latency | Quality |
-|------|--------|--------|----------|---------|---------|
-| HD (server) | Chatterbox Original | 0.5B | Pre-generated audiobook narration | ~2-5s/sentence | ★★★★★ |
-| Fast (server) | Chatterbox Turbo | 350M | Pre-gen when speed > quality | ~1-2s/sentence | ★★★★ |
-| Stream (server) | Kokoro | 82M | Real-time playback, pre-gen not ready | <0.3s/sentence | ★★★ |
-| Offline (device) | expo-speech (OS-native) | 0 (OS-provided) | No server connection | real-time CPU | ★★–★★★★ (varies by device/voice) |
-
-### TTS Worker (`services/tts-worker/worker.py`)
-
-Python service that:
-1. Connects to Redis and listens for jobs from the `tts` queue
-2. Loads the appropriate engine (Chatterbox or Kokoro) based on job config
-3. Processes text chapter-by-chapter, sentence-by-sentence
-4. Generates audio (24kHz WAV → encoded to Opus at 64kbps)
-5. Uploads to R2 at `{userId}/tts/{bookId}/{chapterIndex}.opus`
-6. Updates job progress in Postgres via a callback URL or direct DB connection
-
-### Streaming Endpoint (`services/tts-worker/api.py`)
-
-FastAPI server that provides real-time TTS and health checks:
-```
-GET  /health
-     Response: { status: "ok", engines: ["chatterbox", "chatterbox-turbo", "kokoro"], gpu: true }
-     Notes: Returns loaded engines and GPU availability. The API server
-            pings this endpoint to populate /api/tts/status.
-
-POST /tts/stream
-     Body: { text: string, voice_config: object }
-     Response: chunked audio/opus
-```
-Uses Kokoro for lowest latency. Streams audio chunks as they're generated.
-
-### Model Download
-
-`services/tts-worker/download_models.py` — run on first startup:
-- Downloads Chatterbox weights from HuggingFace
-- Downloads Kokoro weights from HuggingFace
-- Stores in `TTS_MODEL_DIR` (default `/models`, mounted as a Docker volume)
-- Skips if already present
-
-Self-hosters without a GPU simply don't run the TTS worker. `GET /api/tts/status` returns `{ available: false }` when the worker's `/health` endpoint is unreachable. Clients check this on launch and fall back to on-device `expo-speech` (OS-native TTS).
+- **No passwords.** The bearer token is the sole authentication factor.
+  Treat it like a password. Stored in SecureStore (mobile) or localStorage (web).
+- **Token = PK.** Deleting the user row immediately revokes access.
+- **User scoping.** Every data query uses `scopeToUser` helpers from
+  `apps/server/src/middleware/user-scope.ts`. No route handler accepts a
+  client-supplied `userId` -- it always comes from `c.get("userId")`.
+- **CORS.** Wildcard origin allowed because auth uses bearer tokens (no
+  ambient cookie authority). Credentials mode is `false`.
+- **Rate limiting.** In-memory, keyed by userId or IP. 120 req/min for API,
+  20/hour for uploads.
+- **Content-addressable storage.** Files are keyed by SHA-256 hash.
+  Multiple users uploading the same book share one S3 object.
+- **Soft deletes.** Annotations use `deleted_at` tombstones instead of
+  hard deletes, which is critical for sync convergence.
 
 ---
 
-## 10. Infrastructure & Deployment
+## 15. Key Dependencies
 
-### Docker Compose — Simple Self-Host
+### Server
 
-```yaml
-# deploy/docker-compose.yml
-services:
-  api:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.server
-    ports: ["3000:3000"]
-    env_file: .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
+| Package                     | Purpose                              |
+|-----------------------------|--------------------------------------|
+| hono                        | Web framework                        |
+| @hono/node-server           | Node.js HTTP server adapter          |
+| drizzle-orm                 | PostgreSQL ORM                       |
+| postgres (postgres.js)      | PostgreSQL driver                    |
+| @aws-sdk/client-s3          | S3 object storage                    |
+| @aws-sdk/s3-request-presigner | Presigned URL generation           |
+| bullmq                      | Redis job queue (TTS)                |
+| ioredis                     | Redis client                         |
+| jszip                       | EPUB ZIP extraction                  |
+| fast-xml-parser             | EPUB OPF/container.xml parsing       |
+| pdf-parse                   | PDF metadata extraction              |
+| sharp                       | Image processing (cover normalization)|
+| resend                      | Transactional email                  |
+| zod                         | Schema validation                    |
+| tsx                         | TypeScript execution (dev + production) |
+| drizzle-kit                 | Schema migrations                    |
 
-  web:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.web
-    ports: ["8080:80"]
+### Mobile
 
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: reader
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: reader
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U reader"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+| Package                     | Purpose                              |
+|-----------------------------|--------------------------------------|
+| expo (~54.0)                | React Native framework               |
+| expo-router                 | File-based routing                   |
+| expo-sqlite                 | Local SQLite database                |
+| expo-secure-store           | Secure credential storage            |
+| expo-file-system            | File downloads and caching           |
+| expo-speech                 | On-device TTS                        |
+| expo-brightness             | Screen brightness control            |
+| expo-av                     | Audio playback                       |
+| expo-asset                  | Bundled asset management             |
+| react-native-webview        | EPUB/PDF rendering                   |
+| @tanstack/react-query       | Server state management              |
+| zustand                     | Client state management              |
+| lucide-react-native         | Icons                                |
+| react-native-safe-area-context | Safe area insets                   |
 
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redisdata:/data
+### Web
 
-  caddy:
-    image: caddy:2-alpine
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-
-volumes:
-  pgdata:
-  redisdata:
-  caddy_data:
-  caddy_config:
-```
-
-```yaml
-# deploy/docker-compose.gpu.yml (overlay for TTS worker)
-services:
-  tts-worker:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.tts
-    env_file: .env
-    volumes:
-      - tts-models:/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    depends_on:
-      - redis
-
-volumes:
-  tts-models:
-```
-
-Usage:
-- With GPU TTS: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`
-- Without GPU: `docker compose up -d` (skips TTS worker, clients use on-device expo-speech)
-
-### Caddyfile
-```
-{$DOMAIN:localhost} {
-  handle /api/* {
-    reverse_proxy api:3000
-  }
-  handle {
-    reverse_proxy web:8080
-  }
-}
-```
-
-### Helm Chart
-
-Provide in `deploy/helm/reader/`. Key values:
-
-```yaml
-# values.yaml
-replicaCount:
-  api: 2                  # No sticky sessions needed — sessions are in Postgres
-  web: 2
-  ttsWorker: 1
-
-# IMPORTANT: BETTER_AUTH_SECRET must be identical across all API replicas.
-# Set via K8s Secret, injected into all API pods.
-
-image:
-  api: ghcr.io/yourname/reader-server:latest
-  web: ghcr.io/yourname/reader-web:latest
-  tts: ghcr.io/yourname/reader-tts:latest
-
-postgresql:
-  enabled: true           # Uses CloudNativePG or Bitnami subchart
-  auth:
-    database: reader
-
-redis:
-  enabled: true           # Bitnami Redis subchart
-
-r2:
-  endpoint: ""            # Cloudflare R2 endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-  bucket: reader-files
-  region: auto
-
-tts:
-  enabled: true
-  gpu:
-    enabled: true
-    type: nvidia.com/gpu
-    count: 1
-  modelStorage: 10Gi      # PVC for model weights
-
-ingress:
-  enabled: true
-  className: nginx
-  host: reader.example.com
-  tls: true
-  # Ingress rules: /api/* → api service, /* → web service
-```
-
-### Client Connectivity
-
-How the mobile app and web dashboard connect to the deployed backend:
-
-**Networking:** Use [Tailscale](https://tailscale.com) to expose the server to your devices over a private mesh VPN. Install Tailscale on the server machine and on each client device (phone, Supernote, laptop). The server gets a stable hostname like `my-server.tailnet-abc.ts.net`. Enable HTTPS certs via `tailscale cert`. No ports exposed to the public internet, no router config needed. Free for personal use.
-
-**Web dashboard** — same-origin, no extra config needed.
-- Caddy serves the static web build on `/` and proxies `/api/*` to the backend. The web `api.ts` client uses relative URLs (`/api/books`, `/api/sync/changes`, etc.) — no CORS, no separate API URL.
-- In development, Vite's `server.proxy` forwards `/api` to `localhost:3000`.
-
-```typescript
-// apps/web/vite.config.ts (dev proxy)
-export default defineConfig({
-  server: {
-    proxy: {
-      "/api": "http://localhost:3000",
-    },
-  },
-});
-```
-
-**Mobile app** — configurable server URL.
-- The login screen includes a "Server URL" field (e.g., `https://my-server.tailnet-abc.ts.net`). Stored in `expo-secure-store`.
-- All API calls prefix this URL: `${serverUrl}/api/books`, `${serverUrl}/api/sync/changes`, etc.
-- `@better-auth/expo` is initialized with the same `serverUrl` as its `baseURL`.
-- Presigned R2 URLs point directly to Cloudflare's R2 endpoint — clients fetch them without going through the server or Tailscale.
-
-```typescript
-// apps/mobile/lib/api.ts
-import * as SecureStore from "expo-secure-store";
-
-const getServerUrl = () => SecureStore.getItemAsync("serverUrl");
-
-export async function apiFetch(path: string, init?: RequestInit) {
-  const serverUrl = await getServerUrl();
-  if (!serverUrl) throw new Error("Server URL not configured");
-  return fetch(`${serverUrl}${path}`, {
-    ...init,
-    credentials: "include", // Send session cookie
-  });
-}
-```
-
-**Presigned URL generation** — the server uses `S3_ENDPOINT` (Cloudflare R2) to generate presigned URLs. Since R2 endpoints are publicly routable, clients can fetch them directly — no proxy layer needed:
-
-```typescript
-// apps/server/src/services/storage.ts
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-
-const s3 = new S3Client({
-  endpoint: process.env.S3_ENDPOINT,      // https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-  region: process.env.S3_REGION,          // "auto"
-  forcePathStyle: true,
-  credentials: { accessKeyId: process.env.S3_ACCESS_KEY!, secretAccessKey: process.env.S3_SECRET_KEY! },
-});
-
-export async function getPresignedDownloadUrl(key: string): Promise<string> {
-  return getSignedUrl(s3, new GetObjectCommand({ Bucket: process.env.S3_BUCKET!, Key: key }), { expiresIn: 900 }); // 15 min
-}
-```
-
-**Network topology summary:**
-```
-┌───────────────────────────────────────────────────────────┐
-│  Client (browser / mobile app)                            │
-│  Tailscale: https://my-server.tailnet-abc.ts.net          │
-│    /api/*  → API calls (via Tailscale → Caddy → API)      │
-│    /*      → Web dashboard (via Tailscale → Caddy → Nginx) │
-│                                                           │
-│  R2 presigned URLs → direct to Cloudflare (public internet)│
-└──────────────────┬────────────────────┬───────────────────┘
-                   │ Tailscale VPN      │ Public HTTPS
-┌──────────────────▼──────────────┐  ┌──▼──────────────────┐
-│  Caddy (reverse proxy)          │  │  Cloudflare R2      │
-│    /api/*  → api:3000           │  │  (object storage)   │
-│    /*      → web:8080           │  └─────────────────────┘
-└──────────────┬──────────┬───────┘
-         ┌─────▼──┐  ┌───▼────┐
-         │ API    │  │  Web   │
-         │ :3000  │  │ :8080  │
-         └────────┘  └────────┘
-```
+| Package                     | Purpose                              |
+|-----------------------------|--------------------------------------|
+| react, react-dom            | UI framework (v19)                   |
+| vite                        | Build tool (v6)                      |
+| @tanstack/react-router      | Client-side routing (v1)             |
+| @tanstack/react-query       | Server state management (v5)         |
+| tailwindcss                 | Utility CSS (v4)                     |
+| lucide-react                | Icons                                |
+| zod                         | Schema validation                    |
 
 ---
 
-## 11. Development Phases
+## 16. Planned (Not Yet Implemented)
 
-### Phase 1 — Foundation (Weeks 1–3)
-**Goal: Upload an EPUB via web, read it on the mobile app**
+The following features are referenced in code comments, TODOs, or the original
+spec but do not exist in the codebase yet.
 
-1. Initialize monorepo: `pnpm init`, `pnpm-workspace.yaml`, `turbo.json`
-2. Create `packages/shared` with TypeScript types and Zod validators
-3. Set up `apps/server`:
-   - Hono app with health check route
-   - Drizzle + Postgres connection, schema file, migrations
-   - better-auth setup (email/password)
-   - S3 client (R2 compatible) — single client using `S3_ENDPOINT` for both uploads and presigned URLs
-   - Book upload endpoint (multipart → S3 + metadata extraction)
-   - Book list, get, delete endpoints
-   - Book download via presigned URLs (15-min expiry, S3 not publicly exposed)
-4. Set up `apps/web`:
-   - Vite + React + TanStack Router + TanStack Query
-   - Tailwind + shadcn/ui
-   - Vite dev proxy: `/api` → `localhost:3000` (see Section 10, Client Connectivity)
-   - Login/register pages (better-auth React client)
-   - API client using relative URLs (`/api/...`) — no build-time config needed
-   - Library page (book grid with covers)
-   - Upload page (drag-and-drop with tus-js-client)
-5. Set up `apps/mobile`:
-   - Expo project with Expo Router
-   - Auth screens with "Server URL" field (stored in expo-secure-store)
-   - API client prefixing all calls with the configured server URL
-   - Library tab (fetch books from API, display grid)
-   - Book download to device storage
-   - Basic EPUB reader (foliate-js in WebView)
-6. Create `deploy/docker-compose.dev.yml` for local development
+### Server
 
-### Phase 2 — Reader Polish (Weeks 4–6)
-**Goal: A pleasant reading experience with annotations**
+- **TTS text extraction:** `POST /api/tts/generate` currently creates a job
+  with placeholder chapter text (`"Chapter text placeholder"`). Actual EPUB/PDF
+  text extraction for TTS is not implemented.
+- **TTS S3 cleanup on delete:** `DELETE /api/tts/jobs/:id` deletes DB rows but
+  does not delete audio files from S3 (marked with `// TODO`).
+- **Lookup provider CRUD routes:** Schema and validators exist for lookup
+  providers but no route file (`routes/lookup-providers.ts`) is wired up.
 
-1. EPUB reader enhancements:
-   - Theme engine (font size, family, line height, margins, background color)
-   - CSS injection via postMessage bridge
-   - Pagination (CSS multi-column)
-   - Table of contents overlay
-   - In-book search
-2. PDF reader: pdf.js in WebView (same bridge pattern as EPUB) with zoom, scroll modes, night mode
-3. E-ink mode:
-   - `DisplayContext` with auto-detection (Ratta/Supernote)
-   - Disable animations, force high contrast, larger tap targets
-   - Paginated-only navigation
-4. Text selection context menu:
-   - WebView `selectionchange` → `postMessage` → native `<ContextMenu>`
-   - Highlight (color picker), bookmark, copy, note, look up
-   - Configurable lookup providers with `{{query}}` URL templates
-   - In-app browser for lookups
-   - E-ink highlight rendering (underline styles instead of colors)
-5. Notes:
-   - Typed note editor (TextInput with save)
-   - Handwriting canvas (`@shopify/react-native-skia`)
-   - Input mode detection (stylus → canvas, no stylus → keyboard)
-   - Pen toolbar (size, color, eraser, mode toggle)
-   - Stroke storage as vector paths
-   - Note list with handwriting thumbnails
-6. Reading progress: track position in SQLite, persist on page change
-7. Bookmarks: create/list/delete, navigate to position
+### Web
 
-### Phase 3 — Sync (Weeks 7–8)
-**Goal: Seamless cross-device experience**
+- **Bundle foliate-js locally:** The web reader loads foliate-js from CDN.
+  The mobile app bundles it as an IIFE. Bundling for web is planned.
+- **TTS queue page:** No web UI for viewing/managing TTS jobs.
+- **Settings page:** No web settings/account management page.
+- **Collection management:** No web UI for creating/managing collections.
 
-1. Server sync endpoints (`/api/sync/changes`, `/api/sync/push`)
-2. `packages/sync-engine` (lightweight, no external CRDT library):
-   - LWW merge for reading progress (timestamp comparison)
-   - Add/tombstone set merge for bookmarks, highlights, notes
-   - Offline change queue (SQLite-backed)
-3. Mobile sync integration:
-   - On app open: pull changes since last sync timestamp
-   - On data change: add to local queue + push if online
-   - On reconnect: flush queue
-   - Sync handwritten note stroke data (compact, 2-10KB)
-   - Regenerate handwriting thumbnails client-side after sync
-4. Lookup provider settings sync
-5. Test: make highlight on phone, see it on Supernote after sync
+### Infrastructure
 
-### Phase 4a — TTS: Pre-Generated Audio (Weeks 9–10)
-**Goal: Queue a book for TTS, listen to the result**
+- **Helm chart:** No Kubernetes deployment configuration exists. Docker
+  Compose is the only deployment method.
+- **TTS Dockerfile:** `docker-compose.gpu.yml` references `deploy/Dockerfile.tts`
+  but this file does not exist in the repository.
+- **Redis-backed rate limiting:** The current rate limiter is in-memory.
+  Multi-instance deployments would need Redis-backed rate limiting.
 
-1. `services/tts-worker`:
-   - Python service with Redis queue consumer
-   - Chatterbox engine (Turbo + Original) integration
-   - `download_models.py` for first-run setup
-   - Chapter processing: text → audio → S3 upload
-   - Progress reporting back to Postgres
-2. Server TTS routes:
-   - Job CRUD, audio streaming from S3
-   - BullMQ producer integration
-3. Mobile audio player:
-   - `react-native-track-player` setup
-   - Chapter-by-chapter playback from presigned S3 URLs
-   - Playback speed, sleep timer, chapter navigation
-   - Lock screen controls
-   - Chatterbox emotion/exaggeration controls exposed in UI
-4. Web dashboard: TTS queue page (job status, progress, playback preview)
+### Mobile
 
-### Phase 4b — TTS: Streaming & On-Device Fallback (Weeks 11–12)
-**Goal: Real-time TTS and offline listening**
-
-1. Kokoro streaming engine in `services/tts-worker`:
-   - FastAPI server for real-time streaming (`api.py`)
-   - Server-side `/api/tts/stream` proxying to Kokoro
-2. "Read from here" button: starts streaming TTS at current reading position
-3. On-device fallback: `expo-speech` (OS-native TTS — Siri voices on iOS, Google TTS on Android)
-   - Zero bundle size cost, works in Expo managed workflow
-   - Prompt users to download Enhanced/Premium voices in device Settings for better quality
-   - Handle iOS Silent Mode quirk via `expo-av` workaround
-4. Position sync between reading position and playback position
-5. UI: quality tier indicator ("HD" / "Standard" / "Streaming")
-
-### Phase 5 — Production Hardening (Weeks 13–14)
-**Goal: Ready for self-hosters and open source release**
-
-1. Docker: production `docker-compose.yml`, GPU overlay, Dockerfiles
-2. Helm chart with all templates and documented values
-3. CI/CD: GitHub Actions
-   - Build + test on PR
-   - Build Docker images on release tag
-   - Push to GHCR
-   - Build mobile APK (EAS Build)
-4. Security: rate limiting (Hono middleware — per-user upload limit: max 5 concurrent uploads, 20/hour), input validation (Zod on all endpoints), CORS config
-5. Operational: health checks, structured logging (pino), storage quotas per user
-6. Documentation: `self-hosting.md`, API docs (OpenAPI auto-generated), `contributing.md`, `README.md`
-
-### Phase 6 — Nice-to-Haves (Ongoing)
-- Web-based reader (EPUB + PDF in browser, using same foliate-js/pdf.js as mobile WebView)
-- Export annotations (highlights + notes) as Markdown/PDF
-- Collections / shelves / tags
-- Reading stats & streaks
-- OPDS catalog support (import from Calibre)
-- Book format conversion (server-side via Calibre CLI)
-- Social features (share highlights, reading lists)
-- iOS build + TestFlight
-
----
-
-## 12. Key Technical Decisions Summary
-
-| Decision | Choice | Rationale |
-|---|---|---|
-| Mobile framework | React Native + Expo (~52) | Cross-platform, Expo for build infra, dev client for native modules |
-| Backend framework | Hono (Node.js) | Fast, lightweight, TS-native, good DX, OpenAPI support |
-| Auth | better-auth | TS-native, self-hostable, supports RN + web, email + OAuth |
-| Database | PostgreSQL 16 + Drizzle ORM | Reliable, JSONB for flexible data, Drizzle is fully type-safe |
-| Object storage | Cloudflare R2 (S3-compatible) | Free egress, S3 API, presigned URLs work from any network |
-| Job queue | BullMQ + Redis | Battle-tested, progress tracking, concurrency control, Bull Board for monitoring |
-| TTS (high quality) | Chatterbox Original (0.5B) | Best open-source quality, MIT license, emotion control, 23 langs |
-| TTS (fast server) | Chatterbox Turbo (350M) | Same family, distilled decoder (10→1 step), lower VRAM |
-| TTS (streaming) | Kokoro (82M) | Sub-0.3s latency, Apache 2.0, perfect for real-time fallback |
-| TTS (on-device) | expo-speech (OS-native) | Zero bundle cost, Siri/Google voices, works in Expo managed workflow |
-| EPUB rendering | foliate-js in WebView | Actively maintained, full CSS control, pagination, CFI positioning |
-| PDF rendering | pdf.js in WebView | Unified WebView approach with EPUB, consistent e-ink control and text selection |
-| Drawing canvas | @shopify/react-native-skia | GPU-accelerated, pressure-sensitive, works on e-ink |
-| Sync strategy | LWW (progress) + add/tombstone sets (annotations) | Simple custom implementation, no heavy CRDT library needed |
-| Monorepo | Turborepo + pnpm | Fast caching, task parallelism, proven with RN |
-| Networking | Tailscale | Private mesh VPN, no public exposure, free for personal use |
-| Self-host (simple) | Docker Compose + Caddy | One command, auto HTTPS |
-| Self-host (scale) | Helm chart | K8s standard, GPU scheduling for TTS |
-
----
-
-## 13. Open Source Considerations
-
-- **License:** AGPL-3.0 for server code (modifications must be shared). MIT for client packages and shared code.
-- **Repo:** Single monorepo on GitHub under `reader/`
-- **Releases:** Use GitHub Releases. Tag format: `v0.1.0`. Publish Docker images to GHCR on tag.
-- **Model weights:** Never bundle in Docker images. `download_models.py` fetches on first run. Document model licenses separately.
-- **CI:** GitHub Actions for build, test, lint. EAS Build for Android APK on release.
-- **Community:** GitHub Discussions (support), Issues (bugs), PR templates, contributing guide.
+- **Collection management UI:** API routes exist but no mobile UI for
+  creating/managing collections is implemented.
+- **PDF reader features:** The PDF reader (`pdf-html.ts`) exists but has
+  fewer features than the EPUB reader (no highlights, limited annotations).
