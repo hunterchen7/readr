@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import {
   Platform,
   useWindowDimensions,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -94,8 +94,15 @@ export default function LibraryScreen() {
   const syncLastError = useSyncStatus((s) => s.lastError);
   const runSyncNow = useSyncStatus((s) => s.sync);
 
+  // Re-hydrate download/progress status when screen regains focus
+  // (e.g. after downloading a book in the detail screen).
+  const [focusCount, setFocusCount] = useState(0);
+  useFocusEffect(useCallback(() => {
+    setFocusCount((c) => c + 1);
+  }, []));
+
   // Hydrate each book with its locally-stored progress percentage and
-  // downloaded status. Runs whenever the server list changes.
+  // downloaded status. Runs whenever the server list or focus changes.
   useEffect(() => {
     if (rawBooks.length === 0) {
       setBooksWithProgress([]);
@@ -124,7 +131,7 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [rawBooks]);
+  }, [rawBooks, focusCount]);
 
   // Apply filter + client-side search on top of the server-sorted list.
   const visibleBooks = useMemo(() => {
@@ -334,7 +341,8 @@ export default function LibraryScreen() {
 
       {isLoading ? (
         <View style={styles.center}>
-          <Text style={styles.muted}>Loading library...</Text>
+          <ActivityIndicator size="large" color={colors.textMuted} />
+          <Text style={[styles.muted, { marginTop: spacing.md }]}>Loading library...</Text>
         </View>
       ) : booksWithProgress.length === 0 ? (
         <View style={styles.center}>
