@@ -86,7 +86,14 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           else if (data.payload.fraction != null) view.goToFraction(data.payload.fraction);
           break;
         case 'goToChapter':
-          if (data.payload.href) view.goTo(data.payload.href);
+          if (data.payload.href) {
+            try {
+              view.goTo(data.payload.href);
+            } catch {
+              // Some hrefs need to be resolved against the book's base
+              try { view.goTo({ href: data.payload.href }); } catch {}
+            }
+          }
           break;
         case 'prevPage':
           view.prev();
@@ -310,10 +317,11 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
       if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
 
       // After CSS changes reflow the columns — clear page counts and
-      // re-measure after layout settles, then re-post progress.
+      // re-precompute all sections, then re-post progress.
       sectionPageCounts = {};
-      setTimeout(() => {
+      setTimeout(async () => {
         remeasureCurrentSection();
+        await precomputeAllPages();
         if (view?.lastLocation) {
           view.dispatchEvent(new CustomEvent('relocate', { detail: view.lastLocation }));
         }
@@ -331,6 +339,50 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           sectionPageCounts[currentSectionIndex] = Math.max(1, Math.round(sw / vw));
         }
       } catch {}
+    }
+
+    // Precompute page counts for ALL sections by loading each one
+    // into foliate's renderer and measuring column count.
+    async function precomputeAllPages() {
+      if (!book?.sections || !view) return;
+      const vw = view.clientWidth || window.innerWidth;
+      if (vw <= 0) return;
+
+      const total = book.sections.length;
+      post('debug', { msg: 'precomputing pages for ' + total + ' sections' });
+
+      for (let i = 0; i < total; i++) {
+        if (sectionPageCounts[i]) continue; // already measured
+        try {
+          const section = book.sections[i];
+          // createDocument loads the section's HTML without rendering it
+          const doc = await section.createDocument?.();
+          if (doc) {
+            // Inject our theme CSS so the measurement reflects current settings
+            injectThemeIntoDoc(doc);
+            // Create a hidden container to measure column layout
+            const container = document.createElement('div');
+            container.style.cssText = 'position:absolute;left:-9999px;top:0;width:' + vw + 'px;height:' + (view.clientHeight || 800) + 'px;overflow:hidden;column-width:' + vw + 'px;column-fill:auto';
+            // Clone the body content into the container
+            const body = doc.body || doc.documentElement;
+            container.innerHTML = body.innerHTML;
+            document.body.appendChild(container);
+            const sw = container.scrollWidth;
+            const pages = Math.max(1, Math.round(sw / vw));
+            sectionPageCounts[i] = pages;
+            document.body.removeChild(container);
+          } else {
+            sectionPageCounts[i] = 1;
+          }
+        } catch {
+          sectionPageCounts[i] = 1;
+        }
+      }
+
+      // Notify RN that page counts are ready
+      let totalPages = 0;
+      for (const k in sectionPageCounts) totalPages += sectionPageCounts[k];
+      post('pagesComputed', { totalPages, sections: Object.keys(sectionPageCounts).length });
     }
 
     async function performSearch(query) {
@@ -403,39 +455,44 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           const frac = d.fraction ?? 0;
           const secIdx = d.index ?? 0;
 
-          // Measure this section's page count from CSS columns
+          // Use precomputed page counts (filled by precomputeAllPages)
+          // Also measure current section live if not yet precomputed
           const vw = view.clientWidth || window.innerWidth;
-          let pagesInSection = sectionPageCounts[secIdx] ?? 1;
-          try {
-            if (currentSectionDoc && vw > 0) {
+          if (!sectionPageCounts[secIdx] && currentSectionDoc && vw > 0) {
+            try {
               const sw = currentSectionDoc.documentElement.scrollWidth || currentSectionDoc.body?.scrollWidth || 0;
-              if (sw > 0) {
-                pagesInSection = Math.max(1, Math.round(sw / vw));
-                sectionPageCounts[secIdx] = pagesInSection;
-              }
-            }
-          } catch {}
+              if (sw > 0) sectionPageCounts[secIdx] = Math.max(1, Math.round(sw / vw));
+            } catch {}
+          }
+          const pagesInSection = sectionPageCounts[secIdx] ?? 1;
 
-          // Compute total pages and current page from fraction
+          // Sum all section page counts for total
           const totalSections = book?.sections?.length ?? 1;
-          let measuredTotal = 0;
-          let measuredCount = 0;
-          for (const k in sectionPageCounts) {
-            measuredTotal += sectionPageCounts[k];
-            measuredCount++;
+          let totalPages = 0;
+          let allMeasured = true;
+          for (let i = 0; i < totalSections; i++) {
+            if (sectionPageCounts[i]) {
+              totalPages += sectionPageCounts[i];
+            } else {
+              totalPages += pagesInSection; // use current section as estimate for unmeasured
+              allMeasured = false;
+            }
           }
-          const avgPerSection = measuredCount > 0 ? measuredTotal / measuredCount : 5;
-          const totalPages = Math.round(measuredTotal + (totalSections - measuredCount) * avgPerSection);
+          totalPages = Math.max(1, totalPages);
 
-          // Current page = fraction * totalPages (simple, always correct)
-          const currentPage = Math.max(1, Math.round(frac * totalPages));
+          // Current page = fraction * totalPages
+          const currentPage = Math.max(1, Math.min(totalPages, Math.round(frac * totalPages)));
 
-          // Page within section = currentPage - pages before this section
-          let pagesBefore = 0;
-          for (let i = 0; i < secIdx; i++) {
-            pagesBefore += sectionPageCounts[i] ?? Math.round(avgPerSection);
+          // Page within section from fraction
+          let pageInSection = 1;
+          if (pagesInSection > 1) {
+            // Pages before this section
+            let pagesBefore = 0;
+            for (let i = 0; i < secIdx; i++) {
+              pagesBefore += sectionPageCounts[i] ?? pagesInSection;
+            }
+            pageInSection = Math.max(1, Math.min(pagesInSection, currentPage - pagesBefore));
           }
-          const pageInSection = Math.max(1, Math.min(pagesInSection, currentPage - pagesBefore));
 
           post('progressUpdated', {
             percentage: Math.round(frac * 100),
@@ -556,6 +613,9 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
 
         // Report ready
         post('ready', {});
+
+        // Precompute page counts for all sections (runs in background)
+        setTimeout(() => precomputeAllPages(), 500);
 
         // Report TOC
         if (book.toc) {

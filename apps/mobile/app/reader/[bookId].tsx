@@ -289,6 +289,10 @@ export default function ReaderScreen() {
           break;
         case "ready":
           sendToWebView("setTheme", themeForWebView);
+          if (typeof msg.payload?.totalPages === "number" && msg.payload.totalPages > 0) {
+            setTotalPages(msg.payload.totalPages);
+            setCurrentPage((page) => page ?? 1);
+          }
           // Replay saved highlights so they're visible when reopening.
           // The WebView ignores any it's already drawn.
           for (const h of highlights) {
@@ -315,11 +319,29 @@ export default function ReaderScreen() {
           const rawPage = msg.payload.currentPage;
           const rawTotal = msg.payload.totalPages;
           if (typeof rawPage === "number" && typeof rawTotal === "number" && rawTotal > 0) {
-            setCurrentPage(rawPage);
+            setCurrentPage(Math.min(rawTotal, Math.max(1, Math.round(rawPage))));
             setTotalPages(rawTotal);
+          } else {
+            setCurrentPage(null);
+            setTotalPages(null);
           }
-          if (typeof msg.payload.pageInSection === "number") setPageInSection(msg.payload.pageInSection);
-          if (typeof msg.payload.pagesInSection === "number") setPagesInSection(msg.payload.pagesInSection);
+          if (
+            typeof msg.payload.pageInSection === "number" &&
+            typeof msg.payload.pagesInSection === "number" &&
+            msg.payload.pagesInSection > 0
+          ) {
+            const clampedPagesInSection = Math.max(1, Math.round(msg.payload.pagesInSection));
+            setPagesInSection(clampedPagesInSection);
+            setPageInSection(
+              Math.min(
+                clampedPagesInSection,
+                Math.max(1, Math.round(msg.payload.pageInSection)),
+              ),
+            );
+          } else {
+            setPageInSection(null);
+            setPagesInSection(null);
+          }
           if (bookId) {
             upsertProgress(bookId, position);
           }
@@ -491,6 +513,32 @@ export default function ReaderScreen() {
     );
   }, [bookmarks, currentPosition]);
 
+  const chapterPageLabel = useMemo(() => {
+    if (
+      pageInSection == null ||
+      pagesInSection == null ||
+      pagesInSection <= 0
+    ) {
+      return "";
+    }
+    return `chapter p. ${pageInSection}/${pagesInSection}`;
+  }, [pageInSection, pagesInSection]);
+
+  const bookPageLabel = useMemo(() => {
+    if (currentPage == null || totalPages == null || totalPages <= 0) {
+      return `${progress}%`;
+    }
+    return `p. ${currentPage}/${totalPages}  ·  ${progress}%`;
+  }, [currentPage, totalPages, progress]);
+
+  const pagesLeftLabel = useMemo(() => {
+    if (currentPage == null || totalPages == null || totalPages <= 0) {
+      return "";
+    }
+    const remaining = Math.max(0, totalPages - currentPage);
+    return `${remaining} left`;
+  }, [currentPage, totalPages]);
+
   async function handleToggleBookmark() {
     if (!bookId || !currentPosition) return;
     const existing = bookmarks.find(
@@ -590,14 +638,10 @@ export default function ReaderScreen() {
             </Text>
             <View style={styles.progressInfoRow}>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                {pageInSection != null && pagesInSection != null && totalPages != null
-                  ? `${pagesInSection - pageInSection}/${totalPages - (currentPage ?? 0)} left`
-                  : ""}
+                {chapterPageLabel || pagesLeftLabel}
               </Text>
               <Text style={[styles.progressLabel, { color: theme.fg }]}>
-                {currentPage != null && totalPages != null && totalPages > 0
-                  ? `p. ${currentPage}/${totalPages}  ·  ${progress}%`
-                  : `${progress}%`}
+                {bookPageLabel}
               </Text>
             </View>
           </Pressable>
@@ -692,8 +736,15 @@ export default function ReaderScreen() {
         progressPct={progress}
         onClose={() => setShowGotoDialog(false)}
         onGoToPage={(page) => {
+          if (format === "pdf") {
+            sendToWebView("goToLocation", { page });
+            return;
+          }
           if (totalPages && totalPages > 0) {
-            sendToWebView("goToLocation", { fraction: page / totalPages });
+            const fraction = totalPages > 1
+              ? (page - 1) / (totalPages - 1)
+              : 0;
+            sendToWebView("goToLocation", { fraction });
           }
         }}
         onGoToFraction={(frac) => {
