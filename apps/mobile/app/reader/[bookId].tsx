@@ -126,6 +126,8 @@ export default function ReaderScreen() {
   // estimable page count (e.g. very short EPUBs).
   const [currentPage, setCurrentPage] = useState<number | null>(null);
   const [totalPages, setTotalPages] = useState<number | null>(null);
+  const [pageInSection, setPageInSection] = useState<number | null>(null);
+  const [pagesInSection, setPagesInSection] = useState<number | null>(null);
   const [showGotoDialog, setShowGotoDialog] = useState(false);
 
   // Reading session tracking — we log a session to the server whenever
@@ -309,19 +311,14 @@ export default function ReaderScreen() {
             page: msg.payload.currentPage ?? msg.payload.page,
           };
           setCurrentPosition(position);
-          // Use foliate page numbers if available, otherwise estimate from toc size
           const rawPage = msg.payload.currentPage;
           const rawTotal = msg.payload.totalPages;
-          if (typeof rawPage === "number" && typeof rawTotal === "number" && rawTotal > 0 && !Number.isNaN(rawPage)) {
+          if (typeof rawPage === "number" && typeof rawTotal === "number" && rawTotal > 0) {
             setCurrentPage(rawPage);
             setTotalPages(rawTotal);
-          } else if (pct > 0) {
-            // Estimate: use chapter count * ~10 pages per chapter as a proxy
-            const chapCount = toc.length || 20;
-            const est = Math.max(chapCount * 10, 100);
-            setTotalPages(est);
-            setCurrentPage(Math.max(1, Math.round((pct / 100) * est)));
           }
+          if (typeof msg.payload.pageInSection === "number") setPageInSection(msg.payload.pageInSection);
+          if (typeof msg.payload.pagesInSection === "number") setPagesInSection(msg.payload.pagesInSection);
           if (bookId) {
             upsertProgress(bookId, position);
           }
@@ -573,15 +570,23 @@ export default function ReaderScreen() {
               <View style={[styles.progressDot, { left: `${progress}%` }]} />
             </View>
 
-            {/* Compact info: chapter + page/percent on one line */}
+            {/* Line 1: chapter name */}
             <Text style={[styles.progressLabel, { color: theme.fg }]} numberOfLines={1}>
               {currentPosition?.chapter ?? ""}
             </Text>
-            <Text style={[styles.progressLabel, { color: theme.fg }]}>
-              {currentPage != null && totalPages != null && totalPages > 0
-                ? `p.${currentPage}/${totalPages}  ·  ${progress}%`
-                : `${progress}%`}
-            </Text>
+            {/* Line 2: chapter progress + book page */}
+            <View style={styles.progressInfoRow}>
+              <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                {pageInSection != null && pagesInSection != null
+                  ? `${pageInSection}/${pagesInSection} in ch.`
+                  : `${progress}%`}
+              </Text>
+              <Text style={[styles.progressLabel, { color: theme.fg }]}>
+                {currentPage != null && totalPages != null && totalPages > 0
+                  ? `p. ${currentPage} of ${totalPages}`
+                  : `${progress}%`}
+              </Text>
+            </View>
           </Pressable>
         </>
       ) : (

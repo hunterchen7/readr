@@ -59,6 +59,10 @@ export function getReaderHtml(bookUrl: string): string {
     // handler to scrape text for TTS playback.
     let currentSectionDoc = null;
 
+    // Exact page counting — tracks column count per section
+    let sectionPageCounts = {}; // { sectionIndex: pageCount }
+    let currentSectionIndex = 0;
+
     function post(type, payload) {
       window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
     }
@@ -319,23 +323,54 @@ export function getReaderHtml(bookUrl: string): string {
         // so the reader can render "12 / 345".
         view.addEventListener('relocate', (e) => {
           const d = e.detail;
-          // Page numbers: prefer foliate's, fall back to section-based estimate
           const frac = d.fraction ?? 0;
-          const secCount = book?.sections?.length ?? 20;
-          const estTotal = Math.max(secCount * 8, 100);
-          const curPage = d.location?.current ?? d.pageItem?.current ?? Math.max(1, Math.round(frac * estTotal));
-          const totPages = d.location?.total ?? d.pageItem?.total ?? estTotal;
+          const secIdx = d.index ?? 0;
+
+          // Compute exact page within current section from scroll position
+          let pageInSection = 1;
+          let pagesInSection = sectionPageCounts[secIdx] ?? 1;
+          try {
+            if (currentSectionDoc) {
+              const body = currentSectionDoc.body || currentSectionDoc.documentElement;
+              const vw = currentSectionDoc.documentElement.clientWidth;
+              if (body && vw > 0) {
+                pagesInSection = Math.max(1, Math.round(body.scrollWidth / vw));
+                sectionPageCounts[secIdx] = pagesInSection;
+                // Current page = how far scrolled in this section
+                const scrollPos = body.parentElement?.scrollLeft ?? body.scrollLeft ?? 0;
+                pageInSection = Math.max(1, Math.round(scrollPos / vw) + 1);
+              }
+            }
+          } catch {}
+
+          // Sum pages from all measured sections for total, estimate unmeasured
+          const totalSections = book?.sections?.length ?? 20;
+          let measuredPages = 0;
+          let measuredCount = 0;
+          for (const k in sectionPageCounts) {
+            measuredPages += sectionPageCounts[k];
+            measuredCount++;
+          }
+          const avgPagesPerSection = measuredCount > 0 ? measuredPages / measuredCount : 5;
+          const totalPages = Math.round(measuredPages + (totalSections - measuredCount) * avgPagesPerSection);
+
+          // Pages before current section
+          let pagesBefore = 0;
+          for (let i = 0; i < secIdx; i++) {
+            pagesBefore += sectionPageCounts[i] ?? Math.round(avgPagesPerSection);
+          }
+          const currentPage = pagesBefore + pageInSection;
 
           post('progressUpdated', {
-            percentage: Math.round((d.fraction ?? 0) * 100),
+            percentage: Math.round(frac * 100),
             cfi: d.cfi,
             chapter: d.tocItem?.label,
             chapterHref: d.tocItem?.href,
-            sectionIndex: d.index,
-            currentPage: curPage,
-            totalPages: totPages,
-            sectionCurrent: d.section?.current ?? null,
-            sectionTotal: d.section?.total ?? null,
+            sectionIndex: secIdx,
+            currentPage,
+            totalPages,
+            pageInSection,
+            pagesInSection,
           });
         });
 
@@ -359,6 +394,18 @@ export function getReaderHtml(bookUrl: string): string {
           if (e.detail?.doc) {
             currentSectionDoc = e.detail.doc;
             injectThemeIntoDoc(currentSectionDoc);
+
+            // Count pages (CSS columns) in this section after layout
+            currentSectionIndex = e.detail.index;
+            setTimeout(() => {
+              try {
+                const body = currentSectionDoc.body || currentSectionDoc.documentElement;
+                const vw = currentSectionDoc.documentElement.clientWidth;
+                if (body && vw > 0) {
+                  sectionPageCounts[e.detail.index] = Math.max(1, Math.round(body.scrollWidth / vw));
+                }
+              } catch {}
+            }, 200);
 
             // Clicks inside foliate's section iframes don't bubble to the
             // parent document.  Attach our tap handler directly so
