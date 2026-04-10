@@ -35,7 +35,7 @@ module.exports = ({ config }) => ({
     edgeToEdgeEnabled: true,
     package: "com.readr.app",
   },
-  plugins: ["expo-router", "expo-secure-store", "expo-sqlite"],
+  plugins: ["expo-router", "expo-secure-store", "expo-sqlite", "./plugins/copy-fonts"],
   extra: {
     defaultServerUrl: process.env.EXPO_PUBLIC_DEFAULT_SERVER_URL ?? "",
   },
