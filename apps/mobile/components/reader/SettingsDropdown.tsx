@@ -282,92 +282,93 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
               })}
             </View>
 
-            {/* Page number overlay */}
+            {/* Page number — one consolidated picker. "Off" chip plus a
+                2×3 grid where each cell shows a mini-page with a dot in
+                the corresponding corner (alternate = both sides). */}
             <Text style={[styles.label, { color: muted }]}>Page number</Text>
-            <View style={styles.row}>
-              {([
-                { label: "Off", on: false },
-                { label: "On", on: true },
-              ] as const).map((opt) => {
-                const active = (theme.pageIndicator?.enabled ?? true) === opt.on;
-                return (
+            {(() => {
+              const enabled = theme.pageIndicator?.enabled ?? true;
+              const curEdge = theme.pageIndicator?.edge ?? "bottom";
+              const curSide = theme.pageIndicator?.side ?? "alternate";
+              const POSITIONS = [
+                { edge: "top", side: "left" },
+                { edge: "top", side: "alternate" },
+                { edge: "top", side: "right" },
+                { edge: "bottom", side: "left" },
+                { edge: "bottom", side: "alternate" },
+                { edge: "bottom", side: "right" },
+              ] as const;
+              return (
+                <View style={styles.pageNumRow}>
                   <Pressable
-                    key={opt.label}
-                    style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
+                    style={[
+                      styles.pageNumOffBtn,
+                      { backgroundColor: !enabled ? chipActiveBg : chipBg },
+                    ]}
                     onPress={() =>
                       update({
-                        pageIndicator: {
-                          edge: theme.pageIndicator?.edge ?? "bottom",
-                          side: theme.pageIndicator?.side ?? "alternate",
-                          enabled: opt.on,
-                        },
+                        pageIndicator: { enabled: false, edge: curEdge, side: curSide },
                       })
                     }
                   >
-                    <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
+                    <Text style={{ fontSize: 12, color: !enabled ? chipActiveFg : fg }}>Off</Text>
                   </Pressable>
-                );
-              })}
-            </View>
-
-            {theme.pageIndicator?.enabled ? (
-              <>
-                <Text style={[styles.label, { color: muted }]}>Position</Text>
-                <View style={styles.row}>
-                  {([
-                    { label: "Top", edge: "top" as const },
-                    { label: "Bottom", edge: "bottom" as const },
-                  ]).map((opt) => {
-                    const active = (theme.pageIndicator?.edge ?? "bottom") === opt.edge;
-                    return (
-                      <Pressable
-                        key={opt.label}
-                        style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
-                        onPress={() =>
-                          update({
-                            pageIndicator: {
-                              enabled: true,
-                              side: theme.pageIndicator?.side ?? "alternate",
-                              edge: opt.edge,
+                  <View style={styles.pageNumGrid}>
+                    {POSITIONS.map((p) => {
+                      const active = enabled && curEdge === p.edge && curSide === p.side;
+                      const dotY = p.edge === "top" ? { top: 4 } : { bottom: 4 };
+                      const dotColor = active ? chipActiveFg : fg;
+                      return (
+                        <Pressable
+                          key={`${p.edge}-${p.side}`}
+                          style={[
+                            styles.pageNumCell,
+                            {
+                              backgroundColor: active ? chipActiveBg : chipBg,
+                              borderColor: active ? fg : border,
                             },
-                          })
-                        }
-                      >
-                        <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
-                      </Pressable>
-                    );
-                  })}
+                          ]}
+                          onPress={() =>
+                            update({
+                              pageIndicator: { enabled: true, edge: p.edge, side: p.side },
+                            })
+                          }
+                          accessibilityLabel={`Page number ${p.edge} ${p.side}`}
+                        >
+                          {p.side === "alternate" ? (
+                            <>
+                              <View
+                                style={[
+                                  styles.pageNumDot,
+                                  { backgroundColor: dotColor, opacity: 0.5, left: 4, ...dotY },
+                                ]}
+                              />
+                              <View
+                                style={[
+                                  styles.pageNumDot,
+                                  { backgroundColor: dotColor, opacity: 0.5, right: 4, ...dotY },
+                                ]}
+                              />
+                            </>
+                          ) : (
+                            <View
+                              style={[
+                                styles.pageNumDot,
+                                {
+                                  backgroundColor: dotColor,
+                                  [p.side]: 4,
+                                  ...dotY,
+                                },
+                              ]}
+                            />
+                          )}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
-
-                <Text style={[styles.label, { color: muted }]}>Side</Text>
-                <View style={styles.row}>
-                  {([
-                    { label: "Left", side: "left" as const },
-                    { label: "Right", side: "right" as const },
-                    { label: "Alternate", side: "alternate" as const },
-                  ]).map((opt) => {
-                    const active = (theme.pageIndicator?.side ?? "alternate") === opt.side;
-                    return (
-                      <Pressable
-                        key={opt.label}
-                        style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
-                        onPress={() =>
-                          update({
-                            pageIndicator: {
-                              enabled: true,
-                              edge: theme.pageIndicator?.edge ?? "bottom",
-                              side: opt.side,
-                            },
-                          })
-                        }
-                      >
-                        <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </>
-            ) : null}
+              );
+            })()}
           </ScrollView>
         </View>
       </View>
@@ -474,14 +475,47 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   stepperBtn: {
-    width: 44,
-    height: 44,
+    width: 40,
+    height: 30,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
     alignItems: "center",
   },
-  stepperText: { fontSize: fontSize.lg },
+  stepperText: { fontSize: fontSize.md },
   stepperValue: { flex: 1, alignItems: "center" },
   stepperValueText: { fontSize: fontSize.md },
+  // Consolidated page-number picker: one "Off" chip next to a 2×3
+  // visual grid of mini "page" cells. Each cell shows a dot in the
+  // corner the page-number will render at, so the control reads at a
+  // glance without separate Position / Side / Enabled sections.
+  pageNumRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: spacing.sm,
+  },
+  pageNumOffBtn: {
+    paddingHorizontal: spacing.md,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pageNumGrid: {
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  pageNumCell: {
+    width: "31.5%",
+    height: 28,
+    borderWidth: 1,
+    borderRadius: 6,
+  },
+  pageNumDot: {
+    position: "absolute",
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
 });

@@ -914,50 +914,38 @@ export default function ReaderScreen() {
               </View>
             </View>
 
-            <Text
-              style={[
-                styles.progressLabel,
-                { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
-                display.isEink && styles.progressLabelEink,
-              ]}
-              numberOfLines={1}
-            >
-              {currentPosition?.chapter ?? ""}
-            </Text>
-            <View style={styles.progressInfoRow}>
-              <Text
-                style={[
-                  styles.progressLabel,
-                  { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
-                  display.isEink && styles.progressLabelEink,
-                ]}
-              >
-                {pageInSection != null && pagesInSection != null && pagesInSection > 0
-                  ? `${pageInSection}/${pagesInSection}`
-                  : ""}
-              </Text>
-              <Text
-                style={[
-                  styles.progressLabel,
-                  { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
-                  display.isEink && styles.progressLabelEink,
-                ]}
-              >
-                {currentPage != null && totalPages != null && totalPages > 0
-                  ? `p. ${currentPage}/${totalPages}`
-                  : ""}
-              </Text>
-            </View>
-            <Text
-              style={[
-                styles.progressLabel,
-                styles.progressPercent,
-                { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
-                display.isEink && styles.progressLabelEink,
-              ]}
-            >
-              {`${progress.toFixed(1)}%`}
-            </Text>
+            {(() => {
+              const progressTextStyle = {
+                color: theme.fg,
+                fontFamily: readerTextFontFamily(theme.fontFamily),
+                fontSize: Math.max(10, Math.round(theme.fontSize * 0.7)),
+              };
+              return (
+                <>
+                  <Text
+                    style={[styles.progressLabel, progressTextStyle]}
+                    numberOfLines={1}
+                  >
+                    {currentPosition?.chapter ?? ""}
+                  </Text>
+                  <View style={styles.progressInfoRow}>
+                    <Text style={[styles.progressLabel, progressTextStyle]}>
+                      {pageInSection != null && pagesInSection != null && pagesInSection > 0
+                        ? `${pageInSection}/${pagesInSection}`
+                        : ""}
+                    </Text>
+                    <Text style={[styles.progressLabel, progressTextStyle]}>
+                      {currentPage != null && totalPages != null && totalPages > 0
+                        ? `p. ${currentPage}/${totalPages}`
+                        : ""}
+                    </Text>
+                  </View>
+                  <Text style={[styles.progressLabel, styles.progressPercent, progressTextStyle]}>
+                    {`${progress.toFixed(1)}%`}
+                  </Text>
+                </>
+              );
+            })()}
           </View>
         </>
       ) : (
@@ -1223,11 +1211,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  progressLabel: { fontSize: 11, opacity: 0.5 },
-  // E-ink can't render faint text legibly — bump to full contrast and a
-  // slightly larger size so the reading-progress line doesn't disappear
-  // against the page background on the ~16-gray Supernote panel.
-  progressLabelEink: { opacity: 1, fontSize: 12, fontWeight: "500" },
+  progressLabel: {},
   progressPercent: { textAlign: "right", marginTop: 2 },
   miniProgress: {
     position: "absolute",
