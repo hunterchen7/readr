@@ -112,54 +112,75 @@ export default function BookDetailScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.coverRow}>
-          {book.coverUrl ? (
-            <Image source={{ uri: book.coverUrl }} style={styles.cover} />
-          ) : (
-            <View style={[styles.cover, styles.coverPlaceholder]}>
-              <Text style={styles.coverPlaceholderText}>{book.title ?? "?"}</Text>
-            </View>
-          )}
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.content}>
+          <View style={styles.hero}>
+            {book.coverUrl ? (
+              <Image source={{ uri: book.coverUrl }} style={styles.cover} />
+            ) : (
+              <View style={[styles.cover, styles.coverPlaceholder]}>
+                <Text style={styles.coverPlaceholderText}>{book.title ?? "?"}</Text>
+              </View>
+            )}
 
-          <View style={styles.meta}>
             <Text style={styles.title}>{book.title ?? "Untitled"}</Text>
-            <Text style={styles.author}>{book.author ?? "Unknown author"}</Text>
+            {book.author ? <Text style={styles.author}>{book.author}</Text> : null}
 
             <View style={styles.badges}>
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{book.format?.toUpperCase() ?? "EPUB"}</Text>
               </View>
-              <View style={[styles.badge, status === "Finished" && styles.badgeFinished, status === "Reading" && styles.badgeReading]}>
-                <Text style={[styles.badgeText, (status === "Finished" || status === "Reading") && styles.badgeTextActive]}>
+              <View
+                style={[
+                  styles.badge,
+                  status === "Finished" && styles.badgeFinished,
+                  status === "Reading" && styles.badgeReading,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.badgeText,
+                    (status === "Finished" || status === "Reading") && styles.badgeTextActive,
+                  ]}
+                >
                   {status}
                 </Text>
               </View>
             </View>
+          </View>
 
-            {progressPct > 0 ? (
-              <View style={styles.progressRow}>
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${Math.min(100, progressPct)}%` }]} />
-                </View>
-                <Text style={styles.progressLabel}>{progressPct}%</Text>
+          {progressPct > 0 ? (
+            <View style={styles.progressBlock}>
+              <View style={styles.progressHeader}>
+                <Text style={styles.progressTitle}>Reading progress</Text>
+                <Text style={styles.progressValue}>{progressPct}%</Text>
+              </View>
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${Math.min(100, progressPct)}%` }]} />
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.detailsCard}>
+            {book.language ? (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Language</Text>
+                <Text style={styles.detailValue}>{book.language}</Text>
               </View>
             ) : null}
-
-            {book.language ? <Text style={styles.detail}>Language: {book.language}</Text> : null}
-            {book.totalChapters ? <Text style={styles.detail}>Chapters: {book.totalChapters}</Text> : null}
+            {book.totalChapters ? (
+              <View style={[styles.detailRow, styles.detailRowLast]}>
+                <Text style={styles.detailLabel}>Chapters</Text>
+                <Text style={styles.detailValue}>{book.totalChapters}</Text>
+              </View>
+            ) : null}
           </View>
-        </View>
 
-        {/* Actions */}
-        <View style={styles.actions}>
-          <Pressable
-            style={styles.primaryBtn}
-            onPress={handleRead}
-          >
+          {/* Primary action */}
+          <Pressable style={styles.primaryBtn} onPress={handleRead}>
             <BookOpen size={18} color={colors.primaryFg} />
             <Text style={styles.primaryBtnText}>
-              Read
+              {progressPct > 0 && progressPct < 98 ? "Continue reading" : "Read"}
             </Text>
           </Pressable>
 
@@ -179,42 +200,46 @@ export default function BookDetailScreen() {
               )}
             </Pressable>
           ) : (
-            <View style={styles.downloadedRow}>
-              <Check size={16} color="#16a34a" />
-              <Text style={[styles.detail, { color: "#16a34a" }]}>Downloaded</Text>
+            <View style={styles.downloadedPill}>
+              <Check size={14} color="#16a34a" />
+              <Text style={styles.downloadedText}>Available offline</Text>
             </View>
           )}
-        </View>
 
-        {/* Mark as finished / unread */}
-        <View style={styles.statusActions}>
-          {progressPct < 98 ? (
-            <Pressable
-              style={styles.textBtn}
-              onPress={() => {
-                // TODO: save status override to server + local
-                setProgressPct(100);
-                Alert.alert("Marked as finished");
-              }}
-            >
-              <Text style={styles.textBtnText}>Mark as finished</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              style={styles.textBtn}
-              onPress={() => {
-                setProgressPct(0);
-                Alert.alert("Marked as unread");
-              }}
-            >
-              <Text style={styles.textBtnText}>Mark as unread</Text>
-            </Pressable>
-          )}
+          {/* Secondary actions list */}
+          <View style={styles.listCard}>
+            {progressPct < 98 ? (
+              <Pressable
+                style={styles.listRow}
+                onPress={() => {
+                  // TODO: save status override to server + local
+                  setProgressPct(100);
+                  Alert.alert("Marked as finished");
+                }}
+              >
+                <Check size={16} color={colors.textSecondary} />
+                <Text style={styles.listRowText}>Mark as finished</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                style={styles.listRow}
+                onPress={() => {
+                  setProgressPct(0);
+                  Alert.alert("Marked as unread");
+                }}
+              >
+                <BookOpen size={16} color={colors.textSecondary} />
+                <Text style={styles.listRowText}>Mark as unread</Text>
+              </Pressable>
+            )}
 
-          <Pressable style={styles.textBtn} onPress={handleDelete}>
-            <Trash2 size={14} color={colors.error} />
-            <Text style={[styles.textBtnText, { color: colors.error }]}>Delete book</Text>
-          </Pressable>
+            <View style={styles.listDivider} />
+
+            <Pressable style={styles.listRow} onPress={handleDelete}>
+              <Trash2 size={16} color={colors.error} />
+              <Text style={[styles.listRowText, { color: colors.error }]}>Delete book</Text>
+            </Pressable>
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -225,45 +250,98 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
   backBtn: { width: 40, height: 40, justifyContent: "center" },
-  content: { paddingHorizontal: spacing.xl, paddingBottom: 40 },
-  coverRow: { flexDirection: "row", gap: spacing.lg, marginBottom: spacing.xl },
-  cover: { width: 120, height: 180, borderRadius: 8, backgroundColor: colors.backgroundSecondary },
+  scrollContent: { paddingBottom: 40, alignItems: "center" },
+  content: {
+    width: "100%",
+    maxWidth: 480,
+    paddingHorizontal: spacing.xl,
+    gap: spacing.lg,
+  },
+
+  hero: { alignItems: "center", gap: spacing.sm, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  cover: {
+    width: 160,
+    height: 240,
+    borderRadius: 10,
+    backgroundColor: colors.backgroundSecondary,
+    marginBottom: spacing.md,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
+  },
   coverPlaceholder: { justifyContent: "center", alignItems: "center", padding: spacing.sm },
   coverPlaceholderText: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center" },
-  meta: { flex: 1, gap: spacing.xs },
-  title: { fontSize: fontSize.xl, fontWeight: "700", color: colors.text },
-  author: { fontSize: fontSize.md, color: colors.textSecondary },
-  badges: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
+
+  title: {
+    fontSize: fontSize.xxl,
+    fontWeight: "700",
+    color: colors.text,
+    textAlign: "center",
+    lineHeight: 28,
+  },
+  author: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: "center" },
+
+  badges: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   badge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: 999,
     backgroundColor: colors.backgroundSecondary,
   },
   badgeFinished: { backgroundColor: "#dcfce7" },
   badgeReading: { backgroundColor: colors.filterActive },
-  badgeText: { fontSize: 11, fontWeight: "600", color: colors.textMuted, textTransform: "uppercase" },
-  badgeTextActive: { color: colors.text },
-  progressRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs },
-  progressTrack: { flex: 1, height: 4, backgroundColor: colors.backgroundSecondary, borderRadius: 2 },
-  progressFill: { height: 4, backgroundColor: colors.primary, borderRadius: 2 },
-  progressLabel: { fontSize: fontSize.xs, color: colors.textMuted, minWidth: 32 },
-  detail: { fontSize: fontSize.sm, color: colors.textMuted },
-  actions: { gap: spacing.md, marginBottom: spacing.xl },
+  badgeText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textSecondary,
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  badgeTextActive: { color: colors.filterActiveText },
+
+  progressBlock: { gap: spacing.sm },
+  progressHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  progressTitle: { fontSize: fontSize.sm, color: colors.textSecondary, fontWeight: "500" },
+  progressValue: { fontSize: fontSize.sm, color: colors.text, fontWeight: "600" },
+  progressTrack: {
+    height: 6,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  progressFill: { height: 6, backgroundColor: colors.primary, borderRadius: 3 },
+
+  detailsCard: {
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+    paddingHorizontal: spacing.lg,
+  },
+  detailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  detailRowLast: { borderBottomWidth: 0 },
+  detailLabel: { fontSize: fontSize.sm, color: colors.textSecondary },
+  detailValue: { fontSize: fontSize.sm, color: colors.text, fontWeight: "500" },
+
   primaryBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
     backgroundColor: colors.primary,
-  },
-  primaryBtnDisabled: {
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: 10,
-    paddingVertical: 14,
+    borderRadius: 12,
+    paddingVertical: 16,
+    marginTop: spacing.sm,
   },
   primaryBtnText: { color: colors.primaryFg, fontSize: fontSize.lg, fontWeight: "600" },
-  primaryBtnTextDisabled: { color: colors.textMuted },
+
   secondaryBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -271,18 +349,37 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 10,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingVertical: 14,
   },
-  secondaryBtnText: { fontSize: fontSize.md, color: colors.text },
-  downloadedRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, justifyContent: "center" },
-  statusActions: { gap: spacing.md },
-  textBtn: {
+  secondaryBtnText: { fontSize: fontSize.md, color: colors.text, fontWeight: "500" },
+
+  downloadedPill: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.xs,
     paddingVertical: spacing.sm,
   },
-  textBtnText: { fontSize: fontSize.md, color: colors.textSecondary },
+  downloadedText: { fontSize: fontSize.sm, color: "#16a34a", fontWeight: "500" },
+
+  listCard: {
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+    overflow: "hidden",
+    marginTop: spacing.sm,
+  },
+  listRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md + 2,
+  },
+  listRowText: { fontSize: fontSize.md, color: colors.text },
+  listDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginLeft: spacing.lg + 16 + spacing.md,
+  },
 });
