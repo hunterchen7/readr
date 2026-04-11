@@ -27,6 +27,18 @@ interface PushResponse {
   conflicts: SyncConflict[];
 }
 
+// 30s upper bound on every sync request so a hung server doesn't keep
+// a fetch alive indefinitely. The bare `fetch` calls below can't borrow
+// apiFetch's wrapper because they read the JSON body manually and want
+// to swallow non-2xx as null instead of throwing.
+const SYNC_TIMEOUT_MS = 30_000;
+
+function withTimeout(): { signal: AbortSignal; cancel: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SYNC_TIMEOUT_MS);
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
+}
+
 /**
  * Pull changes from the server since last sync.
  */
@@ -39,14 +51,18 @@ async function pullChanges(): Promise<PullResponse | null> {
   const deviceId = "mobile-default";
   const params = new URLSearchParams({ since, deviceId });
 
+  const { signal, cancel } = withTimeout();
   try {
     const res = await fetch(`${serverUrl}/api/sync/changes?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal,
     });
     if (!res.ok) return null;
     return res.json();
   } catch {
     return null;
+  } finally {
+    cancel();
   }
 }
 
@@ -58,6 +74,7 @@ async function pushChanges(changes: SyncLogEntry[]): Promise<PushResponse | null
   const token = await getToken();
   if (!serverUrl || !token) return null;
 
+  const { signal, cancel } = withTimeout();
   try {
     const res = await fetch(`${serverUrl}/api/sync/push`, {
       method: "POST",
@@ -66,11 +83,14 @@ async function pushChanges(changes: SyncLogEntry[]): Promise<PushResponse | null
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ changes }),
+      signal,
     });
     if (!res.ok) return null;
     return res.json();
   } catch {
     return null;
+  } finally {
+    cancel();
   }
 }
 

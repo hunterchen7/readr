@@ -29,6 +29,21 @@ export async function clearToken(): Promise<void> {
 }
 
 
+/**
+ * Typed error thrown by apiFetch when the request fails with a non-2xx
+ * status. Carries the HTTP status so callers can distinguish auth
+ * failures (401) from server errors and from genuine network failures
+ * (which throw a plain `Error` from `fetch` itself, no `status` set).
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const serverUrl = await getServerUrl();
   if (!serverUrl) throw new Error("Server URL not configured");
@@ -53,12 +68,29 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.error ?? `Request failed: ${res.status}`);
+      throw new ApiError(body.error ?? `Request failed: ${res.status}`, res.status);
     }
 
     return res.json();
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+// 30s upper bound on bare login/register fetches. apiFetch handles its
+// own timeout but these endpoints run before a token exists and can't
+// route through it.
+async function fetchWithTimeout(
+  input: string,
+  init?: RequestInit,
+  timeoutMs = 30_000,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -71,7 +103,7 @@ export async function registerToken(
   token: string,
   name?: string,
 ): Promise<{ user: { id: string; name: string | null }; created: boolean }> {
-  const res = await fetch(`${serverUrl}/api/register`, {
+  const res = await fetchWithTimeout(`${serverUrl}/api/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token, name }),
@@ -89,7 +121,7 @@ export async function emailLoginStart(
   serverUrl: string,
   email: string,
 ): Promise<void> {
-  const res = await fetch(`${serverUrl}/api/email/login`, {
+  const res = await fetchWithTimeout(`${serverUrl}/api/email/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
@@ -105,7 +137,7 @@ export async function emailLoginVerify(
   email: string,
   code: string,
 ): Promise<string> {
-  const res = await fetch(`${serverUrl}/api/email/login/verify`, {
+  const res = await fetchWithTimeout(`${serverUrl}/api/email/login/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, code }),
@@ -119,15 +151,29 @@ export async function emailLoginVerify(
 }
 
 /**
- * GET /api/books?limit=1 used as a cheap "is the token still valid" probe
- * on app launch. Returns true only on a 2xx.
+ * GET /api/books used as a cheap "is the token still valid" probe.
+ * Returns:
+ *   - "valid"   — server responded 2xx, token works
+ *   - "invalid" — server responded 401/403, token is bad
+ *   - "offline" — request never reached the server (network error,
+ *                 timeout, DNS failure). Token MIGHT still be valid;
+ *                 we just don't know yet.
+ *
+ * The auth store uses this distinction to keep users signed in when
+ * the server is unreachable instead of forcing a logout on every
+ * flaky-network app launch.
  */
-export async function checkToken(): Promise<boolean> {
+export type TokenCheck = "valid" | "invalid" | "offline";
+
+export async function checkToken(): Promise<TokenCheck> {
   try {
     await apiFetch("/api/books");
-    return true;
-  } catch {
-    return false;
+    return "valid";
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      return "invalid";
+    }
+    return "offline";
   }
 }
 
