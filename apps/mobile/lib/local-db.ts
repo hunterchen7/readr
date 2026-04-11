@@ -341,17 +341,17 @@ export async function upsertProgress(
 
 export async function getAllProgress(): Promise<Map<string, ReadingProgress>> {
   const database = await getDb();
-  const deviceId = getDeviceId();
+  // Return the most recently updated progress row per book across
+  // ALL devices — the library shouldn't hide progress from other
+  // devices just because they wrote it. Ordering ASC lets the Map's
+  // overwrite semantics keep the final (latest) entry per book.
   const rows = await database.getAllAsync<{
     id: string;
     book_id: string;
     device_id: string;
     position: string;
     updated_at: string;
-  }>(
-    "SELECT * FROM reading_progress WHERE device_id = ?",
-    [deviceId],
-  );
+  }>("SELECT * FROM reading_progress ORDER BY updated_at ASC");
   const map = new Map<string, ReadingProgress>();
   for (const row of rows) {
     map.set(row.book_id, {

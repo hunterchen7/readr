@@ -85,8 +85,12 @@ function pickGridColumns(screenWidth: number, isEink: boolean): number {
 function readingStatus(
   item: BookWithProgress,
 ): { label: string; tone: "reading" | "finished" | "unread" } | null {
-  if (!item.downloaded) return null;
+  // Finished status wins over download state — if you've finished a
+  // book, the card should say so whether or not it's still cached
+  // locally. Reading/Unread badges still require a local copy since
+  // they imply "you can pick up where you left off".
   if (item.progressPct >= 98) return { label: "Finished", tone: "finished" };
+  if (!item.downloaded) return null;
   if (item.progressPct > 0)
     return { label: `Reading · ${item.progressPct}%`, tone: "reading" };
   return { label: "Unread", tone: "unread" };
@@ -271,7 +275,11 @@ export default function LibraryScreen() {
       router.push(`/book/${book.id}`);
       return;
     }
-    if (!book.downloaded) {
+    // Finished books skip the download-on-tap shortcut — the user is
+    // done with it, so tapping should just open the detail screen
+    // where they can choose to re-download or delete.
+    const finished = book.progressPct >= 98;
+    if (!book.downloaded && !finished) {
       if (book.downloadProgress == null) {
         void handleDownload(book.id);
       }
@@ -638,7 +646,9 @@ function renderStatusPill(
   status: ReturnType<typeof readingStatus>,
   downloading: boolean,
 ) {
-  if (!item.downloaded) {
+  // Finished state is a full-width label regardless of download
+  // status — done books aren't "downloadable", they're done.
+  if (!item.downloaded && status?.tone !== "finished") {
     return (
       <View style={[styles.statusPill, styles.statusPillMuted]}>
         {downloading ? (
@@ -703,7 +713,7 @@ function renderRow(
         <Text style={styles.rowAuthor} numberOfLines={1}>
           {item.author ?? "Unknown"}
         </Text>
-        {!item.downloaded ? (
+        {!item.downloaded && status?.tone !== "finished" ? (
           <View style={styles.rowStatusDownload}>
             {!downloading ? <Download size={12} color={colors.textMuted} /> : null}
             <Text style={styles.rowStatus}>

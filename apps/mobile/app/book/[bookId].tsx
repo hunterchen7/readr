@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Download, BookOpen, Check, Trash2, FileDown } from "lucide-react-native";
 import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
-import { getProgress } from "../../lib/local-db";
+import { getProgress, upsertProgress } from "../../lib/local-db";
 import { downloadFile } from "../../lib/download-file";
 import { useSyncStatus } from "../../lib/sync-status";
 import { colors, spacing, fontSize } from "../../lib/theme";
@@ -132,6 +132,33 @@ export default function BookDetailScreen() {
     // The reader falls back to the server downloadUrl when localPath
     // is null, so we can open it regardless of download state.
     router.push(`/reader/${bookId}`);
+  }
+
+  function handleRemoveDownload() {
+    if (!bookId) return;
+    Alert.alert(
+      "Remove download",
+      "Delete the local copy of this book? You'll need to redownload it for offline reading.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteDownloadedBook(bookId);
+              setDownloaded(false);
+              queryClient.invalidateQueries({ queryKey: ["books"] });
+            } catch (err) {
+              Alert.alert(
+                "Couldn't remove download",
+                err instanceof Error ? err.message : String(err),
+              );
+            }
+          },
+        },
+      ],
+    );
   }
 
   function handleDelete() {
@@ -287,10 +314,10 @@ export default function BookDetailScreen() {
                 )}
               </Pressable>
             ) : (
-              <View style={styles.downloadedPill}>
-                <Check size={14} color="#16a34a" />
-                <Text style={styles.downloadedText}>Available offline</Text>
-              </View>
+              <Pressable style={styles.secondaryBtn} onPress={handleRemoveDownload}>
+                <Check size={16} color="#16a34a" />
+                <Text style={styles.secondaryBtnText}>Available offline — tap to remove</Text>
+              </Pressable>
             )
           ) : null}
 
@@ -307,10 +334,19 @@ export default function BookDetailScreen() {
             {progressPct < 98 ? (
               <Pressable
                 style={styles.listRow}
-                onPress={() => {
-                  // TODO: save status override to server + local
+                onPress={async () => {
+                  if (!bookId) return;
                   setProgressPct(100);
-                  Alert.alert("Marked as finished");
+                  try {
+                    await upsertProgress(bookId, { percentage: 100 });
+                    queryClient.invalidateQueries({ queryKey: ["books"] });
+                  } catch (err) {
+                    setProgressPct((p) => (p === 100 ? 0 : p));
+                    Alert.alert(
+                      "Couldn't mark as finished",
+                      err instanceof Error ? err.message : String(err),
+                    );
+                  }
                 }}
               >
                 <Check size={16} color={colors.textSecondary} />
@@ -319,9 +355,19 @@ export default function BookDetailScreen() {
             ) : (
               <Pressable
                 style={styles.listRow}
-                onPress={() => {
+                onPress={async () => {
+                  if (!bookId) return;
                   setProgressPct(0);
-                  Alert.alert("Marked as unread");
+                  try {
+                    await upsertProgress(bookId, { percentage: 0 });
+                    queryClient.invalidateQueries({ queryKey: ["books"] });
+                  } catch (err) {
+                    setProgressPct((p) => (p === 0 ? 100 : p));
+                    Alert.alert(
+                      "Couldn't mark as unread",
+                      err instanceof Error ? err.message : String(err),
+                    );
+                  }
                 }}
               >
                 <BookOpen size={16} color={colors.textSecondary} />
