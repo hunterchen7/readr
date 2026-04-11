@@ -176,8 +176,17 @@ and will not run. Set the following in `~/readr/.env`:
 | `S3_BUCKET`            | `my-readr-books`                                      | `my-readr-books`      | `my-readr-books`                 |
 | `S3_ACCESS_KEY`        | R2 access key ID                                      | IAM access key ID     | B2 application key ID            |
 | `S3_SECRET_KEY`        | R2 secret                                             | IAM secret            | B2 application key               |
-| `S3_PUBLIC_ENDPOINT`   | `https://books.example.com` (R2 custom domain or dev.r2.dev) | `https://my-readr-books.s3.amazonaws.com` | `https://books.example.com` |
+| `S3_PUBLIC_ENDPOINT`   | `https://books.example.com` (R2 custom domain or dev.r2.dev) | `https://s3.us-east-1.amazonaws.com` (path-style) | `https://books.example.com` |
 | `S3_FORCE_PATH_STYLE`  | `false`                                               | `false`               | `true`                           |
+
+> `S3_PUBLIC_ENDPOINT` must be **path-style** (no bucket in the
+> hostname). The api concatenates `/${bucket}/${key}` at URL-generation
+> time in `apps/server/src/services/storage.ts`, so passing
+> `https://my-bucket.s3.amazonaws.com` would yield
+> `https://my-bucket.s3.amazonaws.com/my-bucket/<key>` and 404 on every
+> download. Use the regional path-style host
+> (`https://s3.<region>.amazonaws.com`) for AWS, your R2 custom domain
+> for R2, and the tunnel hostname for Mode A MinIO.
 
 Notes:
 
