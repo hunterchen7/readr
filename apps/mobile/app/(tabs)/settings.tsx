@@ -100,7 +100,16 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.xl, paddingBottom: 40 },
+  // Cap the content column on wide desktop viewports so settings
+  // rows don't stretch across a 1920 px window. The cap is inert
+  // on phones because the viewport is narrower than the max width.
+  content: {
+    padding: spacing.xl,
+    paddingBottom: 40,
+    width: "100%",
+    maxWidth: 640,
+    marginHorizontal: "auto",
+  },
   section: { marginBottom: spacing.xl },
   label: { fontSize: fontSize.xs, color: colors.textMuted, marginBottom: 6, textTransform: "uppercase" },
   value: { fontSize: 15 },

@@ -28,7 +28,10 @@ export default function StatsScreen() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 40 }}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingTop: insets.top + 16, paddingBottom: 40 },
+      ]}
     >
       <Text style={styles.title}>Reading</Text>
 
@@ -139,6 +142,13 @@ function buildLast30Days(
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
+  // Centred column so the stat grid and 30-day chart don't stretch
+  // edge-to-edge on desktop widths. Inert on phones.
+  scrollContent: {
+    width: "100%",
+    maxWidth: 720,
+    marginHorizontal: "auto",
+  },
   title: { fontSize: 22, fontWeight: "700", paddingHorizontal: 16, marginBottom: 16 },
   center: { padding: 40, alignItems: "center" },
   muted: { color: "#999", fontSize: 12, paddingHorizontal: 16, marginTop: 24 },
