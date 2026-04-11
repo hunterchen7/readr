@@ -250,8 +250,10 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         'html, body { background-color: ' + bg + ' !important; }',
         // Font size on root (em-based content scales from this)
         'html { font-size: ' + fs + 'px !important; }',
-        // Margins — applied directly to the section body
-        'body { padding-left: ' + (theme.margin ?? 48) + 'px !important; padding-right: ' + (theme.margin ?? 48) + 'px !important; padding-top: ' + (theme.marginV ?? 24) + 'px !important; padding-bottom: ' + (theme.marginV ?? 24) + 'px !important; }',
+        // Zero inner body margins; horizontal margin comes from host
+        // paddingLeft/paddingRight and vertical from foliates grid
+        // rows. Setting body padding here too would double-count.
+        'body { margin: 0 !important; padding: 0 !important; }',
         // Images
         'img { max-width: 100% !important; height: auto !important; background-color: transparent !important; }',
         // Links
@@ -345,16 +347,29 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
 
       if (!view) return;
 
-      // Margins — set attribute for foliate AND apply CSS directly
+      // Disable foliate's built-in content caps so margin=0 actually
+      // reads as 0. By default the paginator reserves ~7% gap on each
+      // side and caps content width at 720px/column and height at
+      // 1440px, which shows up as phantom margins on wide screens.
+      view.setAttribute('gap', '0');
+      view.setAttribute('max-inline-size', '99999');
+      view.setAttribute('max-block-size', '99999');
+
+      // Horizontal margin: applied as padding on the foliate-view host
+      // so content-box shrinks evenly on both sides, every page.
       if (theme.margin != null) {
         const m = String(theme.margin) + 'px';
-        view.setAttribute('margin', m);
         view.style.paddingLeft = m;
         view.style.paddingRight = m;
       }
+      // Vertical margin: foliates "margin" attribute maps to its
+      // --_margin CSS var which drives the top/bottom grid rows in
+      // the paginator shadow DOM. Setting it here gives every page
+      // (not just first/last) a real top AND bottom gutter.
       if (theme.marginV != null) {
-        view.style.paddingTop = theme.marginV + 'px';
-        view.style.paddingBottom = theme.marginV + 'px';
+        view.setAttribute('margin', theme.marginV + 'px');
+        view.style.paddingTop = '0';
+        view.style.paddingBottom = '0';
       }
 
       // Inject CSS into the current section document

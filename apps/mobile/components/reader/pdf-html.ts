@@ -22,15 +22,18 @@ export function getPdfReaderHtml(bookUrl: string): string {
     #container {
       width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
-      padding: var(--margin, 0) 0;
+      padding: var(--margin-v, 0) var(--margin-h, 0);
     }
     .page-wrap {
       position: relative;
       display: block;
-      margin: 4px auto;
+      /* First/last pages sit flush with container padding; interior
+         pages get a small visual gutter between them. */
+      margin: 0 auto;
       background: white;
       box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    .page-wrap + .page-wrap { margin-top: 8px; }
     .page-canvas { display: block; }
     .text-layer {
       position: absolute;
@@ -210,7 +213,8 @@ export function getPdfReaderHtml(bookUrl: string): string {
       const root = document.documentElement;
       root.style.setProperty('--bg', theme.bg || '#f5f5f5');
       root.style.setProperty('--fg', theme.fg || '#111');
-      if (theme.margin != null) root.style.setProperty('--margin', theme.margin + 'px');
+      if (theme.margin != null) root.style.setProperty('--margin-h', theme.margin + 'px');
+      if (theme.marginV != null) root.style.setProperty('--margin-v', theme.marginV + 'px');
       if (theme.isEink) {
         document.body.classList.add('eink');
       } else {
