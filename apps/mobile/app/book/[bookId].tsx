@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Download, BookOpen, Check, Trash2, FileDown } from "lucide-react-native";
 import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
+import { deleteCachedCover } from "../../lib/cover-cache";
 import {
   getProgress,
   upsertProgress,
@@ -194,9 +195,13 @@ export default function BookDetailScreen() {
           try {
             if (downloaded && bookId) await deleteDownloadedBook(bookId);
             await deleteBook(bookId!);
-            // Drop the local cache row too so the offline library
-            // doesn't keep a ghost entry pointing at a deleted book.
-            if (bookId) await deleteCachedBook(bookId);
+            // Drop the local cache row + cached cover file too so the
+            // offline library doesn't keep a ghost entry pointing at a
+            // deleted book or leak orphan cover files.
+            if (bookId) {
+              await deleteCachedBook(bookId);
+              await deleteCachedCover(bookId);
+            }
             queryClient.invalidateQueries({ queryKey: ["books"] });
             router.back();
           } catch (err) {

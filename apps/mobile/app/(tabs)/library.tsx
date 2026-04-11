@@ -26,6 +26,7 @@ import {
   getCachedBooks,
 } from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
+import { cacheCoversInBackground } from "../../lib/cover-cache";
 import { DragDropUpload } from "../../components/upload/DragDropUpload";
 import { useSyncStatus } from "../../lib/sync-status";
 import { useNetworkStatus } from "../../lib/network-status";
@@ -162,6 +163,11 @@ export default function LibraryScreen() {
           if (sort === "recent") {
             await pruneCachedBooks(result.books.map((b) => b.id));
           }
+          // Fire-and-forget cover download for any books we haven't
+          // cached locally yet. The covers stay rendered from the
+          // presigned URL until the local file lands; subsequent
+          // listBooks() reads will return the file:// URL.
+          cacheCoversInBackground(result.books);
         } catch (err) {
           console.warn("upsertCachedBooks failed:", err);
         }
