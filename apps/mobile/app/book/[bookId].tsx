@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  ActivityIndicator,
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -17,6 +16,7 @@ import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
 import { getProgress } from "../../lib/local-db";
 import { colors, spacing, fontSize } from "../../lib/theme";
+import { LoadingIndicator } from "../../components/LoadingIndicator";
 
 export default function BookDetailScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
@@ -96,8 +96,10 @@ export default function BookDetailScreen() {
 
   if (isLoading || !book) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" style={{ marginTop: 100 }} />
+      <View style={[styles.container, { paddingTop: insets.top, alignItems: "center" }]}>
+        <View style={{ marginTop: 100 }}>
+          <LoadingIndicator size="large" />
+        </View>
       </View>
     );
   }

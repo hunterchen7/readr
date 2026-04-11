@@ -136,7 +136,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             <Modal
               visible={fontOpen}
               transparent
-              animationType="fade"
+              animationType={display.animationsEnabled ? "fade" : "none"}
               onRequestClose={() => setFontOpen(false)}
             >
               <Pressable style={styles.pickerOverlay} onPress={() => setFontOpen(false)}>

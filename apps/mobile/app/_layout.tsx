@@ -58,7 +58,14 @@ export default function RootLayout() {
               }}
             />
           </Stack>
-          <StatusBar style="auto" />
+          {/* E-ink panels can't render translucent system bars — force a
+              solid "dark text on light" style and a white background so
+              the Supernote status bar blends into the reader page. */}
+          <StatusBar
+            style={isEink ? "dark" : "auto"}
+            backgroundColor={isEink ? "#ffffff" : undefined}
+            translucent={isEink ? false : undefined}
+          />
         </DisplayProvider>
       </QueryClientProvider>
     </SafeAreaProvider>

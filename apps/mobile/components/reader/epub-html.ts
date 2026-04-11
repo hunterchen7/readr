@@ -227,11 +227,25 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         'img { max-width: 100% !important; height: auto !important; background-color: transparent !important; }',
         // Links
         'a, a:link, a:visited { text-decoration: underline; }',
-        // E-ink extras
+        // E-ink extras — kill everything a slow panel can't handle. Books
+        // embed their own stylesheets that can add fades, glows, and color
+        // decorations; the !important wildcards win over them.
         eink
           ? [
               'img { filter: grayscale(100%) contrast(1.15); }',
-              '* { text-shadow: none !important; box-shadow: none !important; }',
+              '* {',
+              '  text-shadow: none !important;',
+              '  box-shadow: none !important;',
+              '  animation: none !important;',
+              '  transition: none !important;',
+              '  filter: none !important;',
+              '}',
+              // Re-apply the image grayscale filter after the wildcard reset.
+              'img { filter: grayscale(100%) contrast(1.15) !important; }',
+              // Links and emphasis stay readable: high-contrast black, no decoration tricks.
+              'a, a:link, a:visited, a:hover { color: ' + fg + ' !important; text-decoration: underline; }',
+              // Table borders — keep them crisp, not hairline gray.
+              'table, th, td { border-color: ' + fg + ' !important; }',
             ].join('\\n')
           : '',
       ].join('\\n');

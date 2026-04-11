@@ -23,6 +23,8 @@ import { getAllProgress } from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { useSyncStatus } from "../../lib/sync-status";
 import { useLibraryPrefs } from "../../lib/library-prefs";
+import { useDisplay } from "../../contexts/DisplayContext";
+import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { colors, spacing, fontSize } from "../../lib/theme";
 import { Search, X, LayoutGrid, List, RefreshCw, Plus, Cloud, ArrowUpDown } from "lucide-react-native";
 import type { Book } from "@readr/shared";
@@ -67,6 +69,7 @@ function formatRelative(ts: number): string {
 export default function LibraryScreen() {
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
+  const display = useDisplay();
 
   // Persisted UI prefs (sort, filter, view mode, last search)
   const sort = useLibraryPrefs((s) => s.sort);
@@ -349,8 +352,10 @@ export default function LibraryScreen() {
 
       {isLoading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={colors.textMuted} />
-          <Text style={[styles.muted, { marginTop: spacing.md }]}>Loading library...</Text>
+          <LoadingIndicator size="large" color={colors.textMuted} label="Loading library…" />
+          {display.isEink ? null : (
+            <Text style={[styles.muted, { marginTop: spacing.md }]}>Loading library...</Text>
+          )}
         </View>
       ) : booksWithProgress.length === 0 ? (
         <View style={styles.center}>
@@ -386,7 +391,7 @@ export default function LibraryScreen() {
             />
           }
           renderItem={({ item }) =>
-            renderCard(item, handleBookPress, gridCardWidth)
+            renderCard(item, handleBookPress, gridCardWidth, display.isEink)
           }
         />
       ) : (
@@ -414,6 +419,7 @@ function renderCard(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
   width: number,
+  isEink: boolean,
 ) {
   const downloading = item.downloadProgress !== null;
   return (
@@ -428,24 +434,25 @@ function renderCard(
         )}
         {item.downloaded ? (
           item.progressPct > 0 ? (
-            <View style={styles.progressTrack}>
+            <View style={[styles.progressTrack, isEink && styles.progressTrackEink]}>
               <View
                 style={[
                   styles.progressFill,
                   { width: `${Math.min(100, item.progressPct)}%` },
+                  isEink && styles.progressFillEink,
                 ]}
               />
             </View>
           ) : null
         ) : downloading ? (
-          <View style={styles.downloadOverlay}>
-            <ActivityIndicator color="#fff" />
+          <View style={[styles.downloadOverlay, isEink && styles.downloadOverlayEink]}>
+            <LoadingIndicator color="#fff" label="Downloading" />
             <Text style={styles.downloadOverlayText}>
               {Math.round((item.downloadProgress ?? 0) * 100)}%
             </Text>
           </View>
         ) : (
-          <View style={styles.cloudBadge}>
+          <View style={[styles.cloudBadge, isEink && styles.cloudBadgeEink]}>
             <Text style={styles.cloudBadgeText}>☁ Not downloaded</Text>
           </View>
         )}
@@ -608,7 +615,9 @@ const styles = StyleSheet.create({
     height: 3,
     backgroundColor: "rgba(0,0,0,0.12)",
   },
+  progressTrackEink: { backgroundColor: "#eee", height: 4 },
   progressFill: { height: "100%", backgroundColor: colors.primary },
+  progressFillEink: { backgroundColor: "#000" },
   coverDimmed: { opacity: 0.55 },
   cloudBadge: {
     position: "absolute",
@@ -619,6 +628,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     alignItems: "center",
   },
+  cloudBadgeEink: { backgroundColor: "#000" },
   cloudBadgeText: { color: colors.primaryFg, fontSize: 11, fontWeight: "600" },
   downloadOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -627,6 +637,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
   },
+  // Solid black overlay for e-ink — the translucent tint would smudge into
+  // a near-invisible gray on a ~16-level grayscale panel.
+  downloadOverlayEink: { backgroundColor: "#000" },
   downloadOverlayText: { color: colors.primaryFg, fontSize: fontSize.xs, fontWeight: "600" },
   bookTitle: { fontSize: fontSize.xs, fontWeight: "600", marginTop: spacing.xs },
   bookAuthor: { fontSize: 11, color: colors.textSecondary },

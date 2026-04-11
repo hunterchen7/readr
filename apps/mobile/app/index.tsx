@@ -1,6 +1,7 @@
 import { Redirect } from "expo-router";
-import { ActivityIndicator, View } from "react-native";
+import { View } from "react-native";
 import { useAuthStore } from "../lib/auth-store";
+import { LoadingIndicator } from "../components/LoadingIndicator";
 
 export default function Index() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -9,7 +10,7 @@ export default function Index() {
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" />
+        <LoadingIndicator size="large" />
       </View>
     );
   }

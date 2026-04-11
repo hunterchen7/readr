@@ -1,9 +1,10 @@
-import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal } from "react-native";
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
 import { Highlighter, Bookmark, StickyNote, Copy } from "lucide-react-native";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { useEffect, useState } from "react";
 import { lookupWord, type LookupResult } from "../../lib/dictionary";
+import { LoadingIndicator } from "../LoadingIndicator";
 
 interface ContextMenuProps {
   visible: boolean;
@@ -86,11 +87,15 @@ export function ContextMenu({
   if (!visible) return null;
 
   const tapTarget = display.minTapTarget;
+  // On e-ink everything collapses to crisp black; on LCD use the existing
+  // muted gray palette the menu was designed with.
+  const iconColor = display.isEink ? "#000" : "#444";
+  const linkColor = display.isEink ? "#000" : "#2563eb";
 
   return (
     <Modal transparent animationType={display.isEink ? "none" : "fade"} visible={visible} onRequestClose={onClose}>
       <Pressable style={styles.overlay} onPress={onClose} />
-      <View style={[styles.menu, { bottom: 80 }]}>
+      <View style={[styles.menu, display.isEink && styles.menuEink, { bottom: 80 }]}>
         {offlineDef ? (
           <View style={styles.definitionBlock}>
             <View style={styles.definitionHeader}>
@@ -103,7 +108,7 @@ export function ContextMenu({
           </View>
         ) : offlineDef === undefined ? (
           <View style={styles.definitionBlock}>
-            <ActivityIndicator size="small" color="#666" />
+            <LoadingIndicator size="small" color="#666" />
           </View>
         ) : null}
         {showColors ? (
@@ -137,20 +142,20 @@ export function ContextMenu({
             {/* Main action buttons */}
             <View style={styles.actionRow}>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={() => setShowColors(true)}>
-                <Highlighter size={20} color="#444" />
-                <Text style={styles.actionLabel}>Highlight</Text>
+                <Highlighter size={20} color={iconColor} />
+                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Highlight</Text>
               </Pressable>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onBookmark}>
-                <Bookmark size={20} color="#444" />
-                <Text style={styles.actionLabel}>Bookmark</Text>
+                <Bookmark size={20} color={iconColor} />
+                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Bookmark</Text>
               </Pressable>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onNote}>
-                <StickyNote size={20} color="#444" />
-                <Text style={styles.actionLabel}>Note</Text>
+                <StickyNote size={20} color={iconColor} />
+                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Note</Text>
               </Pressable>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onCopy}>
-                <Copy size={20} color="#444" />
-                <Text style={styles.actionLabel}>Copy</Text>
+                <Copy size={20} color={iconColor} />
+                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Copy</Text>
               </Pressable>
             </View>
             {/* Inline search links */}
@@ -161,7 +166,9 @@ export function ContextMenu({
                   style={styles.searchLink}
                   onPress={() => onLookup(p.urlTemplate.replace("{{query}}", encodeURIComponent(selectedText)))}
                 >
-                  <Text style={styles.searchLinkText}>{p.name}</Text>
+                  <Text style={[styles.searchLinkText, { color: linkColor }, display.isEink && styles.searchLinkTextEink]}>
+                    {p.name}
+                  </Text>
                 </Pressable>
               ))}
             </View>
@@ -187,6 +194,15 @@ const styles = StyleSheet.create({
     elevation: 5,
     padding: 8,
   },
+  // On e-ink, drop the soft drop-shadow (ghosts badly) and use a solid
+  // black border instead so the menu still reads as a distinct panel.
+  menuEink: {
+    shadowOpacity: 0,
+    elevation: 0,
+    borderWidth: 2,
+    borderColor: "#000",
+    borderRadius: 0,
+  },
   definitionBlock: {
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -208,6 +224,7 @@ const styles = StyleSheet.create({
   },
   actionIcon: { marginBottom: 2 },
   actionLabel: { fontSize: 11, color: "#666" },
+  actionLabelEink: { color: "#000", fontWeight: "600" },
   searchRow: {
     flexDirection: "row",
     justifyContent: "center",
@@ -219,6 +236,7 @@ const styles = StyleSheet.create({
   },
   searchLink: { paddingVertical: 4 },
   searchLinkText: { fontSize: 12, color: "#2563eb" },
+  searchLinkTextEink: { textDecorationLine: "underline", fontWeight: "600" },
   colorRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", padding: 8 },
   colorButton: {
     borderRadius: 8,
