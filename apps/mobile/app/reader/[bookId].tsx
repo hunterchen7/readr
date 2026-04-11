@@ -319,12 +319,18 @@ export default function ReaderScreen() {
           }
           // Replay note markers. Multiple notes on the same passage
           // share one marker — dedupe by cfi to avoid double-drawing.
-          const seenNoteCfis = new Set<string>();
+          // If a passage has both a typed note and a drawing, the
+          // drawing wins visually (more salient indigo underline).
+          const seenNoteCfis = new Map<string, "typed" | "handwritten">();
           for (const n of notes) {
             const cfi = n.position.cfi;
-            if (!cfi || seenNoteCfis.has(cfi)) continue;
-            seenNoteCfis.add(cfi);
-            sendToWebView("addNote", { cfi });
+            if (!cfi) continue;
+            const existing = seenNoteCfis.get(cfi);
+            if (existing === "handwritten") continue;
+            seenNoteCfis.set(cfi, n.noteType);
+          }
+          for (const [cfi, noteType] of seenNoteCfis) {
+            sendToWebView("addNote", { cfi, noteType });
           }
           // Restore saved position
           if (currentPosition?.cfi) {
@@ -493,6 +499,24 @@ export default function ReaderScreen() {
     return selectionCfi ? { ...currentPosition, cfi: selectionCfi } : currentPosition;
   }
 
+  // Redraw (or remove) the marker for a passage based on what notes
+  // currently anchor to it. Drawings "win" over typed notes because the
+  // indigo underline is more salient than the amber squiggle, and users
+  // are more likely to care about a drawing existing on a passage.
+  function refreshNoteMarker(cfi: string, fromNotes: Note[]) {
+    const siblings = fromNotes.filter((n) => n.position.cfi === cfi);
+    if (siblings.length === 0) {
+      sendToWebView("removeNote", { cfi });
+      return;
+    }
+    const noteType = siblings.some((n) => n.noteType === "handwritten")
+      ? "handwritten"
+      : "typed";
+    // addAnnotation on an existing cfi replaces the prior annotation in
+    // foliate, so this doubles as an update.
+    sendToWebView("addNote", { cfi, noteType });
+  }
+
   async function handleSaveTypedNote(text: string) {
     if (!bookId) return;
     try {
@@ -509,8 +533,9 @@ export default function ReaderScreen() {
         const pos = noteAnchorPosition();
         if (!pos) return;
         const n = await createNote(bookId, pos, "typed", text);
-        setNotes((prev) => [n, ...prev]);
-        if (n.position.cfi) sendToWebView("addNote", { cfi: n.position.cfi });
+        const next = [n, ...notes];
+        setNotes(next);
+        if (n.position.cfi) refreshNoteMarker(n.position.cfi, next);
       }
       setShowTypedNote(false);
     } catch {
@@ -538,8 +563,9 @@ export default function ReaderScreen() {
         const pos = noteAnchorPosition();
         if (!pos) return;
         const n = await createNote(bookId, pos, "handwritten", undefined, strokes, penConfig);
-        setNotes((prev) => [n, ...prev]);
-        if (n.position.cfi) sendToWebView("addNote", { cfi: n.position.cfi });
+        const next = [n, ...notes];
+        setNotes(next);
+        if (n.position.cfi) refreshNoteMarker(n.position.cfi, next);
       }
       setShowDrawing(false);
     } catch {
@@ -547,24 +573,29 @@ export default function ReaderScreen() {
     }
   }
 
-  async function handleDeleteNote(noteId: string) {
+  function handleDeleteNote(noteId: string) {
     const target = notes.find((n) => n.id === noteId);
-    try {
-      await deleteNote(noteId);
-      setNotes((prev) => prev.filter((n) => n.id !== noteId));
-      // Remove the marker from the WebView if no other notes share this
-      // cfi — multiple notes on the same passage should keep the marker.
-      if (target?.position.cfi) {
-        const stillUsed = notes.some(
-          (n) => n.id !== noteId && n.position.cfi === target.position.cfi,
-        );
-        if (!stillUsed) {
-          sendToWebView("removeNote", { cfi: target.position.cfi });
-        }
-      }
-    } catch {
-      Alert.alert("Error", "Failed to delete note");
-    }
+    if (!target) return;
+    // Notes can represent real effort (typed thoughts, sketched diagrams)
+    // so require a confirmation before deleting — unlike bookmarks, which
+    // are cheap to recreate.
+    Alert.alert("Delete note", "This note will be removed.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await deleteNote(noteId);
+            const remaining = notes.filter((n) => n.id !== noteId);
+            setNotes(remaining);
+            if (target.position.cfi) refreshNoteMarker(target.position.cfi, remaining);
+          } catch {
+            Alert.alert("Error", "Failed to delete note");
+          }
+        },
+      },
+    ]);
   }
 
   // Called when a marker is tapped in the WebView. If exactly one note
@@ -860,6 +891,7 @@ export default function ReaderScreen() {
           if (n.position.cfi) sendToWebView("goToLocation", { cfi: n.position.cfi });
           else sendToWebView("goToLocation", { fraction: n.position.percentage / 100 });
         }}
+        onDeleteNote={handleDeleteNote}
         onJumpToHighlight={(h) => {
           if (h.cfiRange) sendToWebView("goToLocation", { cfi: h.cfiRange });
         }}

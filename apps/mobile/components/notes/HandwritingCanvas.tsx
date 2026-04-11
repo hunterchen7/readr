@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { View, Pressable, Text, StyleSheet, Modal } from "react-native";
+import { useState, useRef, useMemo } from "react";
+import { View, Pressable, Text, StyleSheet, Modal, PanResponder } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import type { Stroke, StrokePoint, PenConfig } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
@@ -38,54 +38,76 @@ export function HandwritingCanvas({
   const [penWidth, setPenWidth] = useState(4);
   const [isEraser, setIsEraser] = useState(false);
 
-  const handleTouchStart = useCallback(
-    (e: { nativeEvent: { locationX: number; locationY: number; force?: number } }) => {
-      setCurrentStroke([{
-        x: e.nativeEvent.locationX,
-        y: e.nativeEvent.locationY,
-        pressure: e.nativeEvent.force ?? 0.5,
-      }]);
-    },
+  // Keep the active stroke in a ref so the PanResponder callbacks (which
+  // are memoized once on mount) always see the latest points without
+  // closing over stale state.
+  const activeStrokeRef = useRef<StrokePoint[]>([]);
+  // Latest tool/pen settings — again via ref so PanResponder doesn't
+  // need to be torn down and rebuilt when the user switches color/width.
+  const toolRef = useRef({ color: penColor, width: penWidth, isEraser });
+  toolRef.current = { color: penColor, width: penWidth, isEraser };
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (evt) => {
+          const ne = evt?.nativeEvent;
+          if (!ne) return;
+          const point: StrokePoint = {
+            x: ne.locationX ?? 0,
+            y: ne.locationY ?? 0,
+            pressure: (ne as { force?: number }).force ?? 0.5,
+          };
+          activeStrokeRef.current = [point];
+          setCurrentStroke([point]);
+        },
+        onPanResponderMove: (evt) => {
+          const ne = evt?.nativeEvent;
+          if (!ne) return;
+          const point: StrokePoint = {
+            x: ne.locationX ?? 0,
+            y: ne.locationY ?? 0,
+            pressure: (ne as { force?: number }).force ?? 0.5,
+          };
+          activeStrokeRef.current = [...activeStrokeRef.current, point];
+          setCurrentStroke(activeStrokeRef.current);
+        },
+        onPanResponderRelease: () => commitStroke(),
+        onPanResponderTerminate: () => commitStroke(),
+      }),
+    // PanResponder is created once; the tool settings are read from a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
-  const handleTouchMove = useCallback(
-    (e: { nativeEvent: { locationX: number; locationY: number; force?: number } }) => {
-      setCurrentStroke((prev) => [...prev, {
-        x: e.nativeEvent.locationX,
-        y: e.nativeEvent.locationY,
-        pressure: e.nativeEvent.force ?? 0.5,
-      }]);
-    },
-    [],
-  );
-
-  const handleTouchEnd = useCallback(() => {
-    if (currentStroke.length > 0) {
-      if (isEraser) {
-        // Remove strokes that intersect with the eraser path
-        const eraserPoints = currentStroke;
-        setStrokes((prev) =>
-          prev.filter((s) => {
-            for (const ep of eraserPoints) {
-              for (const sp of s.points) {
-                const dx = ep.x - sp.x;
-                const dy = ep.y - sp.y;
-                if (dx * dx + dy * dy < 400) return false; // 20px radius
-              }
+  function commitStroke() {
+    const points = activeStrokeRef.current;
+    if (points.length === 0) return;
+    const { color, width, isEraser: erasing } = toolRef.current;
+    if (erasing) {
+      setStrokes((prev) =>
+        prev.filter((s) => {
+          for (const ep of points) {
+            for (const sp of s.points) {
+              const dx = ep.x - sp.x;
+              const dy = ep.y - sp.y;
+              if (dx * dx + dy * dy < 400) return false; // 20px radius
             }
-            return true;
-          }),
-        );
-      } else {
-        setStrokes((prev) => [
-          ...prev,
-          { points: currentStroke, color: penColor, width: penWidth },
-        ]);
-      }
-      setCurrentStroke([]);
+          }
+          return true;
+        }),
+      );
+    } else {
+      setStrokes((prev) => [...prev, { points, color, width }]);
     }
-  }, [currentStroke, penColor, penWidth, isEraser]);
+    activeStrokeRef.current = [];
+    setCurrentStroke([]);
+  }
 
   return (
     <Modal
@@ -159,13 +181,8 @@ export function HandwritingCanvas({
         </View>
 
         {/* Canvas with SVG rendering */}
-        <View
-          style={styles.canvas}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-        >
-          <Svg style={StyleSheet.absoluteFill}>
+        <View style={styles.canvas} {...panResponder.panHandlers}>
+          <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
             {/* Completed strokes */}
             {strokes.map((s, i) => (
               <Path

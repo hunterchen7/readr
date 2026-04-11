@@ -166,12 +166,15 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         }
         case 'addNote': {
           // Notes share foliate's annotation machinery but render as a
-          // squiggly underline so they're distinguishable from highlights
-          // and don't block the underlying text.
+          // squiggly/underline so they're distinguishable from highlights
+          // and don't block the underlying text. The noteType controls
+          // the visual style so typed notes and drawings look different.
           const cfi = data.payload.cfi;
+          const noteType = data.payload.noteType === 'handwritten' ? 'handwritten' : 'typed';
           if (!cfi || !view.addAnnotation) break;
           try {
-            view.addAnnotation({ value: cfi, kind: 'note' });
+            view.addAnnotation({ value: cfi, kind: 'note', noteType });
+            noteCfis.set(cfi, noteType);
           } catch (err) {
             post('noteError', { cfi, error: String(err) });
           }
@@ -182,6 +185,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           if (!cfi || !view.addAnnotation) break;
           try {
             view.addAnnotation({ value: cfi }, true);
+            noteCfis.delete(cfi);
           } catch {}
           break;
         }
@@ -199,6 +203,10 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
     // Current theme CSS — injected into every section document
     let currentThemeCSS = '';
     let currentTheme = {};
+    // Map of note cfi → noteType ('typed' | 'handwritten'). Foliate's
+    // show-annotation event drops custom fields, so we mirror the
+    // classification here and consult it when routing a tap.
+    const noteCfis = new Map();
 
     function buildThemeCSS(theme) {
       const eink = !!theme.isEink;
@@ -697,9 +705,16 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           const { draw, annotation } = e.detail ?? {};
           if (!draw || !annotation) return;
           if (annotation.kind === 'note') {
-            // Wavy underline in an amber accent colour — subtle but
-            // distinct from yellow highlights.
-            draw(Overlayer.squiggly, { color: '#d97706' });
+            // Typed notes get a wavy amber underline; drawings get a
+            // solid indigo underline so the two are visually distinct.
+            // On e-ink both collapse to crisp black since the accent
+            // colours otherwise ghost out.
+            const eink = !!currentTheme?.isEink;
+            if (annotation.noteType === 'handwritten') {
+              draw(Overlayer.underline, { color: eink ? '#000' : '#6366f1' });
+            } else {
+              draw(Overlayer.squiggly, { color: eink ? '#000' : '#d97706' });
+            }
           } else {
             const color = annotation.color || 'yellow';
             draw(Overlayer.highlight, { color });
@@ -708,8 +723,11 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
 
         view.addEventListener('show-annotation', (e) => {
           const ann = e.detail ?? {};
-          if (ann.kind === 'note') {
-            post('noteTapped', { cfi: ann.value });
+          // Foliate strips custom annotation fields before dispatch, so
+          // fall back to the noteCfis set to tell a note apart from a
+          // highlight by value alone.
+          if (ann.value && noteCfis.has(ann.value)) {
+            post('noteTapped', { cfi: ann.value, noteType: noteCfis.get(ann.value) });
           } else {
             post('showAnnotation', ann);
           }

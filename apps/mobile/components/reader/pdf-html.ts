@@ -70,11 +70,12 @@ export function getPdfReaderHtml(bookUrl: string): string {
     }
     .note-rect {
       position: absolute;
-      border-bottom: 2px dashed #d97706;
       background: transparent;
       pointer-events: auto;
       cursor: pointer;
     }
+    .note-rect[data-note-type="typed"] { border-bottom: 2px dashed #d97706; }
+    .note-rect[data-note-type="handwritten"] { border-bottom: 2px dotted #6366f1; }
 
     /* E-ink overrides — kill momentum scroll, transparency, animations, and
        shadows; render highlights as solid black outlines since semi-transparent
@@ -101,6 +102,10 @@ export function getPdfReaderHtml(bookUrl: string): string {
       mix-blend-mode: normal;
       border: 1.5px solid #000;
       border-radius: 0;
+    }
+    body.eink .note-rect[data-note-type="typed"],
+    body.eink .note-rect[data-note-type="handwritten"] {
+      border-bottom-color: #000;
     }
     body.eink .text-layer > span::selection { background: #000; color: #fff; }
     #loading, #error {
@@ -395,6 +400,7 @@ export function getPdfReaderHtml(bookUrl: string): string {
 
     function drawNote(payload) {
       const cfi = payload.cfi;
+      const noteType = payload.noteType === 'handwritten' ? 'handwritten' : 'typed';
       const parsed = parsePdfCfi(cfi);
       if (!parsed) return;
       const wrap = pageWraps.get(parsed.pageNum);
@@ -407,13 +413,14 @@ export function getPdfReaderHtml(bookUrl: string): string {
         const div = document.createElement('div');
         div.className = 'note-rect';
         div.dataset.cfi = cfi;
+        div.dataset.noteType = noteType;
         div.style.left = (r.x * 100) + '%';
         div.style.top = (r.y * 100) + '%';
         div.style.width = (r.w * 100) + '%';
         div.style.height = (r.h * 100) + '%';
         div.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          post('noteTapped', { cfi });
+          post('noteTapped', { cfi, noteType });
         });
         layer.appendChild(div);
       }

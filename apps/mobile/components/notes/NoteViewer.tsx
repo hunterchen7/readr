@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, Modal, ScrollView, Alert } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, ScrollView } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import type { Note, StrokePoint } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
@@ -24,13 +24,6 @@ function pointsToPath(points: StrokePoint[]): string {
 export function NoteViewer({ note, onClose, onEdit, onDelete, onJumpTo }: NoteViewerProps) {
   const display = useDisplay();
   if (!note) return null;
-
-  const confirmDelete = () => {
-    Alert.alert("Delete note", "This note will be removed.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => onDelete(note.id) },
-    ]);
-  };
 
   return (
     <Modal
@@ -86,7 +79,7 @@ export function NoteViewer({ note, onClose, onEdit, onDelete, onJumpTo }: NoteVi
                 Jump to passage
               </Text>
             </Pressable>
-            <Pressable style={styles.footerBtn} onPress={confirmDelete}>
+            <Pressable style={styles.footerBtn} onPress={() => onDelete(note.id)}>
               <Text style={[styles.footerBtnText, { color: "#dc2626" }]}>Delete</Text>
             </Pressable>
           </View>

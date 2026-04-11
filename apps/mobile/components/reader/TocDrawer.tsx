@@ -32,6 +32,7 @@ interface TocDrawerProps {
   onJumpToBookmark: (bookmark: Bookmark) => void;
   onDeleteBookmark: (id: string) => void;
   onJumpToNote: (note: Note) => void;
+  onDeleteNote: (id: string) => void;
   onJumpToHighlight: (highlight: Highlight) => void;
   onDeleteHighlight: (id: string) => void;
   theme: { bg: string; fg: string };
@@ -48,6 +49,7 @@ export function TocDrawer({
   onJumpToBookmark,
   onDeleteBookmark,
   onJumpToNote,
+  onDeleteNote,
   onJumpToHighlight,
   onDeleteHighlight,
   theme,
@@ -231,7 +233,17 @@ export function TocDrawer({
                     </>
                   ) : (
                     <>
-                      <View style={[styles.highlightBar, { backgroundColor: "#60a5fa" }]} />
+                      <View
+                        style={[
+                          styles.highlightBar,
+                          {
+                            backgroundColor:
+                              (entry.item as Note).noteType === "handwritten"
+                                ? "#6366f1"
+                                : "#d97706",
+                          },
+                        ]}
+                      />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.noteText, { color: theme.fg }]} numberOfLines={2}>
                           {(entry.item as Note).noteType === "handwritten" ? "Handwritten note" : ((entry.item as Note).textContent || "Note")}
@@ -240,6 +252,12 @@ export function TocDrawer({
                           {Math.round((entry.item as Note).position.percentage)}%
                         </Text>
                       </View>
+                      <Pressable
+                        onPress={() => onDeleteNote(entry.item.id)}
+                        style={styles.deleteBtn}
+                      >
+                        <Trash2 size={16} color={theme.fg + "66"} />
+                      </Pressable>
                     </>
                   )}
                 </Pressable>
