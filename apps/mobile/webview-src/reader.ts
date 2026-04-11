@@ -87,6 +87,9 @@ type RNMessage = { type: string; payload?: any };
 
 let view: FoliateView | null = null;
 let book: FoliateBook | null = null;
+// Kept so measurement can re-parse the book into a separate instance
+// for a hidden measurement view without touching the main view's state.
+let bookFile: File | null = null;
 // Whether tap-on-left/right turns the page. Flipped from setTheme.
 let tapToTurn = true;
 // Whether swipe/drag gestures are allowed to turn pages. When false,
@@ -98,11 +101,11 @@ let swipeEnabled = true;
 // operate on whatever's currently shown.
 let currentSectionDoc: Document | null = null;
 
-// Page counting — populated by a hidden-container scrollWidth scan
-// on open / theme change, then refined by foliate's own paginator.
+// Page counting — populated asynchronously by measurement running in a
+// hidden second foliate-view. While unlocked, the relocate handler
+// falls back to foliate's byte-based `location.total` as a stub.
 let sectionPageCounts: Record<number, number> = {};
 let sectionPageCountsLocked = false;
-let currentSectionIndex = 0;
 
 // Theme CSS that gets injected into every new section document.
 let currentThemeCSS = '';
@@ -117,6 +120,90 @@ const noteCfis = new Map<string, 'typed' | 'handwritten'>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function post(type: string, payload: any): void {
   window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
+}
+
+// Compute progressUpdated payload from a foliate location detail and
+// post it. Used by both the relocate listener and the post-measurement
+// commit path so the math lives in exactly one place. Reads
+// view.renderer state directly because that's the live source for
+// per-section display values.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function computeAndPostProgress(d: any): void {
+  if (!d || !view) return;
+  const frac: number = d.fraction ?? 0;
+  const totalSections = book?.sections?.length ?? 1;
+  const secIdx = Math.max(0, Math.min(totalSections - 1, d.section?.current ?? 0));
+
+  const rPages = view.renderer?.pages;
+  const rPage = view.renderer?.page;
+  const pagesInSection = typeof rPages === 'number' && rPages > 2 ? rPages - 2 : 1;
+  const pageInSection = typeof rPage === 'number' && typeof rPages === 'number' && rPages > 2
+    ? Math.max(1, Math.min(pagesInSection, rPage))
+    : 1;
+
+  let currentPage: number;
+  let totalPages: number;
+  let totalIsEstimate: boolean;
+
+  if (sectionPageCountsLocked) {
+    // Refine on visit: foliate's live paginator is the ultimate
+    // source of truth for the section we're actually rendering. If
+    // measurement drifted, update sectionPageCounts in place so the
+    // mapping below is exact and total converges toward truth.
+    if (typeof rPages === 'number' && rPages > 2) {
+      const runtimeCount = rPages - 2;
+      if (sectionPageCounts[secIdx] !== runtimeCount) {
+        sectionPageCounts[secIdx] = runtimeCount;
+      }
+    }
+
+    const sectionFractions = view.getSectionFractions?.() ?? [];
+    const measuredPages = sectionPageCounts[secIdx] ?? 1;
+    let pageInSectionMeasured = 1;
+    if (measuredPages > 1) {
+      const sectionStart = sectionFractions[secIdx] ?? (secIdx / totalSections);
+      const sectionEnd = sectionFractions[secIdx + 1] ?? ((secIdx + 1) / totalSections);
+      const sectionSpan = Math.max(0, sectionEnd - sectionStart);
+      const sectionFrac = sectionSpan > 0
+        ? Math.min(1, Math.max(0, (frac - sectionStart) / sectionSpan))
+        : 0;
+      pageInSectionMeasured = Math.max(
+        1,
+        Math.min(measuredPages, Math.round(sectionFrac * measuredPages) || 1),
+      );
+    }
+    totalPages = 0;
+    let pagesBefore = 0;
+    for (let i = 0; i < totalSections; i++) {
+      const count = sectionPageCounts[i] ?? 1;
+      if (i < secIdx) pagesBefore += count;
+      totalPages += count;
+    }
+    totalPages = Math.max(1, totalPages);
+    currentPage = Math.max(1, Math.min(totalPages, pagesBefore + pageInSectionMeasured));
+    totalIsEstimate = false;
+  } else {
+    // Stub: foliate's byte-based location.total. Note this is
+    // invariant to font/margin (it's a byte-based estimate), so the
+    // user won't see a number change until measurement locks.
+    const loc = d.location;
+    totalPages = loc?.total ?? 1;
+    currentPage = loc?.current != null ? loc.current + 1 : 1;
+    totalIsEstimate = true;
+  }
+
+  post('progressUpdated', {
+    percentage: Math.round(frac * 1000) / 10,
+    cfi: d.cfi,
+    chapter: d.tocItem?.label,
+    chapterHref: d.tocItem?.href,
+    sectionIndex: secIdx,
+    currentPage,
+    totalPages,
+    pageInSection,
+    pagesInSection,
+    totalIsEstimate,
+  });
 }
 
 // ─── Incoming RN messages ─────────────────────────────────────────────
@@ -430,8 +517,12 @@ function applyTheme(theme: Theme): void {
   renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
   sectionPageCounts = {};
   sectionPageCountsLocked = false;
+  _measureSeq++;
+  post('debug', {
+    msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily}`,
+  });
   requestAnimationFrame(() => {
-    void precomputeAllPages();
+    void runMeasurement();
   });
 }
 
@@ -477,91 +568,164 @@ function forceShadowBackground(host: any, bgColor: string): void {
 }
 
 // ─── Page counting ────────────────────────────────────────────────────
+//
+// Page counts are measured asynchronously by a hidden second
+// foliate-view that walks through every section. We use foliate's
+// own renderer so the count for section N is guaranteed to match the
+// main view's count when the user actually navigates there — same
+// iframe, same columnize CSS, same fonts.ready gating.
+//
+// Re-measurement is kicked off whenever a layout-affecting theme
+// field changes (font size, margin, font family, etc). A monotonic
+// sequence number lets a newer request supersede an in-flight run:
+// the running loop checks the seq after every section and bails
+// early. After the loop, results are only committed if the seq
+// still matches.
 
-function remeasureCurrentSection(): void {
-  // Never overwrite locked (precomputed) values — they're authoritative.
-  if (sectionPageCountsLocked) return;
-  if (!currentSectionDoc || !view) return;
-  const vw = view.clientWidth || window.innerWidth;
-  if (vw <= 0) return;
+let _measureSeq = 0;
+let _measureRunning = false;
+
+async function runMeasurement(): Promise<void> {
+  if (_measureRunning) return; // in-flight loop will pick up seq bumps
+  _measureRunning = true;
+
   try {
-    const sw = currentSectionDoc.documentElement.scrollWidth
-      || currentSectionDoc.body?.scrollWidth || 0;
-    if (sw > 0) {
-      sectionPageCounts[currentSectionIndex] = Math.max(1, Math.ceil(sw / vw));
+    while (true) {
+      const mySeq = _measureSeq;
+      const ok = await measureOnce(mySeq);
+      if (ok && mySeq === _measureSeq) break;
+      // Either measurement was cancelled mid-run (seq bumped) or it
+      // failed. If seq advanced, loop and run again. Otherwise bail.
+      if (mySeq === _measureSeq) break;
     }
-  } catch { /* ignore */ }
+  } finally {
+    _measureRunning = false;
+  }
 }
 
-// Measure page counts for ALL sections by loading each section's
-// document via createDocument(), injecting theme CSS, and measuring
-// scrollWidth in a hidden container. This gives exact page counts.
-let _precomputeRunning = false;
-async function precomputeAllPages(): Promise<void> {
-  if (_precomputeRunning || !book?.sections || !view) return;
-  _precomputeRunning = true;
-
-  // document.fonts.ready resolves immediately if no pending font is
-  // actually in use. Explicitly force-load the theme font first so
-  // scrollWidth measurements use final glyph metrics, not fallback.
-  const fs = currentTheme.fontSize || 16;
-  const ff = currentTheme.fontFamily || 'serif';
-  try {
-    if (document.fonts?.load) {
-      await document.fonts.load(`${fs}px "${ff}"`);
-    }
-    await document.fonts?.ready;
-  } catch { /* ignore */ }
+async function measureOnce(mySeq: number): Promise<boolean> {
+  const foliate = window.__foliate;
+  if (!foliate || !view || !bookFile) return false;
 
   const vw = view.clientWidth || window.innerWidth;
   const vh = view.clientHeight || window.innerHeight || 800;
-  if (vw <= 0) { _precomputeRunning = false; return; }
+  if (vw <= 0 || vh <= 0) return false;
 
-  const total = book.sections.length;
-  let measured = 0;
+  const host = document.createElement('div');
+  host.id = 'readr-measure-host';
+  host.style.cssText =
+    'position:fixed;left:-99999px;top:0;'
+    + `width:${vw}px;height:${vh}px;`
+    + 'visibility:hidden;pointer-events:none;';
+  document.body.appendChild(host);
 
-  for (let i = 0; i < total; i++) {
-    if (sectionPageCounts[i]) { measured++; continue; }
-    try {
-      const section = book.sections[i];
-      const doc = await section.createDocument();
-      if (!doc || !doc.body) { sectionPageCounts[i] = 1; measured++; continue; }
+  const t0 = Date.now();
+  post('debug', {
+    msg: `measure start seq=${mySeq} vw=${vw} vh=${vh} margin=${currentTheme.margin} marginV=${currentTheme.marginV} fs=${currentTheme.fontSize}`,
+  });
+  try {
+    // Fresh book instance so the hidden view's section iframes never
+    // collide with the main view's active section loader.
+    const mbook = await foliate.makeBook(bookFile);
+    if (mySeq !== _measureSeq) return false;
+    if (!mbook.sections?.length) return true;
 
-      const el = document.createElement('div');
-      el.style.cssText =
-        'position:fixed;left:-99999px;top:0;'
-        + `width:${vw}px;height:${vh}px;`
-        + `column-width:${vw}px;column-fill:auto;`
-        + 'overflow:hidden;visibility:hidden;';
-      if (currentThemeCSS) {
-        const style = document.createElement('style');
-        style.textContent = currentThemeCSS;
-        el.appendChild(style);
-      }
-      el.innerHTML += doc.body.innerHTML;
-      document.body.appendChild(el);
+    const mview = document.createElement('foliate-view') as FoliateView;
+    host.appendChild(mview);
+    await mview.open(mbook);
+    if (mySeq !== _measureSeq) return false;
 
-      const sw = el.scrollWidth;
-      // ceil matches foliate's expand(): pageCount = ceil(contentSize/size)
-      sectionPageCounts[i] = Math.max(1, Math.ceil(sw / vw));
-      measured++;
-
-      document.body.removeChild(el);
-    } catch (err) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      post('debug', { msg: `precompute section ${i} failed: ${(err as any)?.message || err}` });
-      sectionPageCounts[i] = 1;
-      measured++;
+    // Mirror the main view's paginator layout EXACTLY — any divergence
+    // means our measured counts won't match what the main view renders.
+    const r = mview.renderer;
+    if (r) {
+      r.setAttribute('flow', 'paginated');
+      r.setAttribute('gap', '0%');
+      r.setAttribute('max-inline-size', '99999px');
+      r.setAttribute('max-block-size', '99999px');
+      r.setAttribute('margin', `${currentTheme.marginV ?? 24}px`);
+      if (currentThemeCSS) r.setStyles?.(currentThemeCSS);
     }
+
+    // Make sure fonts are loaded before we start measuring. Foliate
+    // also per-section awaits fonts.ready but covering it here means
+    // the first section isn't measured against a fallback font.
+    try { await document.fonts?.ready; } catch { /* ignore */ }
+
+    const total = mbook.sections.length;
+    const counts: number[] = new Array(total).fill(1);
+
+    for (let i = 0; i < total; i++) {
+      if (mySeq !== _measureSeq) return false;
+      try {
+        await mview.goTo({ index: i, anchor: 0 });
+      } catch (err) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        post('debug', { msg: `measure goTo ${i} failed: ${(err as any)?.message || err}` });
+        continue;
+      }
+
+      // Foliate's paginator awaits the iframe's own fonts.ready and
+      // re-runs expand() when fonts arrive. We must wait for that or
+      // we'll record a count taken with the fallback font's metrics —
+      // which then disagrees with the main view's count and breaks
+      // the proportional mapping in the relocate handler.
+      try {
+        const contents = mview.renderer?.getContents?.() ?? [];
+        for (const c of contents) {
+          if (c.doc?.fonts?.ready) await c.doc.fonts.ready;
+        }
+      } catch { /* ignore */ }
+
+      // Poll .pages until it stops changing for two consecutive reads.
+      // ResizeObserver-driven expand() reruns can land asynchronously
+      // after image decode or late style application; this catches
+      // them. Capped at ~150ms so a pathological section can't stall.
+      let stable = mview.renderer?.pages ?? 0;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise<void>((r2) => setTimeout(r2, 16));
+        const cur = mview.renderer?.pages ?? 0;
+        if (cur > 0 && cur === stable) break;
+        stable = cur;
+      }
+      counts[i] = stable > 2 ? stable - 2 : 1;
+
+      // Yield to input handling between sections.
+      await new Promise<void>((r2) => setTimeout(r2, 0));
+    }
+
+    if (mySeq !== _measureSeq) return false;
+
+    // Commit: swap in the measured counts and lock.
+    const next: Record<number, number> = {};
+    let totalPages = 0;
+    for (let i = 0; i < total; i++) {
+      next[i] = counts[i];
+      totalPages += counts[i];
+    }
+    sectionPageCounts = next;
+    sectionPageCountsLocked = true;
+    post('debug', {
+      msg: `measure done seq=${mySeq}: ${total} sections, ${totalPages} pages in ${Date.now() - t0}ms`,
+    });
+    post('pagesComputed', { totalPages, measured: total, total });
+
+    // Foliate doesn't auto-fire relocate when measurement completes,
+    // so call computeAndPostProgress directly with the main view's
+    // last location. This pushes the new total to RN immediately
+    // without waiting for the user to flip a page.
+    try {
+      const last = view?.lastLocation;
+      if (last) computeAndPostProgress(last);
+    } catch { /* ignore */ }
+    return true;
+  } catch (err) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    post('debug', { msg: `measure failed: ${(err as any)?.message || err}` });
+    return false;
+  } finally {
+    try { host.remove(); } catch { /* ignore */ }
   }
-
-  _precomputeRunning = false;
-
-  let totalPages = 0;
-  for (let i = 0; i < total; i++) totalPages += sectionPageCounts[i] ?? 1;
-  sectionPageCountsLocked = true;
-  post('debug', { msg: `precompute done: ${measured}/${total} sections, ${totalPages} pages` });
-  post('pagesComputed', { totalPages, measured, total });
 }
 
 // ─── Search ──────────────────────────────────────────────────────────
@@ -633,6 +797,7 @@ async function init(): Promise<void> {
 
     const blob = await fetchFile(config.bookUrl);
     const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
+    bookFile = file;
 
     book = await makeBook(file);
     const loading = document.getElementById('loading');
@@ -771,85 +936,13 @@ async function init(): Promise<void> {
       passive: false,
     });
 
-    // Relay location changes. Foliate's relocate detail has `index` and
-    // `fraction`. We reconstruct section index and compute an absolute
-    // currentPage from the precomputed counts.
+    // Relay location changes. The actual computation lives in
+    // computeAndPostProgress() so the post-measurement commit path
+    // can call exactly the same logic.
     view.addEventListener('relocate', (e) => {
-      // Re-attach on every relocate as a safety net — idempotent via
-      // the WeakSet so this only does work for newly-rendered docs.
       ensureAllDocsAttached();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const d = (e as CustomEvent).detail as any;
-      const frac: number = d.fraction ?? 0;
-      const totalSections = book?.sections?.length ?? 1;
-      const secIdx = Math.max(0, Math.min(totalSections - 1, d.section?.current ?? 0));
-      const sectionFractions = view?.getSectionFractions?.() ?? [];
-
-      // Prefer foliate's own paginator counts for the current section —
-      // they match exactly what it uses for navigation. Scrollwidth-
-      // based precompute can drift ±1 from foliate's count, so we
-      // overwrite the precomputed value with the authoritative one
-      // whenever we actually render a section.
-      let pagesInSection: number;
-      let pageInSection: number;
-      const rPages = view?.renderer?.pages;
-      const rPage = view?.renderer?.page;
-      if (typeof rPages === 'number' && rPages > 2 && typeof rPage === 'number') {
-        pagesInSection = Math.max(1, rPages - 2);
-        pageInSection = Math.max(1, Math.min(pagesInSection, rPage));
-        sectionPageCounts[secIdx] = pagesInSection;
-      } else {
-        // Fallback — renderer not ready. Use scrollwidth if we've
-        // never seen this section, then derive page from the fraction.
-        const vw = (view?.clientWidth || window.innerWidth) ?? 0;
-        if (!sectionPageCountsLocked && !sectionPageCounts[secIdx] && currentSectionDoc && vw > 0) {
-          try {
-            const sw = currentSectionDoc.documentElement.scrollWidth
-              || currentSectionDoc.body?.scrollWidth || 0;
-            if (sw > 0) sectionPageCounts[secIdx] = Math.max(1, Math.ceil(sw / vw));
-          } catch { /* ignore */ }
-        }
-        pagesInSection = sectionPageCounts[secIdx] ?? 1;
-        pageInSection = 1;
-        if (pagesInSection > 1) {
-          const sectionStart = sectionFractions[secIdx] ?? (secIdx / totalSections);
-          const sectionEnd = sectionFractions[secIdx + 1] ?? ((secIdx + 1) / totalSections);
-          const sectionSpan = Math.max(0, sectionEnd - sectionStart);
-          const sectionFrac = sectionSpan > 0
-            ? Math.min(1, Math.max(0, (frac - sectionStart) / sectionSpan))
-            : 0;
-          pageInSection = Math.max(1, Math.min(pagesInSection, Math.round(sectionFrac * pagesInSection) || 1));
-        }
-      }
-
-      // Total pages — sum measured counts; for unmeasured ones we
-      // estimate using the current section's page count (only used
-      // briefly during initial load before precompute finishes).
-      let totalPages = 0;
-      let pagesBefore = 0;
-      for (let i = 0; i < totalSections; i++) {
-        const count = sectionPageCounts[i] ?? pagesInSection;
-        if (i < secIdx) pagesBefore += count;
-        totalPages += count;
-      }
-      totalPages = Math.max(1, totalPages);
-
-      // Current page = sum of prior sections + page in current section.
-      // Only way to keep currentPage consistent with pageInSection
-      // across non-uniform section sizes.
-      const currentPage = Math.max(1, Math.min(totalPages, pagesBefore + pageInSection));
-
-      post('progressUpdated', {
-        percentage: Math.round(frac * 1000) / 10,
-        cfi: d.cfi,
-        chapter: d.tocItem?.label,
-        chapterHref: d.tocItem?.href,
-        sectionIndex: secIdx,
-        currentPage,
-        totalPages,
-        pageInSection,
-        pagesInSection,
-      });
+      computeAndPostProgress((e as CustomEvent).detail as any);
     });
 
     // Annotation rendering — pick highlight vs note styling.
@@ -888,15 +981,13 @@ async function init(): Promise<void> {
 
     // Foliate fires 'load' with { doc, index } for every newly-loaded
     // section. We keep a pointer to the current doc (TTS scrapes it),
-    // inject theme CSS, trigger a remeasure, and wire up tap handlers.
+    // inject theme CSS, and wire up tap handlers.
     view.addEventListener('load', (e) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const detail = (e as CustomEvent).detail as any;
       if (detail?.doc) {
         currentSectionDoc = detail.doc as Document;
         injectThemeIntoDoc(currentSectionDoc);
-        currentSectionIndex = detail.index;
-        setTimeout(() => remeasureCurrentSection(), 200);
         attachTapHandlers(currentSectionDoc);
       }
     });
