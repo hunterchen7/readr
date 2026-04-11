@@ -58,14 +58,13 @@ export default function RootLayout() {
               }}
             />
           </Stack>
-          {/* E-ink panels can't render translucent system bars — force a
-              solid "dark text on light" style and a white background so
-              the Supernote status bar blends into the reader page. */}
-          <StatusBar
-            style={isEink ? "dark" : "auto"}
-            backgroundColor={isEink ? "#ffffff" : undefined}
-            translucent={isEink ? false : undefined}
-          />
+          {/* On e-ink, force dark glyphs so status-bar icons stay readable
+              against the reader/library page. We deliberately don't touch
+              translucent or backgroundColor: the app runs edge-to-edge and
+              every screen already pads by `insets.top`, so a solid bar
+              would double-count the top inset and also cover sepia/dark
+              reader themes with a white strip. */}
+          <StatusBar style={isEink ? "dark" : "auto"} />
         </DisplayProvider>
       </QueryClientProvider>
     </SafeAreaProvider>
