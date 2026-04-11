@@ -220,9 +220,26 @@ function handleRNMessage(data: RNMessage): void {
     case 'setTheme':
       applyTheme(data.payload);
       break;
-    case 'goToLocation':
-      if (data.payload.cfi) view.goTo(data.payload.cfi);
-      else if (data.payload.fraction != null) view.goToFraction(data.payload.fraction);
+    case 'goToLocation': {
+      // Await the nav and reveal the viewer after it lands, so the
+      // first-section render from init() never flashes on screen
+      // before the saved position is restored. revealViewer() is
+      // idempotent, so later seeks hit it as a cheap no-op.
+      const v = view;
+      (async (): Promise<void> => {
+        try {
+          if (data.payload.cfi) await v.goTo(data.payload.cfi);
+          else if (data.payload.fraction != null)
+            await v.goToFraction(data.payload.fraction);
+        } catch { /* ignore */ }
+        revealViewer();
+      })();
+      break;
+    }
+    case 'revealContent':
+      // No saved position to restore — reveal the first-section render
+      // that init() already navigated to.
+      revealViewer();
       break;
     case 'goToChapter':
       if (data.payload.href) {
@@ -1085,6 +1102,18 @@ function showError(msg: string): void {
     errorDiv.style.display = 'flex';
     errorDiv.textContent = msg;
   }
+}
+
+// Unhide the foliate viewport and tear down the "Loading book…" splash.
+// Called after the saved position has been restored (or when RN decides
+// there's nothing to restore) so the user never sees the first-section
+// render flash that precedes the resume navigation. Idempotent — later
+// seeks/chapter jumps hit it as a no-op.
+function revealViewer(): void {
+  const loading = document.getElementById('loading');
+  if (loading) loading.style.display = 'none';
+  const viewer = document.getElementById('viewer');
+  if (viewer) viewer.style.visibility = 'visible';
 }
 
 // Wire up incoming RN messages. postMessage from RN injects a

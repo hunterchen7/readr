@@ -400,13 +400,22 @@ export default function ReaderScreen() {
   // first and buffered itself via pendingReadyRestoreRef).
   const applySavedRestore = useCallback(() => {
     const saved = savedPositionRef.current;
+    let sentNav = false;
     if (saved) {
       const pct = saved.percentage;
       if (typeof pct === "number" && pct > 0) {
         sendToWebView("goToLocation", { fraction: pct / 100 });
+        sentNav = true;
       } else if (saved.cfi) {
         sendToWebView("goToLocation", { cfi: saved.cfi });
+        sentNav = true;
       }
+    }
+    if (!sentNav) {
+      // No saved position — the WebView is sitting behind a hidden
+      // viewer waiting for a restore. Tell it to reveal the initial
+      // first-section render that init() already navigated to.
+      sendToWebView("revealContent", {});
     }
     hasRestoredRef.current = true;
   }, [sendToWebView]);
