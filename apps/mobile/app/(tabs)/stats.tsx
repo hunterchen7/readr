@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getStatsSummary, getStatsDaily } from "../../lib/api";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
+import { ErrorFallback } from "../../components/ErrorFallback";
 
 export default function StatsScreen() {
   const insets = useSafeAreaInsets();
@@ -17,6 +18,7 @@ export default function StatsScreen() {
   });
 
   const loading = summary.isLoading || daily.isLoading;
+  const loadError = summary.error ?? daily.error;
   const dailyData = daily.data?.daily ?? [];
 
   // Normalize to 30 days so the bar chart has a consistent width.
@@ -34,6 +36,15 @@ export default function StatsScreen() {
         <View style={styles.center}>
           <LoadingIndicator />
         </View>
+      ) : loadError ? (
+        <ErrorFallback
+          title="Couldn't load stats"
+          message={loadError.message}
+          onRetry={() => {
+            summary.refetch();
+            daily.refetch();
+          }}
+        />
       ) : summary.data ? (
         <>
           <View style={styles.statGrid}>
@@ -82,9 +93,13 @@ export default function StatsScreen() {
           </Text>
         </>
       ) : (
-        <View style={styles.center}>
-          <Text style={styles.muted}>Could not load stats.</Text>
-        </View>
+        <ErrorFallback
+          title="Couldn't load stats"
+          onRetry={() => {
+            summary.refetch();
+            daily.refetch();
+          }}
+        />
       )}
     </ScrollView>
   );

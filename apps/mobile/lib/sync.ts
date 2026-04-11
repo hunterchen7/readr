@@ -218,6 +218,76 @@ async function applyNoteChange(
 }
 
 /**
+ * Push the local sync queue to the server without pulling. Cheaper
+ * than runSync(): one round trip, no remote-change application. Used
+ * by the debounced "push on every write" trigger so a page flip costs
+ * one POST instead of a full pull+push cycle. Returns null on
+ * network/auth failure — the queue is left intact so the next push
+ * (or the next runSync on launch) will retry the pending entries.
+ */
+export async function pushPending(): Promise<{ pushed: number; conflicts: SyncConflict[] } | null> {
+  const queue = await getSyncQueue();
+  if (queue.length === 0) return { pushed: 0, conflicts: [] };
+
+  const deduplicated = deduplicateQueue(queue);
+  const pushResult = await pushChanges(deduplicated);
+  if (!pushResult) return null;
+
+  // Drop accepted entries from the local queue. Anything not in the
+  // accepted set stays put — either the server rejected it (conflict)
+  // or it's a new entry that was queued after the request started.
+  const acceptedKeys = new Set(
+    (pushResult.acceptedEntities ?? []).map((entry) => `${entry.entityType}:${entry.entityId}`),
+  );
+  if (acceptedKeys.size > 0) {
+    const db = await getDb();
+    const idsToRemove = queue
+      .filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`))
+      .map((e) => e.id)
+      .filter((id): id is number => id != null);
+    for (const id of idsToRemove) {
+      await db.runAsync("DELETE FROM sync_queue WHERE id = ?", [id]);
+    }
+  }
+
+  return { pushed: pushResult.accepted ?? 0, conflicts: pushResult.conflicts ?? [] };
+}
+
+// Debounced opportunistic-push trigger. Every local write
+// (page flip, bookmark, note, highlight) calls schedulePush(); we
+// coalesce rapid bursts so a 10-page sprint costs one POST, not ten.
+//
+// Offline behaviour: pushPending() returns null on network failure
+// without touching the queue, so writes accumulate locally and the
+// next successful push (or the next runSync on launch) drains them.
+let _pushTimer: ReturnType<typeof setTimeout> | null = null;
+let _pushInFlight = false;
+const PUSH_DEBOUNCE_MS = 800;
+
+export function schedulePush(): void {
+  if (_pushTimer) clearTimeout(_pushTimer);
+  _pushTimer = setTimeout(async () => {
+    _pushTimer = null;
+    if (_pushInFlight) {
+      // Another push started already — re-arm so any writes that
+      // happened after that push started still get a chance.
+      schedulePush();
+      return;
+    }
+    _pushInFlight = true;
+    try {
+      await pushPending();
+    } catch {
+      // Swallow — pushPending already returns null on failure and
+      // leaves the queue intact. We just don't want a thrown error to
+      // become an unhandled promise rejection in the JS console.
+    } finally {
+      _pushInFlight = false;
+    }
+  }, PUSH_DEBOUNCE_MS);
+}
+
+/**
  * Run a full sync cycle: pull remote changes, push local queue.
  * Call this on app open and on reconnect.
  */

@@ -28,6 +28,7 @@ import {
 } from "../../lib/library-prefs";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
+import { ErrorFallback } from "../../components/ErrorFallback";
 import { colors, spacing, fontSize } from "../../lib/theme";
 import {
   Search,
@@ -117,7 +118,7 @@ export default function LibraryScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const { data, isLoading, error, isRefetching } = useQuery({
+  const { data, isLoading, error, isRefetching, refetch } = useQuery({
     queryKey: ["books", sort],
     queryFn: () => listBooks(sort),
   });
@@ -138,7 +139,12 @@ export default function LibraryScreen() {
   useFocusEffect(
     useCallback(() => {
       setFocusCount((c) => c + 1);
-    }, []),
+      // Refetch the server library on every focus so progress %, new
+      // books, and metadata edits picked up on another device show up
+      // when the user comes back to the library tab — including from
+      // the reader's "back to library" action.
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+    }, [queryClient]),
   );
 
   // Hydrate each book with its locally-stored progress percentage and
@@ -287,9 +293,11 @@ export default function LibraryScreen() {
 
   if (error) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>{error.message}</Text>
-      </View>
+      <ErrorFallback
+        title="Couldn't load library"
+        message={error.message}
+        onRetry={() => refetch()}
+      />
     );
   }
 

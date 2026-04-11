@@ -30,6 +30,7 @@ From the laptop repo root:
 ```bash
 rsync -avz --delete \
   --exclude='.git' \
+  --exclude='.env' \
   --exclude='node_modules' \
   --exclude='apps/mobile' \
   --exclude='apps/*/dist' \
@@ -39,6 +40,11 @@ rsync -avz --delete \
   --exclude='coverage' \
   ./ olares-ebook:~/readr/
 ```
+
+`.env` is excluded so the box keeps its own production secrets — rsync
+will never clobber `~/readr/.env` after the initial setup. Edit
+`~/readr/.env` directly on the box (and restart the api container) when
+you need to rotate a key or add a new var.
 
 `apps/mobile` is excluded — the server deploy doesn't need the RN app.
 

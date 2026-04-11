@@ -518,6 +518,11 @@ async function addToSyncQueue(
     "INSERT INTO sync_queue (entity_type, entity_id, operation, payload, device_id, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
     [entityType, entityId, operation, payload ? JSON.stringify(payload) : null, deviceId, now],
   );
+
+  // Kick the debounced background push so cross-device sync sees this
+  // write within ~1s. Lazy import to avoid a circular dep with sync.ts
+  // (sync.ts imports getSyncQueue/getDb from this file).
+  void import("./sync").then((mod) => mod.schedulePush()).catch(() => {});
 }
 
 export async function getSyncQueue(): Promise<SyncLogEntry[]> {

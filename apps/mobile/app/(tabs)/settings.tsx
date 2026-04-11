@@ -20,8 +20,19 @@ export default function SettingsScreen() {
           text: "Clear",
           style: "destructive",
           onPress: async () => {
-            const count = await clearAllDownloads();
-            Alert.alert("Done", `Removed ${count} cached file${count === 1 ? "" : "s"}`);
+            try {
+              const count = await clearAllDownloads();
+              Alert.alert("Done", `Removed ${count} cached file${count === 1 ? "" : "s"}`);
+            } catch (err) {
+              Alert.alert(
+                "Couldn't clear cache",
+                err instanceof Error ? err.message : String(err),
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Retry", onPress: handleClearCache },
+                ],
+              );
+            }
           },
         },
       ],

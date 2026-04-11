@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   ScrollView,
   Alert,
 } from "react-native";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Download, BookOpen, Check, Trash2 } from "lucide-react-native";
@@ -17,6 +17,7 @@ import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib
 import { getProgress } from "../../lib/local-db";
 import { colors, spacing, fontSize } from "../../lib/theme";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
+import { ErrorFallback } from "../../components/ErrorFallback";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -32,7 +33,7 @@ export default function BookDetailScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
     queryFn: () => getBook(bookId!),
     enabled: !!bookId,
@@ -61,6 +62,20 @@ export default function BookDetailScreen() {
       setProgressPct((book as any).progressPct);
     }
   }, [book, progressPct]);
+
+  // Refetch on focus so coming back from the reader (or from another
+  // device's edit landing via sync) reflects fresh metadata + the
+  // current progress percentage.
+  useFocusEffect(
+    useCallback(() => {
+      if (!bookId) return;
+      queryClient.invalidateQueries({ queryKey: ["book", bookId] });
+      (async () => {
+        const p = await getProgress(bookId);
+        if (p) setProgressPct(Math.round(p.position.percentage ?? 0));
+      })();
+    }, [bookId, queryClient]),
+  );
 
   async function handleDownload() {
     if (!bookId) return;
@@ -101,6 +116,18 @@ export default function BookDetailScreen() {
         },
       },
     ]);
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <ErrorFallback
+          title="Couldn't load book"
+          message={error.message}
+          onRetry={() => refetch()}
+        />
+      </View>
+    );
   }
 
   if (isLoading || !book) {

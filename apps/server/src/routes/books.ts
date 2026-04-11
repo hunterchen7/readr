@@ -48,23 +48,25 @@ app.get("/", async (c) => {
     conditions.push(eq(schema.files.format, query.format));
   }
 
-  // Subquery for latest progress percentage per book (most recent, not max)
-  const progressSq = db
-    .select({
+  // Latest reading_progress row per book for this user.
+  // selectDistinctOn keeps the first row per bookId after ordering, so
+  // combined with `desc(updatedAt)` it picks the most recent. Used to
+  // surface the current percentage in the list and to sort by recency.
+  const latestProgress = db
+    .selectDistinctOn([schema.readingProgress.bookId], {
       bookId: schema.readingProgress.bookId,
-      percentage: sql<number>`(
-        SELECT (rp2.position->>'percentage')::int
-        FROM reading_progress rp2
-        WHERE rp2.book_id = ${schema.readingProgress.bookId}
-          AND rp2.user_id = ${userId}
-        ORDER BY rp2.updated_at DESC
-        LIMIT 1
-      )`.as("progress_pct"),
+      position: schema.readingProgress.position,
+      updatedAt: schema.readingProgress.updatedAt,
     })
     .from(schema.readingProgress)
     .where(eq(schema.readingProgress.userId, userId))
-    .groupBy(schema.readingProgress.bookId)
-    .as("prog");
+    .orderBy(schema.readingProgress.bookId, desc(schema.readingProgress.updatedAt))
+    .as("latest_progress");
+
+  // Extract position.percentage as a float. JSONB path extraction has
+  // no first-class Drizzle helper, so we dip into `sql` here — but the
+  // column reference is still type-checked and the cast is centralised.
+  const progressPctSql = sql<number | null>`(${latestProgress.position}->>'percentage')::float`;
 
   let qb = db
     .select({
@@ -80,11 +82,11 @@ app.get("/", async (c) => {
       format: schema.files.format,
       fileSize: schema.files.size,
       coverKey: schema.files.coverKey,
-      progressPct: sql<number | null>`${progressSq.percentage}`,
+      progressPct: progressPctSql,
     })
     .from(schema.books)
     .innerJoin(schema.files, eq(schema.books.fileId, schema.files.id))
-    .leftJoin(progressSq, eq(progressSq.bookId, schema.books.id))
+    .leftJoin(latestProgress, eq(latestProgress.bookId, schema.books.id))
     .where(and(...conditions))
     .$dynamic();
 
@@ -95,23 +97,10 @@ app.get("/", async (c) => {
     case "author":
       qb = qb.orderBy(asc(effectiveAuthor));
       break;
-    case "lastRead": {
-      // Sort by latest reading_progress.updated_at for this user.
-      // Books with no progress yet fall to the end.
-      const lastRead = db
-        .select({
-          bookId: schema.readingProgress.bookId,
-          latest: sql`max(${schema.readingProgress.updatedAt})`.as("latest"),
-        })
-        .from(schema.readingProgress)
-        .where(eq(schema.readingProgress.userId, userId))
-        .groupBy(schema.readingProgress.bookId)
-        .as("lp");
-      qb = qb
-        .leftJoin(lastRead, eq(lastRead.bookId, schema.books.id))
-        .orderBy(sql`${lastRead.latest} desc nulls last`);
+    case "lastRead":
+      // Reuses latestProgress — books with no progress fall to the end.
+      qb = qb.orderBy(sql`${latestProgress.updatedAt} desc nulls last`);
       break;
-    }
     case "recent":
     default:
       qb = qb.orderBy(desc(schema.books.uploadedAt));
