@@ -22,11 +22,23 @@ import { listBooks, uploadBook } from "../../lib/api";
 import { getAllProgress } from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { useSyncStatus } from "../../lib/sync-status";
-import { useLibraryPrefs } from "../../lib/library-prefs";
+import {
+  useLibraryPrefs,
+  SORT_SERVER_DEFAULT_DIR,
+} from "../../lib/library-prefs";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { colors, spacing, fontSize } from "../../lib/theme";
-import { Search, X, LayoutGrid, List, RefreshCw, Plus, Cloud, ArrowUpDown } from "lucide-react-native";
+import {
+  Search,
+  X,
+  LayoutGrid,
+  List,
+  RefreshCw,
+  Plus,
+  ArrowDown,
+  ArrowUp,
+} from "lucide-react-native";
 import type { Book } from "@readr/shared";
 
 type BookWithProgress = Book & {
@@ -40,10 +52,10 @@ type SortKey = "recent" | "lastRead" | "title" | "author";
 type FilterKey = "all" | "reading" | "unread" | "finished" | "downloaded";
 
 const SORT_LABELS: Record<SortKey, string> = {
-  recent: "Recently added",
+  recent: "Added",
   lastRead: "Last read",
-  title: "Title A–Z",
-  author: "Author A–Z",
+  title: "Title",
+  author: "Author",
 };
 
 const FILTER_LABELS: Record<FilterKey, string> = {
@@ -55,6 +67,16 @@ const FILTER_LABELS: Record<FilterKey, string> = {
 };
 
 const GRID_COLUMNS = 4;
+
+function readingStatus(
+  item: BookWithProgress,
+): { label: string; tone: "reading" | "finished" | "unread" } | null {
+  if (!item.downloaded) return null;
+  if (item.progressPct >= 98) return { label: "Finished", tone: "finished" };
+  if (item.progressPct > 0)
+    return { label: `Reading · ${item.progressPct}%`, tone: "reading" };
+  return { label: "Unread", tone: "unread" };
+}
 
 function formatRelative(ts: number): string {
   const ago = Math.max(0, Date.now() - ts);
@@ -73,9 +95,11 @@ export default function LibraryScreen() {
 
   // Persisted UI prefs (sort, filter, view mode, last search)
   const sort = useLibraryPrefs((s) => s.sort);
+  const sortDir = useLibraryPrefs((s) => s.sortDir);
   const filter = useLibraryPrefs((s) => s.filter);
   const view = useLibraryPrefs((s) => s.view);
   const setSort = useLibraryPrefs((s) => s.setSort);
+  const setSortDir = useLibraryPrefs((s) => s.setSortDir);
   const setFilter = useLibraryPrefs((s) => s.setFilter);
   const setView = useLibraryPrefs((s) => s.setView);
 
@@ -98,7 +122,9 @@ export default function LibraryScreen() {
   });
 
   const rawBooks = data?.books ?? [];
-  const [booksWithProgress, setBooksWithProgress] = useState<BookWithProgress[]>([]);
+  const [booksWithProgress, setBooksWithProgress] = useState<
+    BookWithProgress[]
+  >([]);
 
   const syncPhase = useSyncStatus((s) => s.phase);
   const syncLastAt = useSyncStatus((s) => s.lastSyncAt);
@@ -108,9 +134,11 @@ export default function LibraryScreen() {
   // Re-hydrate download/progress status when screen regains focus
   // (e.g. after downloading a book in the detail screen).
   const [focusCount, setFocusCount] = useState(0);
-  useFocusEffect(useCallback(() => {
-    setFocusCount((c) => c + 1);
-  }, []));
+  useFocusEffect(
+    useCallback(() => {
+      setFocusCount((c) => c + 1);
+    }, []),
+  );
 
   // Hydrate each book with its locally-stored progress percentage and
   // downloaded status. Runs whenever the server list or focus changes.
@@ -144,11 +172,11 @@ export default function LibraryScreen() {
     };
   }, [rawBooks, focusCount]);
 
-  // Apply filter + client-side search on top of the server-sorted list.
+  // Apply filter + client-side search on top of the server-sorted list,
+  // then reverse if the user flipped direction away from the server default.
   const visibleBooks = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return booksWithProgress.filter((b) => {
-      // Read-status filter
+    const filtered = booksWithProgress.filter((b) => {
       switch (filter) {
         case "reading":
           if (!(b.progressPct > 0 && b.progressPct < 98)) return false;
@@ -163,14 +191,16 @@ export default function LibraryScreen() {
           if (!b.downloaded) return false;
           break;
       }
-      // Text search
       if (needle) {
         const hay = `${b.title ?? ""} ${b.author ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
     });
-  }, [booksWithProgress, filter, search]);
+    return sortDir === SORT_SERVER_DEFAULT_DIR[sort]
+      ? filtered
+      : filtered.toReversed();
+  }, [booksWithProgress, filter, search, sort, sortDir]);
 
   async function handleDownload(bookId: string) {
     setBooksWithProgress((prev) =>
@@ -179,17 +209,23 @@ export default function LibraryScreen() {
     try {
       await downloadBook(bookId, (frac) => {
         setBooksWithProgress((prev) =>
-          prev.map((b) => (b.id === bookId ? { ...b, downloadProgress: frac } : b)),
+          prev.map((b) =>
+            b.id === bookId ? { ...b, downloadProgress: frac } : b,
+          ),
         );
       });
       setBooksWithProgress((prev) =>
         prev.map((b) =>
-          b.id === bookId ? { ...b, downloaded: true, downloadProgress: null } : b,
+          b.id === bookId
+            ? { ...b, downloaded: true, downloadProgress: null }
+            : b,
         ),
       );
     } catch (err) {
       setBooksWithProgress((prev) =>
-        prev.map((b) => (b.id === bookId ? { ...b, downloadProgress: null } : b)),
+        prev.map((b) =>
+          b.id === bookId ? { ...b, downloadProgress: null } : b,
+        ),
       );
       Alert.alert(
         "Download failed",
@@ -219,7 +255,10 @@ export default function LibraryScreen() {
       });
       await queryClient.invalidateQueries({ queryKey: ["books"] });
     } catch (err) {
-      Alert.alert("Upload failed", err instanceof Error ? err.message : String(err));
+      Alert.alert(
+        "Upload failed",
+        err instanceof Error ? err.message : String(err),
+      );
     } finally {
       setUploading(false);
     }
@@ -229,6 +268,10 @@ export default function LibraryScreen() {
     const order: SortKey[] = ["recent", "lastRead", "title", "author"];
     const next = order[(order.indexOf(sort) + 1) % order.length];
     setSort(next);
+  }
+
+  function toggleSortDir() {
+    setSortDir(sortDir === "asc" ? "desc" : "asc");
   }
 
   if (error) {
@@ -249,14 +292,24 @@ export default function LibraryScreen() {
             onPress={() => setSearchOpen((o) => !o)}
             accessibilityLabel={searchOpen ? "Close search" : "Search library"}
           >
-            {searchOpen ? <X size={20} color={colors.text} /> : <Search size={20} color={colors.text} />}
+            {searchOpen ? (
+              <X size={20} color={colors.text} />
+            ) : (
+              <Search size={20} color={colors.text} />
+            )}
           </Pressable>
           <Pressable
             style={styles.iconButton}
             onPress={() => setView(view === "grid" ? "list" : "grid")}
-            accessibilityLabel={view === "grid" ? "Switch to list view" : "Switch to grid view"}
+            accessibilityLabel={
+              view === "grid" ? "Switch to list view" : "Switch to grid view"
+            }
           >
-            {view === "grid" ? <List size={20} color={colors.text} /> : <LayoutGrid size={20} color={colors.text} />}
+            {view === "grid" ? (
+              <List size={20} color={colors.text} />
+            ) : (
+              <LayoutGrid size={20} color={colors.text} />
+            )}
           </Pressable>
           <Pressable
             style={styles.syncChip}
@@ -269,8 +322,13 @@ export default function LibraryScreen() {
             {syncPhase === "running" ? (
               <ActivityIndicator size="small" color={colors.primary} />
             ) : (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                <RefreshCw size={14} color={syncLastError ? colors.syncError : colors.syncIcon} />
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <RefreshCw
+                  size={14}
+                  color={syncLastError ? colors.syncError : colors.syncIcon}
+                />
                 <Text style={styles.syncChipText}>
                   {syncLastError
                     ? "Error"
@@ -282,7 +340,10 @@ export default function LibraryScreen() {
             )}
           </Pressable>
           <Pressable
-            style={[styles.uploadButton, uploading && styles.uploadButtonDisabled]}
+            style={[
+              styles.uploadButton,
+              uploading && styles.uploadButtonDisabled,
+            ]}
             onPress={handleUpload}
             disabled={uploading}
             accessibilityLabel="Upload book"
@@ -321,13 +382,25 @@ export default function LibraryScreen() {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filterRow}
-        style={{ flexGrow: 0 }}
+        style={styles.filterScroll}
       >
         <Pressable style={styles.sortPill} onPress={cycleSort}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <ArrowUpDown size={12} color={colors.primaryFg} />
-            <Text style={styles.sortPillText}>{SORT_LABELS[sort]}</Text>
-          </View>
+          <Text style={styles.sortPillText} numberOfLines={1}>
+            {SORT_LABELS[sort]}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={styles.sortDirPill}
+          onPress={toggleSortDir}
+          accessibilityLabel={
+            sortDir === "asc" ? "Sort ascending" : "Sort descending"
+          }
+        >
+          {sortDir === "asc" ? (
+            <ArrowUp size={14} color={colors.primaryFg} />
+          ) : (
+            <ArrowDown size={14} color={colors.primaryFg} />
+          )}
         </Pressable>
         {(Object.keys(FILTER_LABELS) as FilterKey[]).map((key) => (
           <Pressable
@@ -343,6 +416,7 @@ export default function LibraryScreen() {
                 styles.filterPillText,
                 filter === key && styles.filterPillTextActive,
               ]}
+              numberOfLines={1}
             >
               {FILTER_LABELS[key]}
             </Text>
@@ -352,9 +426,15 @@ export default function LibraryScreen() {
 
       {isLoading ? (
         <View style={styles.center}>
-          <LoadingIndicator size="large" color={colors.textMuted} label="Loading library…" />
+          <LoadingIndicator
+            size="large"
+            color={colors.textMuted}
+            label="Loading library…"
+          />
           {display.isEink ? null : (
-            <Text style={[styles.muted, { marginTop: spacing.md }]}>Loading library...</Text>
+            <Text style={[styles.muted, { marginTop: spacing.md }]}>
+              Loading library...
+            </Text>
           )}
         </View>
       ) : booksWithProgress.length === 0 ? (
@@ -422,6 +502,7 @@ function renderCard(
   isEink: boolean,
 ) {
   const downloading = item.downloadProgress !== null;
+  const status = readingStatus(item);
   return (
     <Pressable style={[styles.card, { width }]} onPress={() => onPress(item)}>
       <View style={[styles.cover, !item.downloaded && styles.coverDimmed]}>
@@ -432,30 +513,14 @@ function renderCard(
             {item.title ?? "Untitled"}
           </Text>
         )}
-        {item.downloaded ? (
-          item.progressPct > 0 ? (
-            <View style={[styles.progressTrack, isEink && styles.progressTrackEink]}>
-              <View
-                style={[
-                  styles.progressFill,
-                  { width: `${Math.min(100, item.progressPct)}%` },
-                  isEink && styles.progressFillEink,
-                ]}
-              />
-            </View>
-          ) : null
-        ) : downloading ? (
+        {!item.downloaded && downloading ? (
           <View style={[styles.downloadOverlay, isEink && styles.downloadOverlayEink]}>
             <LoadingIndicator color="#fff" label="Downloading" />
             <Text style={styles.downloadOverlayText}>
               {Math.round((item.downloadProgress ?? 0) * 100)}%
             </Text>
           </View>
-        ) : (
-          <View style={[styles.cloudBadge, isEink && styles.cloudBadgeEink]}>
-            <Text style={styles.cloudBadgeText}>☁ Not downloaded</Text>
-          </View>
-        )}
+        ) : null}
       </View>
       <Text style={styles.bookTitle} numberOfLines={1}>
         {item.title ?? "Untitled"}
@@ -463,7 +528,52 @@ function renderCard(
       <Text style={styles.bookAuthor} numberOfLines={1}>
         {item.author ?? "Unknown"}
       </Text>
+      {renderStatusPill(item, status, downloading)}
     </Pressable>
+  );
+}
+
+function renderStatusPill(
+  item: BookWithProgress,
+  status: ReturnType<typeof readingStatus>,
+  downloading: boolean,
+) {
+  if (!item.downloaded) {
+    return (
+      <View style={[styles.statusPill, styles.statusPillMuted]}>
+        <Text style={styles.statusPillText} numberOfLines={1}>
+          {downloading
+            ? `↓ ${Math.round((item.downloadProgress ?? 0) * 100)}%`
+            : "Not downloaded"}
+        </Text>
+      </View>
+    );
+  }
+  const fillPct =
+    status?.tone === "finished" ? 100 : Math.min(100, item.progressPct);
+  const finished = status?.tone === "finished";
+  const unread = status?.tone === "unread";
+  return (
+    <View
+      style={[
+        styles.statusPill,
+        finished && styles.statusPillFinished,
+        unread && styles.statusPillUnread,
+      ]}
+    >
+      {!unread && !finished ? (
+        <View style={[styles.statusPillFill, { width: `${fillPct}%` }]} />
+      ) : null}
+      <Text
+        style={[
+          styles.statusPillText,
+          finished && styles.statusPillTextFinished,
+        ]}
+        numberOfLines={1}
+      >
+        {status?.label ?? ""}
+      </Text>
+    </View>
   );
 }
 
@@ -472,6 +582,7 @@ function renderRow(
   onPress: (b: BookWithProgress) => void,
 ) {
   const downloading = item.downloadProgress !== null;
+  const status = readingStatus(item);
   return (
     <Pressable style={styles.rowCard} onPress={() => onPress(item)}>
       <View style={[styles.rowCover, !item.downloaded && styles.coverDimmed]}>
@@ -486,16 +597,17 @@ function renderRow(
         <Text style={styles.rowAuthor} numberOfLines={1}>
           {item.author ?? "Unknown"}
         </Text>
-        <Text style={styles.rowStatus}>
+        <Text
+          style={[
+            styles.rowStatus,
+            status?.tone === "reading" && styles.rowStatusReading,
+          ]}
+        >
           {!item.downloaded
             ? downloading
               ? `Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`
               : "Tap to download"
-            : item.progressPct >= 98
-              ? "Finished"
-              : item.progressPct > 0
-                ? `${item.progressPct}% read`
-                : "Not started"}
+            : (status?.label ?? "")}
         </Text>
       </View>
     </Pressable>
@@ -514,7 +626,11 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.borderLight,
   },
   heading: { fontSize: fontSize.xxl, fontWeight: "700" },
-  topBarActions: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  topBarActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
   iconButton: {
     width: 40,
     height: 40,
@@ -541,7 +657,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   uploadButtonDisabled: { opacity: 0.5 },
-  uploadButtonText: { color: colors.primaryFg, fontWeight: "700", fontSize: fontSize.xxl },
+  uploadButtonText: {
+    color: colors.primaryFg,
+    fontWeight: "700",
+    fontSize: fontSize.xxl,
+  },
   searchBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -560,6 +680,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.text,
   },
+  filterScroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
   filterRow: {
     paddingHorizontal: spacing.md,
     paddingVertical: 6,
@@ -572,21 +696,53 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 7,
     borderRadius: 16,
+    flexShrink: 0,
   },
-  sortPillText: { color: colors.primaryFg, fontSize: fontSize.xs, fontWeight: "600" },
+  sortDirPill: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRadius: 16,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sortPillText: {
+    color: colors.primaryFg,
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+  },
   filterPill: {
     backgroundColor: colors.backgroundSecondary,
     paddingHorizontal: spacing.md,
     paddingVertical: 7,
     borderRadius: 16,
+    flexShrink: 0,
   },
   filterPillActive: { backgroundColor: colors.filterActive },
-  filterPillText: { color: colors.syncIcon, fontSize: fontSize.xs, fontWeight: "500" },
+  filterPillText: {
+    color: colors.syncIcon,
+    fontSize: fontSize.xs,
+    fontWeight: "500",
+  },
   filterPillTextActive: { color: colors.filterActiveText, fontWeight: "700" },
-  center: { flex: 1, justifyContent: "center", alignItems: "center", padding: spacing.xxl },
-  muted: { color: colors.textMuted, textAlign: "center", marginBottom: spacing.xs },
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xxl,
+  },
+  muted: {
+    color: colors.textMuted,
+    textAlign: "center",
+    marginBottom: spacing.xs,
+  },
   errorText: { color: colors.error },
-  clearFilterLink: { color: "#2563eb", marginTop: spacing.sm, fontSize: fontSize.md },
+  clearFilterLink: {
+    color: "#2563eb",
+    marginTop: spacing.sm,
+    fontSize: fontSize.md,
+  },
 
   // Grid view
   grid: { padding: spacing.md },
@@ -606,30 +762,53 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   coverImage: { width: "100%", height: "100%" },
-  coverText: { padding: spacing.sm, fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center" },
-  progressTrack: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 3,
-    backgroundColor: "rgba(0,0,0,0.12)",
+  coverText: {
+    padding: spacing.sm,
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    textAlign: "center",
   },
-  progressTrackEink: { backgroundColor: "#eee", height: 4 },
-  progressFill: { height: "100%", backgroundColor: colors.primary },
-  progressFillEink: { backgroundColor: "#000" },
-  coverDimmed: { opacity: 0.55 },
-  cloudBadge: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(17,17,17,0.75)",
-    paddingVertical: spacing.xs,
+  statusPill: {
+    marginTop: 6,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    backgroundColor: "#ffffff",
+    overflow: "hidden",
+    justifyContent: "center",
     alignItems: "center",
   },
-  cloudBadgeEink: { backgroundColor: "#000" },
-  cloudBadgeText: { color: colors.primaryFg, fontSize: 11, fontWeight: "600" },
+  statusPillFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: colors.primary,
+    opacity: 0.22,
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.text,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    paddingHorizontal: 6,
+  },
+  statusPillMuted: {
+    backgroundColor: colors.backgroundSecondary,
+  },
+  statusPillUnread: {
+    backgroundColor: colors.backgroundSecondary,
+  },
+  statusPillFinished: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  statusPillTextFinished: {
+    color: colors.primaryFg,
+  },
+  coverDimmed: { opacity: 0.55 },
   downloadOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(17,17,17,0.55)",
@@ -640,8 +819,16 @@ const styles = StyleSheet.create({
   // Solid black overlay for e-ink — the translucent tint would smudge into
   // a near-invisible gray on a ~16-level grayscale panel.
   downloadOverlayEink: { backgroundColor: "#000" },
-  downloadOverlayText: { color: colors.primaryFg, fontSize: fontSize.xs, fontWeight: "600" },
-  bookTitle: { fontSize: fontSize.xs, fontWeight: "600", marginTop: spacing.xs },
+  downloadOverlayText: {
+    color: colors.primaryFg,
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+  },
+  bookTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+    marginTop: spacing.xs,
+  },
   bookAuthor: { fontSize: 11, color: colors.textSecondary },
 
   // List view
@@ -662,6 +849,11 @@ const styles = StyleSheet.create({
   },
   rowMeta: { flex: 1, justifyContent: "center" },
   rowTitle: { fontSize: 15, fontWeight: "600", color: colors.text },
-  rowAuthor: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
+  rowAuthor: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
   rowStatus: { fontSize: 11, color: colors.textMuted, marginTop: spacing.xs },
+  rowStatusReading: { color: colors.primary, fontWeight: "600" },
 });

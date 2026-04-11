@@ -253,6 +253,93 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
                 <Text style={[styles.stepperText, { color: fg }]}>+</Text>
               </Pressable>
             </View>
+
+            {/* Page number overlay */}
+            <Text style={[styles.label, { color: muted }]}>Page number</Text>
+            <View style={styles.row}>
+              {([
+                { label: "Off", on: false },
+                { label: "On", on: true },
+              ] as const).map((opt) => {
+                const active = (theme.pageIndicator?.enabled ?? true) === opt.on;
+                return (
+                  <Pressable
+                    key={opt.label}
+                    style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
+                    onPress={() =>
+                      update({
+                        pageIndicator: {
+                          edge: theme.pageIndicator?.edge ?? "bottom",
+                          side: theme.pageIndicator?.side ?? "alternate",
+                          enabled: opt.on,
+                        },
+                      })
+                    }
+                  >
+                    <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {theme.pageIndicator?.enabled ? (
+              <>
+                <Text style={[styles.label, { color: muted }]}>Position</Text>
+                <View style={styles.row}>
+                  {([
+                    { label: "Top", edge: "top" as const },
+                    { label: "Bottom", edge: "bottom" as const },
+                  ]).map((opt) => {
+                    const active = (theme.pageIndicator?.edge ?? "bottom") === opt.edge;
+                    return (
+                      <Pressable
+                        key={opt.label}
+                        style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
+                        onPress={() =>
+                          update({
+                            pageIndicator: {
+                              enabled: true,
+                              side: theme.pageIndicator?.side ?? "alternate",
+                              edge: opt.edge,
+                            },
+                          })
+                        }
+                      >
+                        <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                <Text style={[styles.label, { color: muted }]}>Side</Text>
+                <View style={styles.row}>
+                  {([
+                    { label: "Left", side: "left" as const },
+                    { label: "Right", side: "right" as const },
+                    { label: "Alternate", side: "alternate" as const },
+                  ]).map((opt) => {
+                    const active = (theme.pageIndicator?.side ?? "alternate") === opt.side;
+                    return (
+                      <Pressable
+                        key={opt.label}
+                        style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
+                        onPress={() =>
+                          update({
+                            pageIndicator: {
+                              enabled: true,
+                              edge: theme.pageIndicator?.edge ?? "bottom",
+                              side: opt.side,
+                            },
+                          })
+                        }
+                      >
+                        <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
           </ScrollView>
         </View>
       </View>

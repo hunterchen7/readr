@@ -89,7 +89,10 @@ app.onError((err, c) => {
 });
 
 console.log(`Starting server on port ${env.PORT}...`);
-serve({ fetch: app.fetch, port: env.PORT });
+// hostname "0.0.0.0" is required so the Android emulator can reach the
+// dev server via 10.0.2.2. Without it, @hono/node-server binds to IPv6
+// localhost only on some macOS setups, leaving IPv4 loopback unreachable.
+serve({ fetch: app.fetch, port: env.PORT, hostname: "0.0.0.0" });
 console.log(`Server running at http://localhost:${env.PORT}`);
 
 export default app;

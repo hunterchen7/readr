@@ -21,6 +21,20 @@ export interface ReaderTheme {
    * via expo-brightness. null = honor the system setting.
    */
   brightness: number | null;
+  /** Always-visible page number overlay drawn over the reader content. */
+  pageIndicator: PageIndicator;
+}
+
+export interface PageIndicator {
+  enabled: boolean;
+  /** "top" or "bottom" edge of the page. */
+  edge: "top" | "bottom";
+  /**
+   * "left" / "right" pins to a fixed corner. "alternate" swaps sides
+   * each page turn so the indicator sits on the outer edge of a
+   * two-page spread (odd pages on the right, even on the left).
+   */
+  side: "left" | "right" | "alternate";
 }
 
 export const DEFAULT_THEME: ReaderTheme = {
@@ -34,6 +48,7 @@ export const DEFAULT_THEME: ReaderTheme = {
   tapToTurn: true,
   fontWeight: 400,
   brightness: null,
+  pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
 };
 
 /** Generous defaults tuned for the Supernote A5X 7.8" e-ink panel. */
@@ -48,6 +63,7 @@ export const EINK_THEME: ReaderTheme = {
   tapToTurn: true,
   fontWeight: 500,
   brightness: null,
+  pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
 };
 
 const THEME_PRESETS = [

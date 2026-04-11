@@ -148,7 +148,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           if (!cfi) break;
           if (view.addAnnotation) {
             try {
-              view.addAnnotation({ value: cfi, color: data.payload.color || 'yellow' });
+              view.addAnnotation({ value: cfi, color: data.payload.color || 'yellow', kind: 'highlight' });
             } catch (err) {
               post('highlightError', { cfi, error: String(err) });
             }
@@ -160,6 +160,27 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           if (!cfi || !view.addAnnotation) break;
           try {
             // foliate: passing truthy 2nd arg removes the annotation
+            view.addAnnotation({ value: cfi }, true);
+          } catch {}
+          break;
+        }
+        case 'addNote': {
+          // Notes share foliate's annotation machinery but render as a
+          // squiggly underline so they're distinguishable from highlights
+          // and don't block the underlying text.
+          const cfi = data.payload.cfi;
+          if (!cfi || !view.addAnnotation) break;
+          try {
+            view.addAnnotation({ value: cfi, kind: 'note' });
+          } catch (err) {
+            post('noteError', { cfi, error: String(err) });
+          }
+          break;
+        }
+        case 'removeNote': {
+          const cfi = data.payload.cfi;
+          if (!cfi || !view.addAnnotation) break;
+          try {
             view.addAnnotation({ value: cfi }, true);
           } catch {}
           break;
@@ -332,19 +353,25 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
       if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
 
       // After CSS changes reflow the columns — clear page counts and
-      // re-precompute all sections, then re-post progress.
+      // re-precompute all sections. Wait for fonts to settle before
+      // measuring so width calculations use the final glyph metrics.
       sectionPageCounts = {};
       sectionPageCountsLocked = false;
-      setTimeout(async () => {
-        remeasureCurrentSection();
+      (async () => {
+        try { await document.fonts?.ready; } catch {}
+        // Give foliate's paginator a moment to finish reflowing after CSS
+        // mutation before we measure hidden containers with the same CSS.
+        await new Promise(r => setTimeout(r, 150));
         await precomputeAllPages();
         if (view?.lastLocation) {
           view.dispatchEvent(new CustomEvent('relocate', { detail: view.lastLocation }));
         }
-      }, 300);
+      })();
     }
 
     function remeasureCurrentSection() {
+      // Never overwrite locked (precomputed) values — they're authoritative.
+      if (sectionPageCountsLocked) return;
       if (!currentSectionDoc || !view) return;
       const vw = view.clientWidth || window.innerWidth;
       if (vw <= 0) return;
@@ -352,7 +379,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         const sw = currentSectionDoc.documentElement.scrollWidth
                  || currentSectionDoc.body?.scrollWidth || 0;
         if (sw > 0) {
-          sectionPageCounts[currentSectionIndex] = Math.max(1, Math.round(sw / vw));
+          sectionPageCounts[currentSectionIndex] = Math.max(1, Math.ceil(sw / vw));
         }
       } catch {}
     }
@@ -364,6 +391,18 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
     async function precomputeAllPages() {
       if (_precomputeRunning || !book?.sections || !view) return;
       _precomputeRunning = true;
+
+      // document.fonts.ready resolves immediately if no pending font is
+      // actually in use. Explicitly force-load the theme font first so that
+      // scrollWidth measurements use final glyph metrics, not fallback.
+      const fs = currentTheme.fontSize || 16;
+      const ff = currentTheme.fontFamily || 'serif';
+      try {
+        if (document.fonts?.load) {
+          await document.fonts.load(fs + 'px "' + ff + '"');
+        }
+        await document.fonts?.ready;
+      } catch {}
 
       const vw = view.clientWidth || window.innerWidth;
       const vh = view.clientHeight || window.innerHeight || 800;
@@ -397,7 +436,8 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
           document.body.appendChild(el);
 
           const sw = el.scrollWidth;
-          sectionPageCounts[i] = Math.max(1, Math.round(sw / vw));
+          // ceil matches foliate's expand(): pageCount = ceil(contentSize / size)
+          sectionPageCounts[i] = Math.max(1, Math.ceil(sw / vw));
           measured++;
 
           document.body.removeChild(el);
@@ -476,159 +516,74 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
 
         await view.open(book);
 
-        // Navigate to the first section so content renders immediately.
-        // Without this, foliate shows a blank page until the user navigates.
-        try { await view.goTo(book.toc?.[0]?.href ?? book.sections?.[0]?.id ?? 0); } catch {};
-
-        // Relay location changes. pageItem carries foliate's computed
-        // {current, total} page count across the whole book — surface it
-        // so the reader can render "12 / 345".
-        view.addEventListener('relocate', (e) => {
-          const d = e.detail;
-          const frac = d.fraction ?? 0;
-
-          // d.index isn't reliably the section index — compute it from
-          // the section fractions that foliate exposes.
-          const sectionFractions = view.getSectionFractions?.() ?? [];
-          let secIdx = d.index ?? 0;
-          if (sectionFractions.length > 0) {
-            for (let i = sectionFractions.length - 1; i >= 0; i--) {
-              if (frac >= sectionFractions[i]) {
-                secIdx = i;
-                break;
-              }
-            }
-          }
-
-          // Use precomputed page counts. Only measure live if precompute
-          // hasn't locked the counts yet.
-          const vw = view.clientWidth || window.innerWidth;
-          if (!sectionPageCountsLocked && !sectionPageCounts[secIdx] && currentSectionDoc && vw > 0) {
-            try {
-              const sw = currentSectionDoc.documentElement.scrollWidth || currentSectionDoc.body?.scrollWidth || 0;
-              if (sw > 0) sectionPageCounts[secIdx] = Math.max(1, Math.round(sw / vw));
-            } catch {}
-          }
-          const pagesInSection = sectionPageCounts[secIdx] ?? 1;
-
-          // Sum all section page counts for total
-          const totalSections = book?.sections?.length ?? 1;
-          let totalPages = 0;
-          let allMeasured = true;
-          for (let i = 0; i < totalSections; i++) {
-            if (sectionPageCounts[i]) {
-              totalPages += sectionPageCounts[i];
-            } else {
-              totalPages += pagesInSection; // use current section as estimate for unmeasured
-              allMeasured = false;
-            }
-          }
-          totalPages = Math.max(1, totalPages);
-
-          // Current page = fraction * totalPages
-          const currentPage = Math.max(1, Math.min(totalPages, Math.round(frac * totalPages)));
-
-          // Page within section from section fraction
-          let pageInSection = 1;
-          if (pagesInSection > 1) {
-            const sectionStart = sectionFractions[secIdx] ?? (secIdx / (totalSections || 1));
-            const sectionEnd = sectionFractions[secIdx + 1] ?? ((secIdx + 1) / (totalSections || 1));
-            const sectionSpan = Math.max(0, sectionEnd - sectionStart);
-            const sectionFrac = sectionSpan > 0
-              ? Math.min(1, Math.max(0, (frac - sectionStart) / sectionSpan))
-              : 0;
-            pageInSection = Math.max(1, Math.min(pagesInSection, Math.ceil(sectionFrac * pagesInSection) || 1));
-          }
-
-          post('progressUpdated', {
-            percentage: Math.round(frac * 100),
-            cfi: d.cfi,
-            chapter: d.tocItem?.label,
-            chapterHref: d.tocItem?.href,
-            sectionIndex: secIdx,
-            currentPage,
-            totalPages,
-            pageInSection,
-            pagesInSection,
+        // Docs we've already wired up (click + contextmenu + selection).
+        // Each new section gets its own iframe document; we track them in a
+        // WeakSet so attachTapHandlers can be called repeatedly without
+        // stacking duplicate listeners.
+        const attachedDocs = new WeakSet();
+        function attachTapHandlers(doc) {
+          if (!doc || attachedDocs.has(doc)) return;
+          attachedDocs.add(doc);
+          // Clicks inside foliate's section iframes don't bubble to the
+          // parent document — attach directly so page-turn works from the
+          // content area.
+          doc.addEventListener('click', handleTap);
+          // Suppress native Android context menu so our custom RN menu shows.
+          doc.addEventListener('contextmenu', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            return false;
           });
-        });
-
-        // Text selection
-        view.addEventListener('draw-annotation', (e) => {
-          const { draw, annotation } = e.detail ?? {};
-          if (draw && annotation) {
-            const color = annotation.color || 'yellow';
-            draw(Overlayer.highlight, { color });
-          }
-        });
-
-        view.addEventListener('show-annotation', (e) => {
-          post('showAnnotation', e.detail);
-        });
-
-        // Remember the latest loaded section doc so the TTS handler
-        // can scrape its text. Foliate fires 'load' with { doc, index }
-        // for every newly-loaded section.
-        view.addEventListener('load', (e) => {
-          if (e.detail?.doc) {
-            currentSectionDoc = e.detail.doc;
-            injectThemeIntoDoc(currentSectionDoc);
-
-            // Count pages (CSS columns) in this section after layout
-            currentSectionIndex = e.detail.index;
-            setTimeout(() => remeasureCurrentSection(), 200);
-
-            // Clicks inside foliate's section iframes don't bubble to the
-            // parent document.  Attach our tap handler directly so
-            // page-turn and toggle-controls work from inside the content.
-            currentSectionDoc.addEventListener('click', handleTap);
-
-            // Suppress native Android context menu so our custom RN
-            // menu (Highlight / Bookmark / Note / Copy / Lookup) shows.
-            currentSectionDoc.addEventListener('contextmenu', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              return false;
-            });
-
-            // Text selection — detect via selectionchange + pointerup.
-            // selectionchange fires as the user drags handles; we debounce
-            // and only post once the selection stabilises (pointerup or
-            // after a short delay).
-            let selDebounce = null;
-            function checkSelection() {
-              const sel = currentSectionDoc.getSelection?.();
-              if (sel && sel.toString().trim() && sel.rangeCount > 0 && !sel.isCollapsed) {
-                let cfi = '';
-                try {
-                  const range = sel.getRangeAt(0);
-                  const contents = view.renderer?.getContents?.() ?? [];
-                  const content = contents.find(c => c.doc.contains(range.startContainer));
-                  if (content) cfi = view.getCFI(content.index, range) ?? '';
-                } catch {}
-                post('selectionChanged', { text: sel.toString(), cfi });
-              } else {
-                post('selectionCleared', {});
-              }
+          // Text selection — debounce selectionchange + pointerup.
+          let selDebounce = null;
+          function checkSelection() {
+            const sel = doc.getSelection?.();
+            if (sel && sel.toString().trim() && sel.rangeCount > 0 && !sel.isCollapsed) {
+              let cfi = '';
+              let rect = null;
+              try {
+                const range = sel.getRangeAt(0);
+                const contents = view.renderer?.getContents?.() ?? [];
+                const content = contents.find(c => c.doc.contains(range.startContainer));
+                if (content) cfi = view.getCFI(content.index, range) ?? '';
+                // Translate the range rect into top-window coordinates by
+                // walking up frameElement chains — foliate nests the doc
+                // inside one (or more) iframes.
+                const r = range.getBoundingClientRect();
+                let ox = 0, oy = 0;
+                let win = doc.defaultView;
+                while (win && win !== window && win.frameElement) {
+                  const fr = win.frameElement.getBoundingClientRect();
+                  ox += fr.left;
+                  oy += fr.top;
+                  win = win.parent;
+                }
+                rect = { x: r.left + ox, y: r.top + oy, w: r.width, h: r.height };
+              } catch {}
+              post('selectionChanged', { text: sel.toString(), cfi, rect });
+            } else {
+              post('selectionCleared', {});
             }
-            currentSectionDoc.addEventListener('selectionchange', () => {
-              clearTimeout(selDebounce);
-              selDebounce = setTimeout(checkSelection, 200);
-            });
-            currentSectionDoc.addEventListener('pointerup', () => {
-              setTimeout(checkSelection, 80);
-            });
           }
-        });
+          doc.addEventListener('selectionchange', () => {
+            clearTimeout(selDebounce);
+            selDebounce = setTimeout(checkSelection, 200);
+          });
+          doc.addEventListener('pointerup', () => {
+            setTimeout(checkSelection, 80);
+          });
+        }
 
-        // Handle text selection via the view's selection event
-        view.addEventListener('external-link', (e) => {
-          e.preventDefault();
-          post('externalLink', { href: e.detail.href });
-        });
-
-        // Selection handling is now attached to each section doc
-        // in the 'load' handler above (iframes don't bubble events).
+        // Attach tap handlers to every currently-rendered section doc.
+        // Called from both 'load' and 'relocate' so we never miss a new
+        // iframe, even if the 'load' event was missed due to listener
+        // registration timing or foliate internals.
+        function ensureAllDocsAttached() {
+          try {
+            const contents = view.renderer?.getContents?.() ?? [];
+            for (const c of contents) attachTapHandlers(c.doc);
+          } catch {}
+        }
 
         // Tap zones for page turns (honors the tapToTurn theme flag).
         function handleTap(e) {
@@ -657,11 +612,140 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
         view.addEventListener('click', handleTap);
         document.addEventListener('click', handleTap);
 
-        // Report ready
-        post('ready', {});
+        // Relay location changes. Foliate emits d.section.current as the
+        // current section index and d.fraction as the END fraction of the
+        // current page (i.e., nextSize/sizeTotal — see foliate progress.js).
+        view.addEventListener('relocate', (e) => {
+          // Re-attach on every relocate as a safety net — idempotent via
+          // the WeakSet, so this only does work for newly-rendered docs.
+          ensureAllDocsAttached();
+          const d = e.detail;
+          const frac = d.fraction ?? 0;
+          const totalSections = book?.sections?.length ?? 1;
+          const secIdx = Math.max(0, Math.min(totalSections - 1, d.section?.current ?? 0));
+          const sectionFractions = view.getSectionFractions?.() ?? [];
 
-        // Precompute all section page counts after first section renders
-        setTimeout(() => precomputeAllPages(), 1000);
+          // Prefer foliate's own paginator counts for the current section —
+          // they're the exact column count foliate uses for navigation, so
+          // pageInSection stays perfectly consistent with the visible page.
+          // Scrollwidth-based precompute can drift ±1 from foliate's count,
+          // so we overwrite the precomputed value with the authoritative one
+          // whenever we actually render a section.
+          let pagesInSection;
+          let pageInSection;
+          const rPages = view.renderer?.pages;
+          const rPage = view.renderer?.page;
+          if (typeof rPages === 'number' && rPages > 2 && typeof rPage === 'number') {
+            pagesInSection = Math.max(1, rPages - 2);
+            pageInSection = Math.max(1, Math.min(pagesInSection, rPage));
+            sectionPageCounts[secIdx] = pagesInSection;
+          } else {
+            // Fallback path — renderer not ready. Use scrollwidth if we've
+            // never seen this section, then derive page from the fraction.
+            const vw = view.clientWidth || window.innerWidth;
+            if (!sectionPageCountsLocked && !sectionPageCounts[secIdx] && currentSectionDoc && vw > 0) {
+              try {
+                const sw = currentSectionDoc.documentElement.scrollWidth || currentSectionDoc.body?.scrollWidth || 0;
+                if (sw > 0) sectionPageCounts[secIdx] = Math.max(1, Math.ceil(sw / vw));
+              } catch {}
+            }
+            pagesInSection = sectionPageCounts[secIdx] ?? 1;
+            pageInSection = 1;
+            if (pagesInSection > 1) {
+              const sectionStart = sectionFractions[secIdx] ?? (secIdx / totalSections);
+              const sectionEnd = sectionFractions[secIdx + 1] ?? ((secIdx + 1) / totalSections);
+              const sectionSpan = Math.max(0, sectionEnd - sectionStart);
+              const sectionFrac = sectionSpan > 0
+                ? Math.min(1, Math.max(0, (frac - sectionStart) / sectionSpan))
+                : 0;
+              pageInSection = Math.max(1, Math.min(pagesInSection, Math.round(sectionFrac * pagesInSection) || 1));
+            }
+          }
+
+          // Total pages — sum measured counts; estimate unmeasured ones as
+          // the current section's page count (only used briefly during
+          // initial load before precompute finishes).
+          let totalPages = 0;
+          let pagesBefore = 0;
+          for (let i = 0; i < totalSections; i++) {
+            const count = sectionPageCounts[i] ?? pagesInSection;
+            if (i < secIdx) pagesBefore += count;
+            totalPages += count;
+          }
+          totalPages = Math.max(1, totalPages);
+
+          // Current page = sum of all prior sections' page counts + page in
+          // current section. This is the only way to keep currentPage
+          // consistent with pageInSection across non-uniform section sizes.
+          const currentPage = Math.max(1, Math.min(totalPages, pagesBefore + pageInSection));
+
+          post('progressUpdated', {
+            percentage: Math.round(frac * 1000) / 10,
+            cfi: d.cfi,
+            chapter: d.tocItem?.label,
+            chapterHref: d.tocItem?.href,
+            sectionIndex: secIdx,
+            currentPage,
+            totalPages,
+            pageInSection,
+            pagesInSection,
+          });
+        });
+
+        // Text selection
+        view.addEventListener('draw-annotation', (e) => {
+          const { draw, annotation } = e.detail ?? {};
+          if (!draw || !annotation) return;
+          if (annotation.kind === 'note') {
+            // Wavy underline in an amber accent colour — subtle but
+            // distinct from yellow highlights.
+            draw(Overlayer.squiggly, { color: '#d97706' });
+          } else {
+            const color = annotation.color || 'yellow';
+            draw(Overlayer.highlight, { color });
+          }
+        });
+
+        view.addEventListener('show-annotation', (e) => {
+          const ann = e.detail ?? {};
+          if (ann.kind === 'note') {
+            post('noteTapped', { cfi: ann.value });
+          } else {
+            post('showAnnotation', ann);
+          }
+        });
+
+        // Remember the latest loaded section doc so the TTS handler
+        // can scrape its text. Foliate fires 'load' with { doc, index }
+        // for every newly-loaded section.
+        view.addEventListener('load', (e) => {
+          if (e.detail?.doc) {
+            currentSectionDoc = e.detail.doc;
+            injectThemeIntoDoc(currentSectionDoc);
+
+            // Count pages (CSS columns) in this section after layout
+            currentSectionIndex = e.detail.index;
+            setTimeout(() => remeasureCurrentSection(), 200);
+
+            attachTapHandlers(currentSectionDoc);
+          }
+        });
+
+        // Handle text selection via the view's selection event
+        view.addEventListener('external-link', (e) => {
+          e.preventDefault();
+          post('externalLink', { href: e.detail.href });
+        });
+
+        // Navigate to the first section so content renders immediately.
+        // Must happen AFTER 'load'/'relocate' listeners are registered so
+        // we don't miss the initial section's events.
+        try { await view.goTo(book.toc?.[0]?.href ?? book.sections?.[0]?.id ?? 0); } catch {}
+        ensureAllDocsAttached();
+
+        // Report ready — RN will respond with setTheme, and applyTheme()
+        // owns the precompute lifecycle from there (font-ready gated).
+        post('ready', {});
 
         // Report TOC
         if (book.toc) {

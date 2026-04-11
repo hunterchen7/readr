@@ -18,6 +18,7 @@ import {
 } from "../../components/reader/ReaderControls";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { ContextMenu } from "../../components/reader/ContextMenu";
+import { DictionarySheet } from "../../components/reader/DictionarySheet";
 import { NotesPanel } from "../../components/reader/NotesPanel";
 import { GotoDialog } from "../../components/reader/GotoDialog";
 import { TocDrawer } from "../../components/reader/TocDrawer";
@@ -26,6 +27,8 @@ import { TtsBar } from "../../components/reader/TtsBar";
 import { useTtsStore } from "../../lib/tts-store";
 import { TypedNoteEditor } from "../../components/notes/TypedNoteEditor";
 import { HandwritingCanvas } from "../../components/notes/HandwritingCanvas";
+import { NoteViewer } from "../../components/notes/NoteViewer";
+import { NoteChooser } from "../../components/notes/NoteChooser";
 import {
   upsertProgress,
   getProgress,
@@ -37,6 +40,8 @@ import {
   getHighlights,
   createNote,
   getNotes,
+  updateNote,
+  deleteNote,
 } from "../../lib/local-db";
 import type { Highlight, Note } from "@readr/shared";
 import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
@@ -80,11 +85,18 @@ export default function ReaderScreen() {
   // Context menu state
   const [contextMenuVisible, setContextMenuVisible] = useState(false);
   const [selectedText, setSelectedText] = useState("");
+  const [defineQuery, setDefineQuery] = useState<string | null>(null);
   const [selectionCfi, setSelectionCfi] = useState("");
+  const [selectionRect, setSelectionRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // Notes state
   const [showTypedNote, setShowTypedNote] = useState(false);
   const [showDrawing, setShowDrawing] = useState(false);
+  // When editing, the note being edited (so save goes to updateNote).
+  const [editingNote, setEditingNote] = useState<Note | null>(null);
+  // Viewer stack: single note open, or a chooser when a tap hits several.
+  const [viewingNote, setViewingNote] = useState<Note | null>(null);
+  const [chooserNotes, setChooserNotes] = useState<Note[] | null>(null);
 
   // Bookmarks + highlights + notes state
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -217,14 +229,17 @@ export default function ReaderScreen() {
         loadReaderPrefs(),
       ]);
       if (savedProgress) {
-        setProgress(Math.round(savedProgress.position.percentage));
+        setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
       }
       setBookmarks(savedBookmarks);
       setHighlights(savedHighlights);
       setNotes(savedNotes);
       if (savedPrefs?.theme) {
-        setTheme(savedPrefs.theme);
+        // Merge with defaults so newly-added fields get sane values when
+        // loading prefs saved by an older version.
+        const base = display.isEink ? EINK_THEME : DEFAULT_THEME;
+        setTheme({ ...base, ...savedPrefs.theme });
       }
     }
     load();
@@ -302,6 +317,15 @@ export default function ReaderScreen() {
               color: h.color,
             });
           }
+          // Replay note markers. Multiple notes on the same passage
+          // share one marker — dedupe by cfi to avoid double-drawing.
+          const seenNoteCfis = new Set<string>();
+          for (const n of notes) {
+            const cfi = n.position.cfi;
+            if (!cfi || seenNoteCfis.has(cfi)) continue;
+            seenNoteCfis.add(cfi);
+            sendToWebView("addNote", { cfi });
+          }
           // Restore saved position
           if (currentPosition?.cfi) {
             sendToWebView("goToLocation", { cfi: currentPosition.cfi });
@@ -361,7 +385,13 @@ export default function ReaderScreen() {
           if (msg.payload.text) {
             setSelectedText(msg.payload.text);
             setSelectionCfi(msg.payload.cfi ?? "");
+            setSelectionRect(msg.payload.rect ?? null);
             setContextMenuVisible(true);
+          }
+          break;
+        case "noteTapped":
+          if (typeof msg.payload?.cfi === "string") {
+            handleNoteTapped(msg.payload.cfi);
           }
           break;
         case "searchResults":
@@ -447,16 +477,117 @@ export default function ReaderScreen() {
     Linking.openURL(url);
   }
 
+  function handleDefine() {
+    if (!selectedText.trim()) return;
+    setDefineQuery(selectedText);
+    setContextMenuVisible(false);
+  }
+
   // ─── Note handlers ─────────────────────────────────────────────────
 
+  // Position a new note is saved to. We want the note to anchor to the
+  // selected passage (so tapping the marker later jumps/opens here) —
+  // fall back to the page-level position if somehow there's no selection.
+  function noteAnchorPosition(): BookPosition | null {
+    if (!currentPosition) return null;
+    return selectionCfi ? { ...currentPosition, cfi: selectionCfi } : currentPosition;
+  }
+
   async function handleSaveTypedNote(text: string) {
-    if (!bookId || !currentPosition) return;
+    if (!bookId) return;
     try {
-      const n = await createNote(bookId, currentPosition, "typed", text);
-      setNotes((prev) => [n, ...prev]);
+      if (editingNote) {
+        await updateNote(editingNote.id, { textContent: text });
+        const updated: Note = {
+          ...editingNote,
+          textContent: text,
+          updatedAt: new Date().toISOString(),
+        };
+        setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+        setEditingNote(null);
+      } else {
+        const pos = noteAnchorPosition();
+        if (!pos) return;
+        const n = await createNote(bookId, pos, "typed", text);
+        setNotes((prev) => [n, ...prev]);
+        if (n.position.cfi) sendToWebView("addNote", { cfi: n.position.cfi });
+      }
       setShowTypedNote(false);
     } catch {
       Alert.alert("Error", "Failed to save note");
+    }
+  }
+
+  async function handleSaveDrawing(
+    strokes: import("@readr/shared").Stroke[],
+    penConfig: import("@readr/shared").PenConfig,
+  ) {
+    if (!bookId) return;
+    try {
+      if (editingNote) {
+        await updateNote(editingNote.id, { strokes, penConfig });
+        const updated: Note = {
+          ...editingNote,
+          strokes,
+          penConfig,
+          updatedAt: new Date().toISOString(),
+        };
+        setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+        setEditingNote(null);
+      } else {
+        const pos = noteAnchorPosition();
+        if (!pos) return;
+        const n = await createNote(bookId, pos, "handwritten", undefined, strokes, penConfig);
+        setNotes((prev) => [n, ...prev]);
+        if (n.position.cfi) sendToWebView("addNote", { cfi: n.position.cfi });
+      }
+      setShowDrawing(false);
+    } catch {
+      Alert.alert("Error", "Failed to save drawing");
+    }
+  }
+
+  async function handleDeleteNote(noteId: string) {
+    const target = notes.find((n) => n.id === noteId);
+    try {
+      await deleteNote(noteId);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      // Remove the marker from the WebView if no other notes share this
+      // cfi — multiple notes on the same passage should keep the marker.
+      if (target?.position.cfi) {
+        const stillUsed = notes.some(
+          (n) => n.id !== noteId && n.position.cfi === target.position.cfi,
+        );
+        if (!stillUsed) {
+          sendToWebView("removeNote", { cfi: target.position.cfi });
+        }
+      }
+    } catch {
+      Alert.alert("Error", "Failed to delete note");
+    }
+  }
+
+  // Called when a marker is tapped in the WebView. If exactly one note
+  // anchors to this cfi, open it directly; otherwise surface a chooser
+  // so the user can pick which overlapping note they meant.
+  function handleNoteTapped(cfi: string) {
+    const matches = notes.filter((n) => n.position.cfi === cfi);
+    if (matches.length === 0) return;
+    if (matches.length === 1) {
+      setViewingNote(matches[0] ?? null);
+    } else {
+      setChooserNotes(matches);
+    }
+  }
+
+  function openNoteForEdit(n: Note) {
+    setViewingNote(null);
+    setChooserNotes(null);
+    setEditingNote(n);
+    if (n.noteType === "typed") {
+      setShowTypedNote(true);
+    } else {
+      setShowDrawing(true);
     }
   }
 
@@ -629,27 +760,49 @@ export default function ReaderScreen() {
             </View>
 
             <Text
-              style={[styles.progressLabel, { color: theme.fg }, display.isEink && styles.progressLabelEink]}
+              style={[
+                styles.progressLabel,
+                { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
+                display.isEink && styles.progressLabelEink,
+              ]}
               numberOfLines={1}
             >
               {currentPosition?.chapter ?? ""}
             </Text>
             <View style={styles.progressInfoRow}>
               <Text
-                style={[styles.progressLabel, { color: theme.fg }, display.isEink && styles.progressLabelEink]}
+                style={[
+                  styles.progressLabel,
+                  { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
+                  display.isEink && styles.progressLabelEink,
+                ]}
               >
                 {pageInSection != null && pagesInSection != null && pagesInSection > 0
-                  ? `${pageInSection}/${pagesInSection} in ch.`
+                  ? `${pageInSection}/${pagesInSection}`
                   : ""}
               </Text>
               <Text
-                style={[styles.progressLabel, { color: theme.fg }, display.isEink && styles.progressLabelEink]}
+                style={[
+                  styles.progressLabel,
+                  { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
+                  display.isEink && styles.progressLabelEink,
+                ]}
               >
                 {currentPage != null && totalPages != null && totalPages > 0
-                  ? `p. ${currentPage}/${totalPages}  ·  ${progress}%`
-                  : `${progress}%`}
+                  ? `p. ${currentPage}/${totalPages}`
+                  : ""}
               </Text>
             </View>
+            <Text
+              style={[
+                styles.progressLabel,
+                styles.progressPercent,
+                { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) },
+                display.isEink && styles.progressLabelEink,
+              ]}
+            >
+              {`${progress.toFixed(1)}%`}
+            </Text>
           </Pressable>
         </>
       ) : (
@@ -673,6 +826,25 @@ export default function ReaderScreen() {
           />
         </View>
       )}
+
+      {theme.pageIndicator?.enabled && !controlsVisible && currentPage != null && totalPages != null && totalPages > 0 ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.pageIndicator,
+            theme.pageIndicator.edge === "top"
+              ? { top: insets.top + 4 }
+              : { bottom: Math.max(insets.bottom, 4) + 6 },
+            resolveIndicatorSide(theme.pageIndicator.side, currentPage) === "left"
+              ? { left: 12 }
+              : { right: 12 },
+          ]}
+        >
+          <Text style={[styles.pageIndicatorText, { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) }]}>
+            {currentPage}
+          </Text>
+        </View>
+      ) : null}
 
       <TocDrawer
         visible={showTocDrawer}
@@ -705,32 +877,65 @@ export default function ReaderScreen() {
       <ContextMenu
         visible={contextMenuVisible}
         selectedText={selectedText}
+        anchorRect={selectionRect}
         onClose={() => setContextMenuVisible(false)}
         onHighlight={handleHighlight}
         onBookmark={handleBookmarkFromMenu}
         onNote={handleNoteFromMenu}
+        onDraw={handleDrawFromMenu}
         onCopy={handleCopy}
+        onDefine={handleDefine}
         onLookup={handleLookup}
         lookupProviders={lookupProviders}
       />
 
+      <DictionarySheet
+        visible={defineQuery !== null}
+        query={defineQuery ?? ""}
+        onClose={() => setDefineQuery(null)}
+      />
+
       <TypedNoteEditor
         visible={showTypedNote}
+        initialText={editingNote?.noteType === "typed" ? (editingNote.textContent ?? "") : ""}
         onSave={handleSaveTypedNote}
-        onCancel={() => setShowTypedNote(false)}
+        onCancel={() => {
+          setShowTypedNote(false);
+          setEditingNote(null);
+        }}
       />
 
       <HandwritingCanvas
         visible={showDrawing}
-        onSave={async (strokes, penConfig) => {
-          if (!bookId || !currentPosition) return;
-          try {
-            const n = await createNote(bookId, currentPosition, "handwritten", undefined, strokes, penConfig);
-            setNotes((prev) => [n, ...prev]);
-          } catch {}
+        initialStrokes={editingNote?.noteType === "handwritten" ? (editingNote.strokes ?? []) : []}
+        onSave={handleSaveDrawing}
+        onCancel={() => {
           setShowDrawing(false);
+          setEditingNote(null);
         }}
-        onCancel={() => setShowDrawing(false)}
+      />
+
+      <NoteViewer
+        note={viewingNote}
+        onClose={() => setViewingNote(null)}
+        onEdit={openNoteForEdit}
+        onDelete={async (id) => {
+          setViewingNote(null);
+          await handleDeleteNote(id);
+        }}
+        onJumpTo={(cfi) => {
+          setViewingNote(null);
+          sendToWebView("goToLocation", { cfi });
+        }}
+      />
+
+      <NoteChooser
+        notes={chooserNotes}
+        onPick={(n) => {
+          setChooserNotes(null);
+          setViewingNote(n);
+        }}
+        onClose={() => setChooserNotes(null)}
       />
 
       <NotesPanel
@@ -852,6 +1057,7 @@ const styles = StyleSheet.create({
   // slightly larger size so the reading-progress line doesn't disappear
   // against the page background on the ~16-gray Supernote panel.
   progressLabelEink: { opacity: 1, fontSize: 12, fontWeight: "500" },
+  progressPercent: { textAlign: "right", marginTop: 2 },
   miniProgress: {
     position: "absolute",
     bottom: 0,
@@ -863,4 +1069,38 @@ const styles = StyleSheet.create({
   miniProgressFill: {
     height: 3,
   },
+  pageIndicator: {
+    position: "absolute",
+    zIndex: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  pageIndicatorText: {
+    fontSize: 11,
+    opacity: 0.45,
+    fontVariant: ["tabular-nums"],
+  },
 });
+
+function resolveIndicatorSide(
+  side: "left" | "right" | "alternate",
+  page: number,
+): "left" | "right" {
+  if (side === "alternate") return page % 2 === 0 ? "left" : "right";
+  return side;
+}
+
+/**
+ * Map the theme's CSS fontFamily string to an Android/iOS-native font name.
+ * The theme's fontFamily is a CSS stack like `'Literata', serif` that only
+ * works inside the WebView; RN Text needs a registered family name. We fall
+ * back to the system serif/sans/monospace so the indicator at least matches
+ * the broad typographic character of the book text.
+ */
+function readerTextFontFamily(cssFontFamily: string): string | undefined {
+  if (!cssFontFamily) return undefined;
+  const lower = cssFontFamily.toLowerCase();
+  if (lower.includes("mono")) return "monospace";
+  if (lower.includes("sans")) return "sans-serif";
+  return "serif";
+}

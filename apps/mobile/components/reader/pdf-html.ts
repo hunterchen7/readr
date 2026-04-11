@@ -63,6 +63,18 @@ export function getPdfReaderHtml(bookUrl: string): string {
     .highlight-rect[data-color="green"] { background: rgba(76, 175, 80, 0.35); }
     .highlight-rect[data-color="blue"] { background: rgba(33, 150, 243, 0.35); }
     .highlight-rect[data-color="pink"] { background: rgba(233, 30, 99, 0.35); }
+    .note-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .note-rect {
+      position: absolute;
+      border-bottom: 2px dashed #d97706;
+      background: transparent;
+      pointer-events: auto;
+      cursor: pointer;
+    }
 
     /* E-ink overrides — kill momentum scroll, transparency, animations, and
        shadows; render highlights as solid black outlines since semi-transparent
@@ -139,6 +151,15 @@ export function getPdfReaderHtml(bookUrl: string): string {
           break;
         case 'addHighlight':
           drawHighlight(data.payload);
+          break;
+        case 'removeHighlight':
+          removeAnnotationRects(data.payload, 'highlight-layer', 'data-cfi');
+          break;
+        case 'addNote':
+          drawNote(data.payload);
+          break;
+        case 'removeNote':
+          removeAnnotationRects(data.payload, 'note-layer', 'data-cfi');
           break;
         case 'copyToClipboard': {
           const textToCopy = data.payload.text || '';
@@ -236,6 +257,11 @@ export function getPdfReaderHtml(bookUrl: string): string {
       highlightLayer.dataset.page = String(pageNum);
       wrap.appendChild(highlightLayer);
 
+      const noteLayer = document.createElement('div');
+      noteLayer.className = 'note-layer';
+      noteLayer.dataset.page = String(pageNum);
+      wrap.appendChild(noteLayer);
+
       const ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport }).promise;
 
@@ -285,7 +311,7 @@ export function getPdfReaderHtml(bookUrl: string): string {
           if (page !== currentPage) currentPage = page;
           post('progressUpdated', {
             page: currentPage,
-            percentage: Math.round(scrollFraction * 100),
+            percentage: Math.round(scrollFraction * 1000) / 10,
           });
           ticking = false;
         });
@@ -328,25 +354,36 @@ export function getPdfReaderHtml(bookUrl: string): string {
         // Locator used both as a "cfi" for highlight storage and as a
         // unique id for re-drawing on reopen.
         const cfi = 'pdf:' + pageNum + ':' + JSON.stringify(rects);
-        post('selectionChanged', { text, cfi, page: pageNum });
+        // Viewport-space rect of the whole selection, used by RN to
+        // anchor the context menu near the selected text.
+        const bbox = range.getBoundingClientRect();
+        const rect = { x: bbox.left, y: bbox.top, w: bbox.width, h: bbox.height };
+        post('selectionChanged', { text, cfi, page: pageNum, rect });
       });
+    }
+
+    // Parse a 'pdf:<page>:<rectsJson>' locator into { pageNum, rects }.
+    function parsePdfCfi(cfi) {
+      if (!cfi || !cfi.startsWith('pdf:')) return null;
+      const match = cfi.match(/^pdf:(\\d+):(.+)$/);
+      if (!match) return null;
+      let rects;
+      try { rects = JSON.parse(match[2]); } catch { return null; }
+      return { pageNum: parseInt(match[1], 10), rects };
     }
 
     function drawHighlight(payload) {
       const cfi = payload.cfi || payload.cfiRange;
-      if (!cfi || !cfi.startsWith('pdf:')) return;
-      const match = cfi.match(/^pdf:(\\d+):(.+)$/);
-      if (!match) return;
-      const pageNum = parseInt(match[1], 10);
-      let rects;
-      try { rects = JSON.parse(match[2]); } catch { return; }
-      const wrap = pageWraps.get(pageNum);
+      const parsed = parsePdfCfi(cfi);
+      if (!parsed) return;
+      const wrap = pageWraps.get(parsed.pageNum);
       if (!wrap) return;
       const layer = wrap.querySelector('.highlight-layer');
       if (!layer) return;
-      for (const r of rects) {
+      for (const r of parsed.rects) {
         const div = document.createElement('div');
         div.className = 'highlight-rect';
+        div.dataset.cfi = cfi;
         if (payload.color) div.dataset.color = payload.color;
         div.style.left = (r.x * 100) + '%';
         div.style.top = (r.y * 100) + '%';
@@ -354,6 +391,51 @@ export function getPdfReaderHtml(bookUrl: string): string {
         div.style.height = (r.h * 100) + '%';
         layer.appendChild(div);
       }
+    }
+
+    function drawNote(payload) {
+      const cfi = payload.cfi;
+      const parsed = parsePdfCfi(cfi);
+      if (!parsed) return;
+      const wrap = pageWraps.get(parsed.pageNum);
+      if (!wrap) return;
+      const layer = wrap.querySelector('.note-layer');
+      if (!layer) return;
+      // Skip if a marker for this cfi is already drawn (idempotent).
+      if (layer.querySelector('.note-rect[data-cfi="' + cssEscape(cfi) + '"]')) return;
+      for (const r of parsed.rects) {
+        const div = document.createElement('div');
+        div.className = 'note-rect';
+        div.dataset.cfi = cfi;
+        div.style.left = (r.x * 100) + '%';
+        div.style.top = (r.y * 100) + '%';
+        div.style.width = (r.w * 100) + '%';
+        div.style.height = (r.h * 100) + '%';
+        div.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          post('noteTapped', { cfi });
+        });
+        layer.appendChild(div);
+      }
+    }
+
+    // Minimal attribute-selector escape — cfi strings contain brackets,
+    // slashes and colons that would otherwise break querySelector.
+    function cssEscape(s) {
+      return String(s).replace(/["\\\\]/g, '\\\\$&');
+    }
+
+    function removeAnnotationRects(payload, layerClass, attr) {
+      const cfi = payload.cfi || payload.cfiRange;
+      const parsed = parsePdfCfi(cfi);
+      if (!parsed) return;
+      const wrap = pageWraps.get(parsed.pageNum);
+      if (!wrap) return;
+      const layer = wrap.querySelector('.' + layerClass);
+      if (!layer) return;
+      const sel = '[' + attr + '="' + cssEscape(cfi) + '"]';
+      const els = layer.querySelectorAll(sel);
+      for (const el of els) el.remove();
     }
 
     async function performSearch(query) {

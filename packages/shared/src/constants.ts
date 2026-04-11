@@ -22,13 +22,6 @@ export const DEFAULT_LOOKUP_PROVIDERS = [
     sortOrder: 2,
     isBuiltin: true,
   },
-  {
-    name: "Dictionary",
-    icon: "📕",
-    urlTemplate: "https://www.merriam-webster.com/dictionary/{{query}}",
-    sortOrder: 3,
-    isBuiltin: true,
-  },
 ] as const;
 
 export const MAX_UPLOAD_SIZE_MB = 500;

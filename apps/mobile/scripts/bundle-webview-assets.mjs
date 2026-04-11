@@ -9,7 +9,7 @@
  * Run:    node scripts/bundle-webview-assets.mjs
  */
 import { build } from "esbuild";
-import { copyFileSync, mkdirSync, writeFileSync, unlinkSync } from "fs";
+import { copyFileSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -39,6 +39,42 @@ await build({
 });
 
 try { unlinkSync(entryPath); } catch {}
+
+// Patch foliate's paginator qr() (prev/next).
+//
+// Two bugs in the upstream body:
+//   1. No try/finally around the navigation lock — if any inner await
+//      throws, `un` stays set and ALL subsequent navigation (including
+//      goTo via ToC links) silently no-ops.
+//   2. On section transitions, the inner `await _s(...)` hangs
+//      indefinitely — the iframe `load` event fires and the new section
+//      renders, but the downstream `scrollToAnchor` promise never
+//      resolves. Root cause still unknown; see TODO below.
+//
+// Mitigation: wrap the body in try/finally + a 300ms safety timeout
+// that force-releases the lock. 300ms is imperceptible as a back-off
+// after a chapter turn, keeps the reader self-healing, and preserves
+// foliate's intended serialization for same-section taps (which
+// complete in ~100ms and never hit the timeout).
+//
+// TODO: diagnose why `_s`'s scrollToAnchor hangs on section load. If
+// it can be fixed upstream, the safety timeout can be dropped and
+// only the try/finally kept.
+{
+  const bundlePath = join(outDir, "foliate-bundle.js");
+  const src = readFileSync(bundlePath, "utf8");
+  const needle = /(qr=async function\(t,n\)\{if\(l\(this,un\)\)return;I\(this,un,!0\);)(let s=t===-1,r=await\(s\?k\(this,F,uc\)\.call\(this,n\):k\(this,F,dc\)\.call\(this,n\)\);r&&await k\(this,F,_s\)\.call\(this,\{index:k\(this,F,ln\)\.call\(this,t\),anchor:s\?\(\)=>1:\(\)=>0\}\),\(r\|\|!this\.hasAttribute\("animated"\)\)&&await qh\(100\))(,I\(this,un,!1\)\})/;
+  if (!needle.test(src)) {
+    throw new Error("foliate qr() patch failed: pattern not found. Did foliate-js update?");
+  }
+  const patched = src.replace(
+    needle,
+    "$1let __readrUnlock=setTimeout(()=>I(this,un,!1),300);try{$2}finally{clearTimeout(__readrUnlock);I(this,un,!1)}}"
+  );
+  writeFileSync(bundlePath, patched);
+  console.log("✓ patched foliate qr() navigation lock");
+}
+
 console.log("✓ foliate-bundle.js");
 
 // ─── pdfjs-dist ────────────────────────────────────────────────────

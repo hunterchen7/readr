@@ -1,19 +1,47 @@
-import { View, Text, Pressable, StyleSheet, Modal } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  Modal,
+  useWindowDimensions,
+  type LayoutChangeEvent,
+} from "react-native";
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
-import { Highlighter, Bookmark, StickyNote, Copy } from "lucide-react-native";
+import {
+  Highlighter,
+  Bookmark,
+  StickyNote,
+  Copy,
+  BookText,
+  Pencil,
+} from "lucide-react-native";
 import { useDisplay } from "../../contexts/DisplayContext";
-import { useEffect, useState } from "react";
-import { lookupWord, type LookupResult } from "../../lib/dictionary";
-import { LoadingIndicator } from "../LoadingIndicator";
+import { useState } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+const MENU_GAP = 8;
+const SCREEN_PADDING = 8;
+const MENU_MAX_WIDTH = 360;
+
+interface SelectionRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 interface ContextMenuProps {
   visible: boolean;
   selectedText: string;
+  anchorRect?: SelectionRect | null;
   onClose: () => void;
   onHighlight: (color: HighlightColor) => void;
   onBookmark: () => void;
   onNote: () => void;
+  onDraw: () => void;
   onCopy: () => void;
+  onDefine: () => void;
   onLookup: (provider: string) => void;
   lookupProviders: { name: string; icon: string; urlTemplate: string }[];
 }
@@ -46,43 +74,22 @@ const EINK_UNDERLINE: Record<HighlightColor, string> = {
 export function ContextMenu({
   visible,
   selectedText,
+  anchorRect,
   onClose,
   onHighlight,
   onBookmark,
   onNote,
+  onDraw,
   onCopy,
+  onDefine,
   onLookup,
   lookupProviders,
 }: ContextMenuProps) {
   const display = useDisplay();
   const [showColors, setShowColors] = useState(false);
-  const [offlineDef, setOfflineDef] = useState<LookupResult | null | undefined>(
-    undefined, // undefined = not looked up yet, null = not found
-  );
-
-  // Whenever the user selects a single (or few) words, kick off an
-  // offline dictionary lookup in the background so the definition is
-  // ready to display if they tap "Define". Does NOT block the menu.
-  useEffect(() => {
-    if (!visible || !selectedText) {
-      setOfflineDef(undefined);
-      return;
-    }
-    // Only run on short-ish selections — no point dictionary-ing a
-    // whole paragraph.
-    const words = selectedText.trim().split(/\s+/);
-    if (words.length > 3) {
-      setOfflineDef(null);
-      return;
-    }
-    let cancelled = false;
-    lookupWord(words[0]).then((res) => {
-      if (!cancelled) setOfflineDef(res);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [visible, selectedText]);
+  const [menuSize, setMenuSize] = useState<{ w: number; h: number } | null>(null);
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   if (!visible) return null;
 
@@ -92,25 +99,57 @@ export function ContextMenu({
   const iconColor = display.isEink ? "#000" : "#444";
   const linkColor = display.isEink ? "#000" : "#2563eb";
 
+  // Compute menu position. We show the menu below the selection by default,
+  // flip above if it would overflow the bottom, and fall back to pinning near
+  // the bottom of the screen if neither fits (e.g. user selected all text).
+  const safeTop = insets.top + SCREEN_PADDING;
+  const safeBottom = screenH - insets.bottom - SCREEN_PADDING;
+  const safeLeft = SCREEN_PADDING;
+  const safeRight = screenW - SCREEN_PADDING;
+  const menuW = menuSize?.w ?? Math.min(MENU_MAX_WIDTH, screenW - SCREEN_PADDING * 2);
+  const menuH = menuSize?.h ?? 120;
+
+  let top: number;
+  let left: number;
+  if (anchorRect) {
+    const below = anchorRect.y + anchorRect.h + MENU_GAP;
+    const above = anchorRect.y - MENU_GAP - menuH;
+    if (below + menuH <= safeBottom) {
+      top = below;
+    } else if (above >= safeTop) {
+      top = above;
+    } else {
+      // Neither fits (selection too tall) — pin near the bottom of the screen.
+      top = safeBottom - menuH;
+    }
+    const centerX = anchorRect.x + anchorRect.w / 2;
+    left = centerX - menuW / 2;
+    if (left < safeLeft) left = safeLeft;
+    if (left + menuW > safeRight) left = safeRight - menuW;
+  } else {
+    // Fallback when no rect is available — centered near the bottom.
+    top = safeBottom - menuH;
+    left = (screenW - menuW) / 2;
+  }
+
+  const onMenuLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (!menuSize || Math.abs(menuSize.w - width) > 1 || Math.abs(menuSize.h - height) > 1) {
+      setMenuSize({ w: width, h: height });
+    }
+  };
+
   return (
     <Modal transparent animationType={display.isEink ? "none" : "fade"} visible={visible} onRequestClose={onClose}>
       <Pressable style={styles.overlay} onPress={onClose} />
-      <View style={[styles.menu, display.isEink && styles.menuEink, { bottom: 80 }]}>
-        {offlineDef ? (
-          <View style={styles.definitionBlock}>
-            <View style={styles.definitionHeader}>
-              <Text style={styles.definitionWord}>{offlineDef.word}</Text>
-              {offlineDef.partOfSpeech ? (
-                <Text style={styles.definitionPos}>{offlineDef.partOfSpeech}</Text>
-              ) : null}
-            </View>
-            <Text style={styles.definitionText}>{offlineDef.definition}</Text>
-          </View>
-        ) : offlineDef === undefined ? (
-          <View style={styles.definitionBlock}>
-            <LoadingIndicator size="small" color="#666" />
-          </View>
-        ) : null}
+      <View
+        onLayout={onMenuLayout}
+        style={[
+          styles.menu,
+          display.isEink && styles.menuEink,
+          { top, left, maxWidth: MENU_MAX_WIDTH, width: menuW, opacity: menuSize ? 1 : 0 },
+        ]}
+      >
         {showColors ? (
           <View style={styles.colorRow}>
             {HIGHLIGHT_COLORS.map((color) => (
@@ -145,6 +184,10 @@ export function ContextMenu({
                 <Highlighter size={20} color={iconColor} />
                 <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Highlight</Text>
               </Pressable>
+              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onDefine}>
+                <BookText size={20} color={iconColor} />
+                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Define</Text>
+              </Pressable>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onBookmark}>
                 <Bookmark size={20} color={iconColor} />
                 <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Bookmark</Text>
@@ -152,6 +195,10 @@ export function ContextMenu({
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onNote}>
                 <StickyNote size={20} color={iconColor} />
                 <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Note</Text>
+              </Pressable>
+              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onDraw}>
+                <Pencil size={20} color={iconColor} />
+                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Draw</Text>
               </Pressable>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onCopy}>
                 <Copy size={20} color={iconColor} />
@@ -180,11 +227,9 @@ export function ContextMenu({
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1 },
+  overlay: { ...StyleSheet.absoluteFillObject },
   menu: {
     position: "absolute",
-    left: 16,
-    right: 16,
     backgroundColor: "#fff",
     borderRadius: 12,
     shadowColor: "#000",
@@ -203,17 +248,6 @@ const styles = StyleSheet.create({
     borderColor: "#000",
     borderRadius: 0,
   },
-  definitionBlock: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-    marginBottom: 6,
-  },
-  definitionHeader: { flexDirection: "row", alignItems: "baseline", gap: 8 },
-  definitionWord: { fontSize: 15, fontWeight: "700", color: "#111" },
-  definitionPos: { fontSize: 11, color: "#888", fontStyle: "italic" },
-  definitionText: { fontSize: 13, color: "#333", marginTop: 4, lineHeight: 18 },
   actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, justifyContent: "center" },
   actionButton: {
     alignItems: "center",
