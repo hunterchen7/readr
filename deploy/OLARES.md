@@ -82,28 +82,78 @@ TTS_ENABLED=false
 ENV"
 ```
 
+## Two-stack layout
+
+The deploy is split into two compose files so we can redeploy the app
+without disturbing MinIO:
+
+- `deploy/docker-compose.infra.yml` — Postgres, Redis, MinIO, and the
+  one-shot `minio-init` bucket bootstrap. Long-lived; only touched
+  when you intentionally bump infra.
+- `deploy/docker-compose.app.yml` — the Hono `api` (and optional
+  `caddy` profile). This is what gets rebuilt and `up -d`'d on every
+  push.
+
+Both stacks attach to a shared external Docker network named `readr`,
+so the `api` container can still resolve `postgres`, `redis`, and
+`minio` by their service names across stacks.
+
+**Why split?** App redeploys no longer bounce MinIO, which means
+`books.hunterchen.ca` never goes 5xx during a deploy, which means
+Cloudflare never caches a poisoned 403/502 at the edge. That whole
+class of cache-poisoning bug is gone.
+
 ## Bring up the stack
 
+### One-time: create the shared network
+
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml up -d --build"
+ssh olares-ebook "docker network create readr"
+```
+
+(Idempotent — re-running just prints `network with name readr already exists` and exits non-zero, which is fine.)
+
+### One-time (or when infra changes): start the infra stack
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
 ```
 
 This starts:
 
-- `deploy-api-1` — Hono server on `:3000`
-- `deploy-web-1` — nginx serving the React dashboard on `:8080`
-- `deploy-postgres-1` — internal only
-- `deploy-redis-1` — internal only
-- `deploy-minio-1` — S3 on `:9000`, console on `:9001`
-- `deploy-minio-init-1` — one-shot bucket bootstrap, exits 0
+- `readr-postgres-1` — internal only, owns `pgdata` volume
+- `readr-redis-1` — internal only, owns `redisdata` volume
+- `readr-minio-1` — S3 on `:9000`, console on `:9001`, owns `miniodata` volume
+- `readr-minio-init-1` — one-shot bucket bootstrap, exits 0
+
+Leave this running. Only re-run `up -d` against the infra file when
+you deliberately want to bump a version (e.g. `postgres:16` →
+`postgres:17`) or change a healthcheck. **Never bounce it during a
+normal app redeploy.**
+
+### Every deploy: start / restart the app stack
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d --build"
+```
+
+This starts (or rebuilds + restarts):
+
+- `readr-api-1` — Hono server on `:3000`
 
 Caddy is behind a `public` profile and NOT started here — the host's k8s
 ingress already owns :80/:443, and we terminate TLS at Cloudflare anyway.
 
+Cross-stack `depends_on` is not enforceable, so on first start the api
+container may take an extra healthcheck cycle or two while it waits
+for `postgres:5432` and `minio:9000` to be reachable on the `readr`
+network. The container's healthcheck and the server's connect-retry
+handle this — no manual ordering required as long as infra is up.
+
 Push the DB schema after the very first build:
 
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml \
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml \
   exec -T api sh -c 'cd /app/apps/server && pnpm exec drizzle-kit push --force'"
 ```
 
@@ -170,8 +220,12 @@ And restart the api container so presigned URLs come back with the right
 origin:
 
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml restart api"
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d api"
 ```
+
+(Use `up -d` rather than `restart` so the container picks up the new
+`.env` values — `restart` reuses the existing env baked into the
+container at create time.)
 
 On the mobile and web clients, set the server URL to
 `https://api.reader.example.com` on the sign-in screen and paste or generate
@@ -181,7 +235,21 @@ a new token.
 
 1. From the laptop: `git push`
 2. Rsync again (see above)
-3. `ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml up -d --build api web"`
+3. `ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d --build api"`
 
-Only rebuild the containers whose source changed. `docker compose` will
-reuse the cached layers for everything else.
+This only touches the app stack — `docker-compose.infra.yml` and the
+MinIO/Postgres/Redis containers it owns are left completely alone, so
+`books.hunterchen.ca` keeps serving uninterrupted through the deploy
+and Cloudflare's edge cache stays clean. `docker compose` will reuse
+cached image layers for everything that didn't change.
+
+To deliberately bump infra (e.g. a Postgres minor upgrade):
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+```
+
+Same flag set, just pointed at the other file. Be aware this *will*
+briefly bounce MinIO and may cause `books.hunterchen.ca` to flap, so
+schedule it like any other infra maintenance (and consider purging
+the Cloudflare cache for that hostname after).

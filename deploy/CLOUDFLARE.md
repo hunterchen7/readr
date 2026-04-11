@@ -98,7 +98,7 @@ Restart the api container so new presigned URLs come back with the
 public origin:
 
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml restart api"
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d api"
 ```
 
 Verify from anywhere on the internet:
