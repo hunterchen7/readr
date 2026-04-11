@@ -198,10 +198,27 @@ export default function WebReaderScreen() {
   //     persisting it would clobber the real saved row.
   //   - pendingReadyRestoreRef buffers a "ready" that arrived
   //     before the DB load finished, so we don't skip the restore.
+  //   - replayedAnnotationsRef is the same idea for highlight/note
+  //     replay: we want to replay exactly once, after BOTH the core
+  //     is ready AND the DB load has finished. With a `[coreReady]`
+  //     dep only, a warm-foliate fast boot beats a slow IDB read
+  //     and the effect fires with an empty `highlights` closure,
+  //     silently skipping the replay.
   const savedPositionRef = useRef<BookPosition | null>(null);
   const hasLoadedSavedRef = useRef(false);
   const hasRestoredRef = useRef(false);
   const pendingReadyRestoreRef = useRef(false);
+  const replayedAnnotationsRef = useRef(false);
+
+  // Reading session tracking — log duration when the reader
+  // unmounts. The refs are declared here (above the DB load effect)
+  // so that effect can anchor sessionStartRef.pct to the real saved
+  // position when it loads, instead of leaving it at 0.
+  const sessionStartRef = useRef<{ at: number; pct: number }>({
+    at: Date.now(),
+    pct: 0,
+  });
+  const latestPctRef = useRef(0);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
@@ -238,6 +255,7 @@ export default function WebReaderScreen() {
     hasLoadedSavedRef.current = false;
     hasRestoredRef.current = false;
     pendingReadyRestoreRef.current = false;
+    replayedAnnotationsRef.current = false;
     (async () => {
       const [savedProgress, savedBookmarks, savedHighlights, savedNotes, savedPrefs] = await Promise.all([
         getProgress(bookId),
@@ -251,6 +269,18 @@ export default function WebReaderScreen() {
         savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
+        // Anchor the session-start pct to the real saved position
+        // instead of 0. The session-tracking effect fires on bookId
+        // change and captures the current `progress` state, which is
+        // still 0 at that moment (the DB load hasn't run yet). Without
+        // this fixup, the reading-sessions log reports startPercentage
+        // as 0 for every resumed book, inflating the apparent session
+        // delta by whatever had already been read.
+        sessionStartRef.current = {
+          at: sessionStartRef.current.at,
+          pct: savedProgress.position.percentage,
+        };
+        latestPctRef.current = savedProgress.position.percentage;
       }
       hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
@@ -267,12 +297,16 @@ export default function WebReaderScreen() {
     return () => { cancelled = true; };
   }, [bookId, applySavedRestore]);
 
-  // Reading session tracking — log duration when the reader unmounts.
-  const sessionStartRef = useRef<{ at: number; pct: number }>({
-    at: Date.now(),
-    pct: 0,
-  });
-  const latestPctRef = useRef(0);
+  // Session tracking effects. The refs themselves are declared
+  // earlier (so the DB load effect can seed them with the real
+  // saved position); these effects keep them up to date and fire
+  // the unmount log.
+  //
+  // The "start" timestamp resets on bookId change. The pct seed
+  // comes from whichever resolves first — the DB load anchoring it
+  // to savedProgress, or this effect defaulting it to `progress`
+  // (which is 0 until the DB load runs). Either way, unmount logs
+  // the correct start→end delta.
   useEffect(() => {
     sessionStartRef.current = { at: Date.now(), pct: progress };
     latestPctRef.current = progress;
@@ -390,10 +424,15 @@ export default function WebReaderScreen() {
     let cancelled = false;
     setCoreError(null);
     setCoreReady(false);
-    // Reset the restore gate for this fresh reader mount. The DB-load
-    // effect (keyed on bookId) resets the other refs separately.
+    // Reset the restore + annotation-replay gates for this fresh
+    // reader mount. The DB-load effect (keyed on bookId) resets the
+    // other refs separately, but these two are keyed on the core
+    // lifecycle — we want them to reset even if, say, a retry from
+    // the error fallback re-fires the bootstrap effect without a
+    // bookId change.
     hasRestoredRef.current = false;
     pendingReadyRestoreRef.current = false;
+    replayedAnnotationsRef.current = false;
 
     const container = containerRef.current;
     let core: ReaderCoreHandle | PdfCoreHandle | null = null;
@@ -474,18 +513,54 @@ export default function WebReaderScreen() {
     coreRef.current.dispatch({ type: "setTheme", payload: { ...theme } });
   }, [theme, coreReady]);
 
-  // Replay saved highlights as foliate annotations once the core
-  // is ready. Bookmarks don't map to annotations (CFI + label).
+  // Replay saved highlights + notes as foliate annotations once BOTH
+  // the core is ready AND the DB load has finished. Gated by the
+  // `replayedAnnotationsRef` so it fires exactly once per book open.
+  //
+  // The deps list includes `highlights` and `notes` on purpose: if
+  // coreReady flips true before the DB load resolves, this effect
+  // runs once (bails on hasLoadedSavedRef), then re-runs when
+  // setHighlights/setNotes fire and does the actual replay. Without
+  // that re-run, a warm-foliate fast boot could beat IDB and the
+  // replay would silently drop. Mirrors the native reader's
+  // approach of running replay inside the `ready` message handler,
+  // but via React's state model instead of closure snapshots.
+  //
+  // Bookmarks are not annotations (they're just position markers in
+  // the TOC drawer) so they don't participate here.
   useEffect(() => {
     if (!coreReady || !coreRef.current) return;
+    if (!hasLoadedSavedRef.current) return;
+    if (replayedAnnotationsRef.current) return;
+    replayedAnnotationsRef.current = true;
+
     for (const h of highlights) {
       coreRef.current.dispatch({
         type: "addHighlight",
         payload: { cfi: h.cfiRange, color: h.color },
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coreReady]);
+
+    // Multiple notes on the same passage share one marker — dedupe
+    // by cfi to avoid double-drawing. Handwritten wins over typed
+    // because the indigo underline is more salient than the amber
+    // squiggle, and users are more likely to care about a drawing
+    // existing on a passage. Mirrors the native replay logic.
+    const seenNoteCfis = new Map<string, "typed" | "handwritten">();
+    for (const n of notes) {
+      const cfi = n.position.cfi;
+      if (!cfi) continue;
+      const existing = seenNoteCfis.get(cfi);
+      if (existing === "handwritten") continue;
+      seenNoteCfis.set(cfi, n.noteType);
+    }
+    for (const [cfi, noteType] of seenNoteCfis) {
+      coreRef.current.dispatch({
+        type: "addNote",
+        payload: { cfi, noteType },
+      });
+    }
+  }, [coreReady, highlights, notes]);
 
   // NOTE: initial position restore is handled by applySavedRestore
   // above, triggered either from the `ready` event or (if the DB load
