@@ -200,6 +200,15 @@ export default function ReaderScreen() {
   // number, chapter label, etc. flicker between the old position
   // and the user's drag position).
   const isDraggingRef = useRef(false);
+  // Gate for progressUpdated persistence. Foliate fires an initial
+  // relocate at pct=0 before our restore runs — if we persist that,
+  // it clobbers the saved position and the next open lands on page 1.
+  // We only start persisting after we've (a) loaded the saved row and
+  // (b) issued the restore navigation to the WebView.
+  const savedPositionRef = useRef<BookPosition | null>(null);
+  const hasLoadedSavedRef = useRef(false);
+  const hasRestoredRef = useRef(false);
+  const pendingReadyRestoreRef = useRef(false);
   const fractionFromPageX = useCallback((pageX: number) => {
     const w = trackWidthRef.current;
     if (w <= 0) return 0;
@@ -321,9 +330,11 @@ export default function ReaderScreen() {
         loadReaderPrefs(),
       ]);
       if (savedProgress) {
+        savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
       }
+      hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
       setHighlights(savedHighlights);
       setNotes(savedNotes);
@@ -332,6 +343,12 @@ export default function ReaderScreen() {
         // loading prefs saved by an older version.
         const base = display.isEink ? EINK_THEME : DEFAULT_THEME;
         setTheme({ ...base, ...savedPrefs.theme });
+      }
+      // If the WebView's `ready` already arrived while we were loading,
+      // it set a pending flag instead of restoring — do it now.
+      if (pendingReadyRestoreRef.current) {
+        pendingReadyRestoreRef.current = false;
+        applySavedRestore();
       }
     }
     load();
@@ -343,6 +360,24 @@ export default function ReaderScreen() {
     },
     [],
   );
+
+  // Issue the initial restore navigation from the saved position. Safe
+  // to call multiple times — marks `hasRestoredRef` so progressUpdated
+  // will start persisting afterwards. Called from both the `ready`
+  // handler (if load finished first) and from load() (if ready fired
+  // first and buffered itself via pendingReadyRestoreRef).
+  const applySavedRestore = useCallback(() => {
+    const saved = savedPositionRef.current;
+    if (saved) {
+      const pct = saved.percentage;
+      if (typeof pct === "number" && pct > 0) {
+        sendToWebView("goToLocation", { fraction: pct / 100 });
+      } else if (saved.cfi) {
+        sendToWebView("goToLocation", { cfi: saved.cfi });
+      }
+    }
+    hasRestoredRef.current = true;
+  }, [sendToWebView]);
 
   // Tap- and drag-to-seek on the bottom progress bar. We claim the
   // gesture on touchdown so a tap anywhere along the bar jumps
@@ -475,13 +510,14 @@ export default function ReaderScreen() {
           // resume cleanly — a CFI from one layout can land on the
           // wrong paragraph when the other device paginates
           // differently.
-          if (currentPosition) {
-            const pct = currentPosition.percentage;
-            if (typeof pct === "number" && pct > 0) {
-              sendToWebView("goToLocation", { fraction: pct / 100 });
-            } else if (currentPosition.cfi) {
-              sendToWebView("goToLocation", { cfi: currentPosition.cfi });
-            }
+          //
+          // If the DB load hasn't finished yet, buffer the restore and
+          // let load() fire it when savedPositionRef is populated —
+          // otherwise we'd race and skip the restore entirely.
+          if (hasLoadedSavedRef.current) {
+            applySavedRestore();
+          } else {
+            pendingReadyRestoreRef.current = true;
           }
           break;
         case "progressUpdated": {
@@ -536,7 +572,10 @@ export default function ReaderScreen() {
             setPageInSection(null);
             setPagesInSection(null);
           }
-          if (bookId) {
+          // Don't persist until the initial restore has run — the very
+          // first relocate from foliate fires at pct=0 and would clobber
+          // the saved position otherwise.
+          if (bookId && hasRestoredRef.current) {
             upsertProgress(bookId, position);
           }
           break;
