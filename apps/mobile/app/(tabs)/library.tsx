@@ -19,10 +19,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { listBooks, uploadBook } from "../../lib/api";
-import { getAllProgress } from "../../lib/local-db";
+import {
+  getAllProgress,
+  upsertCachedBooks,
+  pruneCachedBooks,
+  getCachedBooks,
+} from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
+import { cacheCoversInBackground } from "../../lib/cover-cache";
 import { DragDropUpload } from "../../components/upload/DragDropUpload";
 import { useSyncStatus } from "../../lib/sync-status";
+import { useNetworkStatus } from "../../lib/network-status";
 import {
   useLibraryPrefs,
   SORT_SERVER_DEFAULT_DIR,
@@ -41,6 +48,7 @@ import {
   ArrowDown,
   ArrowUp,
   Download,
+  CloudOff,
 } from "lucide-react-native";
 import type { Book } from "@readr/shared";
 
@@ -140,7 +148,41 @@ export default function LibraryScreen() {
 
   const { data, isLoading, error, isRefetching, refetch } = useQuery({
     queryKey: ["books", sort],
-    queryFn: () => listBooks(sort),
+    // Local-first read: if the network call fails (offline, server
+    // unreachable), fall back to whatever's in the local cache. We only
+    // throw when both the network and the cache are empty, which is the
+    // genuine "no books to show" state. Filters/searches still happen
+    // client-side downstream from `rawBooks`, so the cache returning the
+    // full library is fine — we don't need to re-apply the server's sort
+    // because the client already re-sorts via SORT_SERVER_DEFAULT_DIR.
+    queryFn: async () => {
+      try {
+        const result = await listBooks(sort);
+        try {
+          await upsertCachedBooks(result.books);
+          if (sort === "recent") {
+            await pruneCachedBooks(result.books.map((b) => b.id));
+          }
+          // Fire-and-forget cover download for any books we haven't
+          // cached locally yet. The covers stay rendered from the
+          // presigned URL until the local file lands; subsequent
+          // listBooks() reads will return the file:// URL.
+          cacheCoversInBackground(result.books);
+        } catch (err) {
+          console.warn("upsertCachedBooks failed:", err);
+        }
+        return result;
+      } catch (networkErr) {
+        const cached = await getCachedBooks();
+        if (cached.length > 0) {
+          // Tag the response so downstream code can tell it came from
+          // the offline cache (e.g. to show a "stale" badge).
+          return { books: cached, fromCache: true as const };
+        }
+        // Truly nothing to show — let React Query surface the error.
+        throw networkErr;
+      }
+    },
   });
 
   const rawBooks = data?.books ?? [];
@@ -152,6 +194,8 @@ export default function LibraryScreen() {
   const syncLastAt = useSyncStatus((s) => s.lastSyncAt);
   const syncLastError = useSyncStatus((s) => s.lastError);
   const runSyncNow = useSyncStatus((s) => s.sync);
+  const isOnline = useNetworkStatus((s) => s.isOnline);
+  const isNetHydrated = useNetworkStatus((s) => s.isHydrated);
 
   // Re-hydrate download/progress status when screen regains focus
   // (e.g. after downloading a book in the detail screen).
@@ -416,15 +460,32 @@ export default function LibraryScreen() {
             )}
           </Pressable>
           <Pressable
-            style={styles.syncChip}
+            style={[
+              styles.syncChip,
+              isNetHydrated && !isOnline && styles.syncChipOffline,
+            ]}
             onPress={async () => {
+              // Tap-to-retry is the path back online — runSyncNow() will
+              // either succeed (and then NetInfo flips us back to online
+              // through the next event) or no-op silently.
               await runSyncNow();
               queryClient.invalidateQueries({ queryKey: ["books"] });
             }}
-            accessibilityLabel="Sync library"
+            accessibilityLabel={
+              isNetHydrated && !isOnline ? "Offline — tap to retry" : "Sync library"
+            }
           >
             {syncPhase === "running" ? (
               <ActivityIndicator size="small" color={colors.primary} />
+            ) : isNetHydrated && !isOnline ? (
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <CloudOff size={14} color={colors.syncError} />
+                <Text style={[styles.syncChipText, styles.syncChipTextOffline]}>
+                  Offline
+                </Text>
+              </View>
             ) : (
               <View
                 style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
@@ -770,7 +831,16 @@ const styles = StyleSheet.create({
     minWidth: 80,
     alignItems: "center",
   },
+  // Visual treatment for the offline state — bordered chip with a
+  // muted background so the user can spot it at a glance without it
+  // looking like an error.
+  syncChipOffline: {
+    borderWidth: 1,
+    borderColor: colors.syncError,
+    backgroundColor: colors.background,
+  },
   syncChipText: { fontSize: fontSize.xs, color: colors.text },
+  syncChipTextOffline: { color: colors.syncError, fontWeight: "600" },
   uploadButton: {
     backgroundColor: colors.primary,
     width: 40,

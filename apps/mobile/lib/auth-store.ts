@@ -43,7 +43,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ isAuthenticated: false, isLoading: false });
       return;
     }
-    const ok = await api.checkToken();
-    set({ isAuthenticated: ok, isLoading: false });
+    // Optimistic auth: trust the stored token immediately so the app
+    // boots into the library without waiting for the network probe.
+    // The probe still runs, but only as a background validity check —
+    // if it returns 401/403 we sign out, otherwise (network error,
+    // server down) we stay signed in. This is the load-bearing change
+    // that makes offline mode work without a "Continue offline" button.
+    set({ isAuthenticated: true, isLoading: false });
+    void api.checkToken().then((result) => {
+      if (result === "invalid") {
+        // Server explicitly rejected the token — sign out and clear it.
+        void get().signOut();
+      }
+      // "valid" or "offline" → stay signed in.
+    });
   },
 }));

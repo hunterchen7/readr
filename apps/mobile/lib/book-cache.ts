@@ -3,7 +3,7 @@
 // new class-based API settles. Legacy is the right choice for one-shot
 // downloads where we just want a file on disk.
 import * as FileSystem from "expo-file-system/legacy";
-import { getDb } from "./local-db";
+import { getDb, upsertCachedBook } from "./local-db";
 import { getBook } from "./api";
 
 /**
@@ -87,6 +87,14 @@ export async function downloadBook(
 ): Promise<DownloadedBook> {
   await ensureDir();
   const { book } = await getBook(bookId);
+  // Mirror the freshly-fetched metadata into the local books cache so
+  // the offline library has the latest title/author/cover even if the
+  // user never visits the library tab between downloads.
+  try {
+    await upsertCachedBook(book);
+  } catch (err) {
+    console.warn("upsertCachedBook (downloadBook) failed:", err);
+  }
   if (!book.downloadUrl) throw new Error("Book has no downloadable URL");
   const format = (book.format ?? "epub") as "epub" | "pdf";
   const localPath = `${BOOKS_DIR}${bookId}.${format}`;
