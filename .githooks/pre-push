@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# Pre-push guard. Mirrors the GitHub Actions CI jobs in
+# .github/workflows/ci.yml so a failing push is caught locally
+# before it hits the remote:
+#   - pnpm turbo typecheck          (all workspaces)
+#   - pnpm --filter @readr/sync-engine test
+#
+# Bypass with `git push --no-verify` when you genuinely need to
+# push a WIP branch; don't make a habit of it.
+
+set -e
+
+# Skip hooks entirely when pushing to a non-main branch experiment
+# could be useful later, but for now we run on every push.
+
+echo "[pre-push] typecheck…"
+pnpm turbo typecheck
+
+echo "[pre-push] sync-engine tests…"
+pnpm --filter @readr/sync-engine test
+
+echo "[pre-push] ok"
