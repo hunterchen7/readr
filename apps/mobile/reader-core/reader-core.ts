@@ -837,8 +837,17 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
           }
         } catch { /* ignore */ }
 
+        // Use clientX (viewport-relative) for the tap-zone math,
+        // not screenX. On web, the browser window can be offset
+        // from the physical screen origin (secondary monitor, split
+        // screen), so screenX is meaningless for "left 20% of the
+        // viewport" — every tap would land in the right zone. On
+        // native WebView the two are equivalent because the view
+        // covers the whole screen. `??` wouldn't have saved us
+        // here — both properties are always non-null numbers on a
+        // real click event.
         const w = window.innerWidth || screen.width;
-        const x = e.screenX ?? e.clientX;
+        const x = e.clientX;
         if (tapToTurn && view) {
           if (x < w * 0.2) { view.prev(); return; }
           if (x > w * 0.8) { view.next(); return; }

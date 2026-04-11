@@ -190,6 +190,16 @@ export default function WebReaderScreen() {
   // expose the same {init, dispatch, destroy} surface so the React
   // glue can stay format-agnostic.
   const coreRef = useRef<ReaderCoreHandle | PdfCoreHandle | null>(null);
+  // Local drag state for the progress scrubber. While the user is
+  // actively dragging the range input, `scrubValue` holds the
+  // in-progress fraction so the thumb follows the pointer smoothly,
+  // and `isDraggingRef` blocks incoming progressUpdated events from
+  // overwriting `progress` state (which would flicker the thumb
+  // back to the old position mid-drag). On release we dispatch a
+  // single goToLocation with the final fraction — matching native
+  // PanResponder-driven behaviour on RN.
+  const [scrubValue, setScrubValue] = useState<number | null>(null);
+  const isDraggingRef = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -362,6 +372,12 @@ export default function WebReaderScreen() {
           setToc(payload.chapters ?? []);
           break;
         case "progressUpdated": {
+          // While the user is actively dragging the scrubber, any
+          // relocate events from mid-navigation would flicker the
+          // thumb back to the pre-drag position. Mirrors the
+          // isDraggingRef gate in the native reader's relocate
+          // handler.
+          if (isDraggingRef.current) break;
           const pct = payload.percentage ?? 0;
           setProgress(pct);
           const position: BookPosition = {
@@ -627,7 +643,22 @@ export default function WebReaderScreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [showTocDrawer]);
 
-  function handleScrub(next: number) {
+  // Drag-scrub handlers for the progress bar. The pointerdown /
+  // input / pointerup cycle mirrors how the native PanResponder
+  // drives the scrubber — update local display state on every
+  // input, only dispatch a goToLocation to the reader core on
+  // pointerup, and keep isDraggingRef true throughout so
+  // progressUpdated events get swallowed while the user is
+  // actively seeking.
+  function handleScrubStart() {
+    isDraggingRef.current = true;
+  }
+  function handleScrubInput(next: number) {
+    setScrubValue(next);
+  }
+  function handleScrubEnd(next: number) {
+    isDraggingRef.current = false;
+    setScrubValue(null);
     setProgress(next * 100);
     coreRef.current?.dispatch({ type: "goToLocation", payload: { fraction: next } });
   }
@@ -669,18 +700,20 @@ export default function WebReaderScreen() {
   }
 
   function handleGoToBookmark(bm: Bookmark) {
-    // Prefer the most precise locator we have: cfi (exact range),
-    // then page (PDF bookmarks from the native app — matches
-    // native's handleGoToBookmark in f3e1cd8), then fraction as a
-    // last-resort approximation. Cross-device syncs from the
-    // native PDF reader set `page` but not `cfi`, so skipping the
-    // page branch would land the user on a fraction-approximated
-    // scroll position that's usually off by one.
+    // Prefer the most precise locator the current core actually
+    // knows how to resolve:
+    //   - EPUB (reader-core): cfi → fraction. The EPUB goToLocation
+    //     handler only accepts cfi + fraction; dispatching `page`
+    //     here is a silent no-op.
+    //   - PDF (pdf-core): cfi → page → fraction. PDF bookmarks
+    //     synced from the native app set position.page but leave
+    //     cfi null, and pdf-core's scrollToPage is exact while
+    //     fraction is an approximation.
     const core = coreRef.current;
     if (!core) return;
     if (bm.position.cfi) {
       core.dispatch({ type: "goToLocation", payload: { cfi: bm.position.cfi } });
-    } else if (bm.position.page != null) {
+    } else if (format === "pdf" && bm.position.page != null) {
       core.dispatch({ type: "goToLocation", payload: { page: bm.position.page } });
     } else {
       core.dispatch({
@@ -942,16 +975,32 @@ export default function WebReaderScreen() {
             <Text style={[styles.progressText, { color: theme.fg }]}>
               {currentPage != null && totalPages != null
                 ? `${currentPage} / ${totalPages}`
-                : `${Math.round(progress)}%`}
+                : `${Math.round((scrubValue ?? progress / 100) * 100)}%`}
             </Text>
-            {/* Raw range input is the simplest cross-browser seek
-                control. Polish deferred to the UX pass. */}
+            {/* Raw range input driven by pointer lifecycle events so
+                we only commit the seek on release — intermediate
+                input events update scrubValue locally without firing
+                goToLocation. Without this, every drag tick spammed
+                foliate with reflows and the thumb flickered. */}
             <input
               type="range"
               min={0}
               max={1000}
-              value={Math.round((progress / 100) * 1000)}
-              onChange={(e) => handleScrub(Number(e.target.value) / 1000)}
+              value={Math.round((scrubValue ?? progress / 100) * 1000)}
+              onPointerDown={handleScrubStart}
+              onPointerUp={(e) =>
+                handleScrubEnd(Number((e.target as HTMLInputElement).value) / 1000)
+              }
+              onPointerCancel={(e) =>
+                handleScrubEnd(Number((e.target as HTMLInputElement).value) / 1000)
+              }
+              onKeyDown={handleScrubStart}
+              onKeyUp={(e) =>
+                handleScrubEnd(Number((e.target as HTMLInputElement).value) / 1000)
+              }
+              onChange={(e) =>
+                handleScrubInput(Number(e.target.value) / 1000)
+              }
               style={{
                 flex: 1,
                 marginLeft: 12,
