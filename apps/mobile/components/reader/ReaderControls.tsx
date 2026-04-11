@@ -14,6 +14,12 @@ export interface ReaderTheme {
   marginV: number;
   /** Tap left/right edges to turn pages. When false, tap anywhere opens the controls. */
   tapToTurn: boolean;
+  /**
+   * How the reader advances pages. "tap" = only edge-tap zones turn
+   * pages (swipe is swallowed), "swipe" = only swipe/drag turns pages
+   * (edge taps just open controls), "both" = both work.
+   */
+  pageTurnMode: "tap" | "swipe" | "both";
   /** 100 = normal weight. 300 = light, 700 = bold. Applied via CSS font-weight. */
   fontWeight: number;
   /**
@@ -46,6 +52,7 @@ export const DEFAULT_THEME: ReaderTheme = {
   margin: 48,
   marginV: 24,
   tapToTurn: true,
+  pageTurnMode: "both",
   fontWeight: 400,
   brightness: null,
   pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
@@ -61,6 +68,7 @@ export const EINK_THEME: ReaderTheme = {
   margin: 72,
   marginV: 32,
   tapToTurn: true,
+  pageTurnMode: "both",
   fontWeight: 500,
   brightness: null,
   pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },

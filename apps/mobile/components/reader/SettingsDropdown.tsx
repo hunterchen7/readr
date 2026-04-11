@@ -179,13 +179,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             {/* Font size */}
             <Text style={[styles.label, { color: muted }]}>Size</Text>
             <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.max(12, theme.fontSize - 2) })}>
+              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.max(12, theme.fontSize - 1) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>A-</Text>
               </Pressable>
               <View style={styles.stepperValue}>
                 <Text style={[styles.stepperValueText, { color: fg }]}>{theme.fontSize}px</Text>
               </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.min(32, theme.fontSize + 2) })}>
+              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.min(32, theme.fontSize + 1) })}>
                 <Text style={[styles.stepperText, { color: fg, fontWeight: "700" }]}>A+</Text>
               </Pressable>
             </View>
@@ -252,6 +252,34 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
               <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(96, (theme.marginV ?? 24) + 4) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>+</Text>
               </Pressable>
+            </View>
+
+            {/* Page turn gestures */}
+            <Text style={[styles.label, { color: muted }]}>Page turn</Text>
+            <View style={styles.row}>
+              {([
+                { label: "Tap", mode: "tap" as const },
+                { label: "Swipe", mode: "swipe" as const },
+                { label: "Both", mode: "both" as const },
+              ]).map((opt) => {
+                const active = (theme.pageTurnMode ?? "both") === opt.mode;
+                return (
+                  <Pressable
+                    key={opt.label}
+                    style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
+                    onPress={() =>
+                      update({
+                        pageTurnMode: opt.mode,
+                        // Keep the legacy boolean in sync for any code
+                        // path that still reads it directly.
+                        tapToTurn: opt.mode !== "swipe",
+                      })
+                    }
+                  >
+                    <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
 
             {/* Page number overlay */}
