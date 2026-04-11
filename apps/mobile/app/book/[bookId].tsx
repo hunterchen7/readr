@@ -7,14 +7,16 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Platform,
 } from "react-native";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Download, BookOpen, Check, Trash2 } from "lucide-react-native";
+import { ArrowLeft, Download, BookOpen, Check, Trash2, FileDown } from "lucide-react-native";
 import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
 import { getProgress } from "../../lib/local-db";
+import { downloadFile } from "../../lib/download-file";
 import { colors, spacing, fontSize } from "../../lib/theme";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { ErrorFallback } from "../../components/ErrorFallback";
@@ -88,6 +90,30 @@ export default function BookDetailScreen() {
       Alert.alert("Download failed", err instanceof Error ? err.message : String(err));
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function handleDownloadFile() {
+    if (!book?.downloadUrl) {
+      Alert.alert("Download failed", "This book has no downloadable file.");
+      return;
+    }
+    // Build a sensible default filename — most browsers will ignore it
+    // on cross-origin downloads (R2 is a different origin), but on the
+    // off chance they honour it we want something better than
+    // "book.epub" from the URL path.
+    const safeTitle = (book.title ?? "book")
+      .replace(/[^\w\s.-]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim() || "book";
+    const ext = book.format ?? "epub";
+    try {
+      await downloadFile(book.downloadUrl, `${safeTitle}.${ext}`);
+    } catch (err) {
+      Alert.alert(
+        "Download failed",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -230,27 +256,41 @@ export default function BookDetailScreen() {
             </Text>
           </Pressable>
 
-          {!downloaded ? (
-            <Pressable
-              style={[styles.secondaryBtn, downloading && { opacity: 0.5 }]}
-              onPress={handleDownload}
-              disabled={downloading}
-            >
-              {downloading ? (
-                <Text style={styles.secondaryBtnText}>Downloading {downloadPct}%</Text>
-              ) : (
-                <>
-                  <Download size={16} color={colors.text} />
-                  <Text style={styles.secondaryBtnText}>Download for offline</Text>
-                </>
-              )}
-            </Pressable>
-          ) : (
-            <View style={styles.downloadedPill}>
-              <Check size={14} color="#16a34a" />
-              <Text style={styles.downloadedText}>Available offline</Text>
-            </View>
-          )}
+          {/* Offline cache — native only. On web there's no on-device
+              file store, so we drop this row entirely and let the
+              "Download file" button below cover the "get the file"
+              use case. */}
+          {Platform.OS !== "web" ? (
+            !downloaded ? (
+              <Pressable
+                style={[styles.secondaryBtn, downloading && { opacity: 0.5 }]}
+                onPress={handleDownload}
+                disabled={downloading}
+              >
+                {downloading ? (
+                  <Text style={styles.secondaryBtnText}>Downloading {downloadPct}%</Text>
+                ) : (
+                  <>
+                    <Download size={16} color={colors.text} />
+                    <Text style={styles.secondaryBtnText}>Download for offline</Text>
+                  </>
+                )}
+              </Pressable>
+            ) : (
+              <View style={styles.downloadedPill}>
+                <Check size={14} color="#16a34a" />
+                <Text style={styles.downloadedText}>Available offline</Text>
+              </View>
+            )
+          ) : null}
+
+          {/* Download the original EPUB/PDF file. Always available —
+              on native it hands off to the OS via Linking, on web it
+              triggers a browser download. */}
+          <Pressable style={styles.secondaryBtn} onPress={handleDownloadFile}>
+            <FileDown size={16} color={colors.text} />
+            <Text style={styles.secondaryBtnText}>Download file</Text>
+          </Pressable>
 
           {/* Secondary actions list */}
           <View style={styles.listCard}>
