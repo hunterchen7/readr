@@ -24,7 +24,18 @@ const INJECT = `
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Readr" />
   <meta name="application-name" content="Readr" />
-  <meta name="description" content="A self-hosted ebook reader for EPUB and PDF with cross-device sync." />`;
+  <meta name="description" content="A self-hosted ebook reader for EPUB and PDF with cross-device sync." />
+  <script>
+    // Register the precache service worker (generated post-export
+    // by scripts/generate-service-worker.mjs). Failing silently
+    // degrades gracefully — the app still works, just without an
+    // offline shell.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js").catch(function () {});
+      });
+    }
+  </script>`;
 
 let html;
 try {

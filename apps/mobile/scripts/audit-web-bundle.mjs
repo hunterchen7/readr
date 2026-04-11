@@ -44,6 +44,25 @@ if (!existsSync(manifestPath)) {
 }
 console.log("✓ manifest.json exists");
 
+const swPath = join(root, "sw.js");
+if (!existsSync(swPath)) {
+  console.error(`✗ missing sw.js at ${swPath}`);
+  process.exit(1);
+}
+const swBody = readFileSync(swPath, "utf8");
+if (!swBody.includes("CACHE_NAME") || !swBody.includes("PRECACHE")) {
+  console.error("✗ sw.js looks malformed (no CACHE_NAME / PRECACHE)");
+  process.exit(1);
+}
+console.log("✓ sw.js exists and looks valid");
+
+const pdfWorkerPath = join(root, "pdf.worker.min.mjs");
+if (!existsSync(pdfWorkerPath)) {
+  console.error(`✗ missing pdf.worker.min.mjs at ${pdfWorkerPath}`);
+  process.exit(1);
+}
+console.log("✓ pdf.worker.min.mjs exists (needed for web PDF reader)");
+
 // ─── Check 2: no native-only modules in the main entry bundle ───────────
 //
 // These are RN libraries that we shimmed away via .web.ts variants
