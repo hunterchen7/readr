@@ -29,10 +29,16 @@ export default function LoginScreen() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const authStore = useAuthStore();
+  // Explicit selectors — zustand v5 re-renders the whole tree and
+  // can trip "Maximum update depth" when subscribing to the full store.
+  const setStoreServerUrl = useAuthStore((s) => s.setServerUrl);
+  const loginDirect = useAuthStore((s) => s.loginDirect);
 
   async function handleSendCode() {
-    const url = serverUrl.trim();
+    // Accept bare hostnames by prepending https://. Avoids the cryptic
+    // "Failed to construct 'URL': Invalid URL" from fetch() on web.
+    let url = serverUrl.trim();
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
     if (!url) { setError("Server URL is required"); return; }
     const em = email.trim().toLowerCase();
     if (!em || !em.includes("@")) { setError("Enter a valid email"); return; }
@@ -56,11 +62,12 @@ export default function LoginScreen() {
     setError("");
     setLoading(true);
     try {
-      const url = serverUrl.trim().replace(/\/$/, "");
+      let url = serverUrl.trim().replace(/\/$/, "");
+      if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
       const token = await api.emailLoginVerify(url, email.trim().toLowerCase(), c);
-      await authStore.setServerUrl(url);
+      await setStoreServerUrl(url);
       await api.setToken(token);
-      authStore.loginDirect(token);
+      loginDirect(token);
       router.replace("/(tabs)/library");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
@@ -84,7 +91,8 @@ export default function LoginScreen() {
                 <Text style={styles.label}>Server URL</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="https://readr.example.com"
+                  placeholder="https://readr-api.hunterchen.ca"
+                  placeholderTextColor={colors.textMuted}
                   value={serverUrl}
                   onChangeText={setServerUrlLocal}
                   autoCapitalize="none"
@@ -97,7 +105,8 @@ export default function LoginScreen() {
             <Text style={styles.label}>Email</Text>
             <TextInput
               style={styles.input}
-              placeholder="you@example.com"
+              placeholder="hello@hunterchen.ca"
+              placeholderTextColor={colors.textMuted}
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
@@ -162,9 +171,16 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  scroll: { flexGrow: 1, justifyContent: "center", padding: spacing.xxl },
+  scroll: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xxl,
+  },
   title: { fontSize: fontSize.title, fontWeight: "bold", textAlign: "center", marginBottom: spacing.xxl },
-  form: { gap: spacing.md },
+  // Cap the form at a comfortable reading width on wide screens. On
+  // mobile the view is narrower than this so the cap is inert.
+  form: { gap: spacing.md, width: "100%", maxWidth: 380 },
   label: { fontSize: fontSize.sm, color: colors.textSecondary },
   input: {
     borderWidth: 1,
