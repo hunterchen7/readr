@@ -8,6 +8,7 @@ import {
   jsonb,
   boolean,
   serial,
+  real,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
@@ -177,6 +178,8 @@ export const highlights = pgTable(
     textContent: text("text_content"),
     note: text("note"),
     color: text("color").default("yellow"),
+    chapterLabel: text("chapter_label"),
+    percentage: real("percentage"),
     createdAt: timestamp("created_at").defaultNow(),
     deletedAt: timestamp("deleted_at"),
   },

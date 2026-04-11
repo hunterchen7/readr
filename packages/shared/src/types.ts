@@ -61,6 +61,10 @@ export interface Book {
 
 export interface BookPosition {
   chapter?: number;
+  /** Display label of the containing TOC entry — stable across font/
+   *  margin changes, unlike `page`, so it's the right thing to show
+   *  in bookmark / note lists. */
+  chapterLabel?: string;
   cfi?: string;
   page?: number;
   percentage: number;
@@ -93,6 +97,11 @@ export interface Highlight {
   textContent: string | null;
   note: string | null;
   color: HighlightColor;
+  /** Captured at creation time so the bookmarks/notes drawer can show
+   *  a stable "chapter · %" label even though the Highlight is pinned
+   *  to a CFI range, not a BookPosition. */
+  chapterLabel: string | null;
+  percentage: number | null;
   createdAt: string;
   deletedAt: string | null;
 }

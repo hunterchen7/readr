@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { View, Pressable, Text, StyleSheet, Modal, PanResponder } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import type { Stroke, StrokePoint, PenConfig } from "@readr/shared";
@@ -37,6 +37,19 @@ export function HandwritingCanvas({
   const [penColor, setPenColor] = useState("#000000");
   const [penWidth, setPenWidth] = useState(4);
   const [isEraser, setIsEraser] = useState(false);
+
+  // Reset the canvas whenever the modal opens. useState(initialStrokes)
+  // only runs on first mount; without this, opening the drawing modal
+  // for a fresh note shows the strokes from whichever drawing was
+  // edited last.
+  useEffect(() => {
+    if (visible) {
+      setStrokes(initialStrokes);
+      setCurrentStroke([]);
+      activeStrokeRef.current = [];
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   // Keep the active stroke in a ref so the PanResponder callbacks (which
   // are memoized once on mount) always see the latest points without

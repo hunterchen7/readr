@@ -1,5 +1,12 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { View, Text, StyleSheet, Pressable, Alert, PanResponder } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Alert,
+  PanResponder,
+} from "react-native";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { ErrorFallback } from "../../components/ErrorFallback";
 import { useLocalSearchParams, router } from "expo-router";
@@ -7,7 +14,11 @@ import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BookPosition, Bookmark, HighlightColor } from "@readr/shared";
-import { BookOpen, Settings, Bookmark as BookmarkIcon } from "lucide-react-native";
+import {
+  BookOpen,
+  Settings,
+  Bookmark as BookmarkIcon,
+} from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -62,12 +73,19 @@ export default function ReaderScreen() {
   const webviewRef = useRef<WebView>(null);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   const display = useDisplay();
   const insets = useSafeAreaInsets();
   const [controlsVisible, setControlsVisible] = useState(false);
-  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const [showTocDrawer, setShowTocDrawer] = useState(false);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [theme, setTheme] = useState<ReaderTheme>(() =>
@@ -81,15 +99,24 @@ export default function ReaderScreen() {
   );
   const [toc, setToc] = useState<TocItem[]>([]);
   const [progress, setProgress] = useState(0);
-  const [currentPosition, setCurrentPosition] = useState<BookPosition | null>(null);
-  const [currentChapterHref, setCurrentChapterHref] = useState<string | null>(null);
+  const [currentPosition, setCurrentPosition] = useState<BookPosition | null>(
+    null,
+  );
+  const [currentChapterHref, setCurrentChapterHref] = useState<string | null>(
+    null,
+  );
 
   // Context menu state
   const [contextMenuVisible, setContextMenuVisible] = useState(false);
   const [selectedText, setSelectedText] = useState("");
   const [defineQuery, setDefineQuery] = useState<string | null>(null);
   const [selectionCfi, setSelectionCfi] = useState("");
-  const [selectionRect, setSelectionRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [selectionRect, setSelectionRect] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
 
   // Notes state
   const [showTypedNote, setShowTypedNote] = useState(false);
@@ -98,6 +125,9 @@ export default function ReaderScreen() {
   const [editingNote, setEditingNote] = useState<Note | null>(null);
   // Viewer stack: single note open, or a chooser when a tap hits several.
   const [viewingNote, setViewingNote] = useState<Note | null>(null);
+  const [viewingNoteRect, setViewingNoteRect] = useState<
+    { x: number; y: number; w: number; h: number } | null
+  >(null);
   const [chooserNotes, setChooserNotes] = useState<Note[] | null>(null);
 
   // Bookmarks + highlights + notes state
@@ -235,7 +265,6 @@ export default function ReaderScreen() {
   // nothing on its own when this happens.
   const [webViewError, setWebViewError] = useState<string | null>(null);
 
-
   const book = data?.book;
 
   // Resolve the local file path for downloaded books.
@@ -247,7 +276,9 @@ export default function ReaderScreen() {
       const downloaded = await getDownloadedBook(bookId);
       if (!cancelled) setLocalFileUrl(downloaded?.localPath ?? null);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [bookId]);
 
   const _format = data?.book?.format ?? "epub";
@@ -408,7 +439,10 @@ export default function ReaderScreen() {
           break;
         case "ready":
           sendToWebView("setTheme", themeForWebView);
-          if (typeof msg.payload?.totalPages === "number" && msg.payload.totalPages > 0) {
+          if (
+            typeof msg.payload?.totalPages === "number" &&
+            msg.payload.totalPages > 0
+          ) {
             setTotalPages(msg.payload.totalPages);
             setCurrentPage((page) => page ?? 1);
           }
@@ -451,15 +485,22 @@ export default function ReaderScreen() {
           const position: BookPosition = {
             percentage: pct,
             cfi: msg.payload.cfi,
-            chapter: msg.payload.chapter,
+            chapter: msg.payload.sectionIndex,
+            chapterLabel: msg.payload.chapter,
             page: msg.payload.currentPage ?? msg.payload.page,
           };
           setCurrentPosition(position);
           setCurrentChapterHref(msg.payload.chapterHref ?? null);
           const rawPage = msg.payload.currentPage;
           const rawTotal = msg.payload.totalPages;
-          if (typeof rawPage === "number" && typeof rawTotal === "number" && rawTotal > 0) {
-            setCurrentPage(Math.min(rawTotal, Math.max(1, Math.round(rawPage))));
+          if (
+            typeof rawPage === "number" &&
+            typeof rawTotal === "number" &&
+            rawTotal > 0
+          ) {
+            setCurrentPage(
+              Math.min(rawTotal, Math.max(1, Math.round(rawPage))),
+            );
             setTotalPages(rawTotal);
           } else {
             setCurrentPage(null);
@@ -470,7 +511,10 @@ export default function ReaderScreen() {
             typeof msg.payload.pagesInSection === "number" &&
             msg.payload.pagesInSection > 0
           ) {
-            const clampedPagesInSection = Math.max(1, Math.round(msg.payload.pagesInSection));
+            const clampedPagesInSection = Math.max(
+              1,
+              Math.round(msg.payload.pagesInSection),
+            );
             setPagesInSection(clampedPagesInSection);
             setPageInSection(
               Math.min(
@@ -492,7 +536,8 @@ export default function ReaderScreen() {
           break;
         case "tapCenter":
           setControlsVisible((v) => {
-            if (v && controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+            if (v && controlsTimerRef.current)
+              clearTimeout(controlsTimerRef.current);
             return !v;
           });
           break;
@@ -506,7 +551,7 @@ export default function ReaderScreen() {
           break;
         case "noteTapped":
           if (typeof msg.payload?.cfi === "string") {
-            handleNoteTapped(msg.payload.cfi);
+            handleNoteTapped(msg.payload.cfi, msg.payload?.rect ?? null);
           }
           break;
         case "searchResults":
@@ -527,7 +572,9 @@ export default function ReaderScreen() {
             onDone: () => {
               if (!mountedRef.current) return;
               sendToWebView("nextPage", {});
-              setTimeout(() => { if (mountedRef.current) requestPageText(); }, 250);
+              setTimeout(() => {
+                if (mountedRef.current) requestPageText();
+              }, 250);
             },
           });
           break;
@@ -548,6 +595,8 @@ export default function ReaderScreen() {
         selectionCfi,
         color,
         selectedText,
+        currentPosition?.chapterLabel ?? null,
+        currentPosition?.percentage ?? null,
       );
       setHighlights((prev) => [newHighlight, ...prev]);
       sendToWebView("addHighlight", { cfi: selectionCfi, color });
@@ -593,7 +642,9 @@ export default function ReaderScreen() {
   // fall back to the page-level position if somehow there's no selection.
   function noteAnchorPosition(): BookPosition | null {
     if (!currentPosition) return null;
-    return selectionCfi ? { ...currentPosition, cfi: selectionCfi } : currentPosition;
+    return selectionCfi
+      ? { ...currentPosition, cfi: selectionCfi }
+      : currentPosition;
   }
 
   // Redraw (or remove) the marker for a passage based on what notes
@@ -624,7 +675,9 @@ export default function ReaderScreen() {
           textContent: text,
           updatedAt: new Date().toISOString(),
         };
-        setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+        setNotes((prev) =>
+          prev.map((n) => (n.id === updated.id ? updated : n)),
+        );
         setEditingNote(null);
       } else {
         const pos = noteAnchorPosition();
@@ -654,12 +707,21 @@ export default function ReaderScreen() {
           penConfig,
           updatedAt: new Date().toISOString(),
         };
-        setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+        setNotes((prev) =>
+          prev.map((n) => (n.id === updated.id ? updated : n)),
+        );
         setEditingNote(null);
       } else {
         const pos = noteAnchorPosition();
         if (!pos) return;
-        const n = await createNote(bookId, pos, "handwritten", undefined, strokes, penConfig);
+        const n = await createNote(
+          bookId,
+          pos,
+          "handwritten",
+          undefined,
+          strokes,
+          penConfig,
+        );
         const next = [n, ...notes];
         setNotes(next);
         if (n.position.cfi) refreshNoteMarker(n.position.cfi, next);
@@ -686,7 +748,8 @@ export default function ReaderScreen() {
             await deleteNote(noteId);
             const remaining = notes.filter((n) => n.id !== noteId);
             setNotes(remaining);
-            if (target.position.cfi) refreshNoteMarker(target.position.cfi, remaining);
+            if (target.position.cfi)
+              refreshNoteMarker(target.position.cfi, remaining);
           } catch {
             Alert.alert("Error", "Failed to delete note");
           }
@@ -697,12 +760,18 @@ export default function ReaderScreen() {
 
   // Called when a marker is tapped in the WebView. If exactly one note
   // anchors to this cfi, open it directly; otherwise surface a chooser
-  // so the user can pick which overlapping note they meant.
-  function handleNoteTapped(cfi: string) {
+  // so the user can pick which overlapping note they meant. The rect
+  // is the annotation's bounding box in window coords so the viewer
+  // popover can anchor next to it like the context menu.
+  function handleNoteTapped(
+    cfi: string,
+    rect: { x: number; y: number; w: number; h: number } | null,
+  ) {
     const matches = notes.filter((n) => n.position.cfi === cfi);
     if (matches.length === 0) return;
     if (matches.length === 1) {
       setViewingNote(matches[0] ?? null);
+      setViewingNoteRect(rect);
     } else {
       setChooserNotes(matches);
     }
@@ -718,7 +787,6 @@ export default function ReaderScreen() {
       setShowDrawing(true);
     }
   }
-
 
   // ─── Bookmark handlers ────────────────────────────────────────────
 
@@ -837,7 +905,12 @@ export default function ReaderScreen() {
         ref={webviewRef}
         style={[styles.webview, { backgroundColor: theme.bg }]}
         originWhitelist={["*"]}
-        source={{ html: _readerHtml || `<html style="background:${theme.bg}"><body style="background:${theme.bg}"><p style='text-align:center;padding:48px;color:${theme.fg}'>Loading...</p></body></html>`, baseUrl: localFileUrl ? localFileUrl.replace(/\/[^/]+$/, "/") : "" }}
+        source={{
+          html:
+            _readerHtml ||
+            `<html style="background:${theme.bg}"><body style="background:${theme.bg}"><p style='text-align:center;padding:48px;color:${theme.fg}'>Loading...</p></body></html>`,
+          baseUrl: localFileUrl ? localFileUrl.replace(/\/[^/]+$/, "/") : "",
+        }}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs
@@ -846,9 +919,19 @@ export default function ReaderScreen() {
         domStorageEnabled
         mixedContentMode="always"
         menuItems={[]}
-        onError={(e) => setWebViewError(e.nativeEvent?.description || "WebView failed to load")}
-        onHttpError={(e) => setWebViewError(`HTTP ${e.nativeEvent?.statusCode ?? "?"}: failed to load book resource`)}
-        onRenderProcessGone={() => setWebViewError("Reader process crashed — tap Reload to restart.")}
+        onError={(e) =>
+          setWebViewError(
+            e.nativeEvent?.description || "WebView failed to load",
+          )
+        }
+        onHttpError={(e) =>
+          setWebViewError(
+            `HTTP ${e.nativeEvent?.statusCode ?? "?"}: failed to load book resource`,
+          )
+        }
+        onRenderProcessGone={() =>
+          setWebViewError("Reader process crashed — tap Reload to restart.")
+        }
       />
 
       {controlsVisible ? (
@@ -864,16 +947,37 @@ export default function ReaderScreen() {
               },
             ]}
           >
-            <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
+            <Pressable
+              onPress={() => setShowTocDrawer(true)}
+              style={styles.headerButton}
+              accessibilityLabel="Table of contents"
+            >
               <BookOpen size={20} color={theme.fg} />
             </Pressable>
-            <Text style={[styles.headerTitle, { color: theme.fg }]} numberOfLines={1}>
+            <Text
+              style={[styles.headerTitle, { color: theme.fg }]}
+              numberOfLines={1}
+            >
               {book.title ?? "Reading"}
             </Text>
-            <Pressable onPress={handleToggleBookmark} style={styles.headerButton} accessibilityLabel={isBookmarked ? "Remove bookmark" : "Add bookmark"}>
-              <BookmarkIcon size={20} color={theme.fg} fill={isBookmarked ? theme.fg : "none"} />
+            <Pressable
+              onPress={handleToggleBookmark}
+              style={styles.headerButton}
+              accessibilityLabel={
+                isBookmarked ? "Remove bookmark" : "Add bookmark"
+              }
+            >
+              <BookmarkIcon
+                size={20}
+                color={theme.fg}
+                fill={isBookmarked ? theme.fg : "none"}
+              />
             </Pressable>
-            <Pressable onPress={() => setShowSettingsDropdown(true)} style={styles.headerButton} accessibilityLabel="Reader settings">
+            <Pressable
+              onPress={() => setShowSettingsDropdown(true)}
+              style={styles.headerButton}
+              accessibilityLabel="Reader settings"
+            >
               <Settings size={20} color={theme.fg} />
             </Pressable>
           </View>
@@ -901,20 +1005,28 @@ export default function ReaderScreen() {
               <View
                 style={[
                   styles.progressTrack,
-                  display.isEink && { backgroundColor: theme.fg + "22", borderWidth: 1, borderColor: theme.fg },
+                  display.isEink && {
+                    backgroundColor: theme.fg + "22",
+                    borderWidth: 1,
+                    borderColor: theme.fg,
+                  },
                 ]}
               >
                 <View
                   style={[
                     styles.progressFill,
-                    { width: `${dragFraction != null ? dragFraction * 100 : progress}%` },
+                    {
+                      width: `${dragFraction != null ? dragFraction * 100 : progress}%`,
+                    },
                     display.isEink && { backgroundColor: theme.fg },
                   ]}
                 />
                 <View
                   style={[
                     styles.progressDot,
-                    { left: `${dragFraction != null ? dragFraction * 100 : progress}%` },
+                    {
+                      left: `${dragFraction != null ? dragFraction * 100 : progress}%`,
+                    },
                     dragFraction != null && styles.progressDotDragging,
                     display.isEink && { backgroundColor: theme.fg },
                   ]}
@@ -926,31 +1038,43 @@ export default function ReaderScreen() {
               const progressTextStyle = {
                 color: theme.fg,
                 fontFamily: readerTextFontFamily(theme.fontFamily),
-                fontSize: Math.max(10, Math.round(theme.fontSize * 0.7)),
+                fontSize: Math.max(11, Math.round(theme.fontSize * 0.75)),
               };
+              const sectionStr =
+                pageInSection != null &&
+                pagesInSection != null &&
+                pagesInSection > 0
+                  ? `p. ${pageInSection}/${pagesInSection}`
+                  : "";
+              const totalStr =
+                currentPage != null && totalPages != null && totalPages > 0
+                  ? `p. ${currentPage}/${totalPages}`
+                  : "";
               return (
                 <>
-                  <Text
-                    style={[styles.progressLabel, progressTextStyle]}
-                    numberOfLines={1}
-                  >
-                    {currentPosition?.chapter ?? ""}
-                  </Text>
                   <View style={styles.progressInfoRow}>
-                    <Text style={[styles.progressLabel, progressTextStyle]}>
-                      {pageInSection != null && pagesInSection != null && pagesInSection > 0
-                        ? `${pageInSection}/${pagesInSection}`
-                        : ""}
+                    <Text
+                      style={[
+                        styles.progressLabel,
+                        progressTextStyle,
+                        { flex: 1 },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {currentPosition?.chapterLabel ?? ""}
                     </Text>
                     <Text style={[styles.progressLabel, progressTextStyle]}>
-                      {currentPage != null && totalPages != null && totalPages > 0
-                        ? `p. ${currentPage}/${totalPages}`
-                        : ""}
+                      {`${progress.toFixed(1)}%`}
                     </Text>
                   </View>
-                  <Text style={[styles.progressLabel, styles.progressPercent, progressTextStyle]}>
-                    {`${progress.toFixed(1)}%`}
-                  </Text>
+                  <View style={styles.progressInfoRow}>
+                    <Text style={[styles.progressLabel, progressTextStyle]}>
+                      {sectionStr}
+                    </Text>
+                    <Text style={[styles.progressLabel, progressTextStyle]}>
+                      {totalStr}
+                    </Text>
+                  </View>
                 </>
               );
             })()}
@@ -978,7 +1102,11 @@ export default function ReaderScreen() {
         </View>
       )}
 
-      {theme.pageIndicator?.enabled && !controlsVisible && currentPage != null && totalPages != null && totalPages > 0 ? (
+      {theme.pageIndicator?.enabled &&
+      !controlsVisible &&
+      currentPage != null &&
+      totalPages != null &&
+      totalPages > 0 ? (
         <View
           pointerEvents="none"
           style={[
@@ -986,12 +1114,22 @@ export default function ReaderScreen() {
             theme.pageIndicator.edge === "top"
               ? { top: insets.top + 4 }
               : { bottom: Math.max(insets.bottom, 4) + 6 },
-            resolveIndicatorSide(theme.pageIndicator.side, currentPage) === "left"
+            resolveIndicatorSide(theme.pageIndicator.side, currentPage) ===
+            "left"
               ? { left: 12 }
               : { right: 12 },
           ]}
         >
-          <Text style={[styles.pageIndicatorText, { color: theme.fg, fontFamily: readerTextFontFamily(theme.fontFamily) }]}>
+          <Text
+            style={[
+              styles.pageIndicatorText,
+              {
+                color: theme.fg,
+                fontFamily: readerTextFontFamily(theme.fontFamily),
+                fontSize: Math.max(12, Math.round(theme.fontSize * 0.75)),
+              },
+            ]}
+          >
             {currentPage}
           </Text>
         </View>
@@ -1010,8 +1148,12 @@ export default function ReaderScreen() {
         onJumpToBookmark={handleGoToBookmark}
         onDeleteBookmark={(id) => handleDeleteBookmark(id)}
         onJumpToNote={(n) => {
-          if (n.position.cfi) sendToWebView("goToLocation", { cfi: n.position.cfi });
-          else sendToWebView("goToLocation", { fraction: n.position.percentage / 100 });
+          if (n.position.cfi)
+            sendToWebView("goToLocation", { cfi: n.position.cfi });
+          else
+            sendToWebView("goToLocation", {
+              fraction: n.position.percentage / 100,
+            });
         }}
         onDeleteNote={handleDeleteNote}
         onJumpToHighlight={(h) => {
@@ -1050,7 +1192,11 @@ export default function ReaderScreen() {
 
       <TypedNoteEditor
         visible={showTypedNote}
-        initialText={editingNote?.noteType === "typed" ? (editingNote.textContent ?? "") : ""}
+        initialText={
+          editingNote?.noteType === "typed"
+            ? (editingNote.textContent ?? "")
+            : ""
+        }
         onSave={handleSaveTypedNote}
         onCancel={() => {
           setShowTypedNote(false);
@@ -1060,7 +1206,11 @@ export default function ReaderScreen() {
 
       <HandwritingCanvas
         visible={showDrawing}
-        initialStrokes={editingNote?.noteType === "handwritten" ? (editingNote.strokes ?? []) : []}
+        initialStrokes={
+          editingNote?.noteType === "handwritten"
+            ? (editingNote.strokes ?? [])
+            : []
+        }
         onSave={handleSaveDrawing}
         onCancel={() => {
           setShowDrawing(false);
@@ -1070,15 +1220,16 @@ export default function ReaderScreen() {
 
       <NoteViewer
         note={viewingNote}
-        onClose={() => setViewingNote(null)}
+        anchorRect={viewingNoteRect}
+        onClose={() => {
+          setViewingNote(null);
+          setViewingNoteRect(null);
+        }}
         onEdit={openNoteForEdit}
         onDelete={async (id) => {
           setViewingNote(null);
+          setViewingNoteRect(null);
           await handleDeleteNote(id);
-        }}
-        onJumpTo={(cfi) => {
-          setViewingNote(null);
-          sendToWebView("goToLocation", { cfi });
         }}
       />
 
@@ -1103,7 +1254,9 @@ export default function ReaderScreen() {
           if ("cfi" in target && target.cfi) {
             sendToWebView("goToLocation", { cfi: target.cfi });
           } else if ("percentage" in target) {
-            sendToWebView("goToLocation", { fraction: target.percentage / 100 });
+            sendToWebView("goToLocation", {
+              fraction: target.percentage / 100,
+            });
           }
         }}
       />
@@ -1120,9 +1273,7 @@ export default function ReaderScreen() {
             return;
           }
           if (totalPages && totalPages > 0) {
-            const fraction = totalPages > 1
-              ? (page - 1) / (totalPages - 1)
-              : 0;
+            const fraction = totalPages > 1 ? (page - 1) / (totalPages - 1) : 0;
             sendToWebView("goToLocation", { fraction });
           }
         }}
@@ -1136,14 +1287,18 @@ export default function ReaderScreen() {
         onNextPage={handleTtsAdvance}
         onStop={handleStopTts}
       />
-
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
   error: { color: "#dc2626", marginBottom: 12 },
   link: { color: "#111", fontWeight: "600" },
   header: {
@@ -1160,9 +1315,19 @@ const styles = StyleSheet.create({
     zIndex: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerButton: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },
+  headerButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   headerButtonText: { fontSize: 20 },
-  headerTitle: { flex: 1, textAlign: "center", fontSize: 15, fontWeight: "500" },
+  headerTitle: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 15,
+    fontWeight: "500",
+  },
   headerActions: { flexDirection: "row" },
   webview: { flex: 1 },
   progressOverlay: {
@@ -1220,6 +1385,7 @@ const styles = StyleSheet.create({
   progressInfoRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    marginTop: 2,
   },
   progressLabel: {},
   progressPercent: { textAlign: "right", marginTop: 2 },
@@ -1241,8 +1407,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   pageIndicatorText: {
-    fontSize: 11,
-    opacity: 0.45,
+    fontSize: 13,
+    opacity: 0.85,
     fontVariant: ["tabular-nums"],
   },
 });

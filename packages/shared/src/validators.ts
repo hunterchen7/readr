@@ -3,6 +3,7 @@ import { z } from "zod";
 // === Book Position ===
 export const bookPositionSchema = z.object({
   chapter: z.number().int().optional(),
+  chapterLabel: z.string().optional(),
   cfi: z.string().optional(),
   page: z.number().int().optional(),
   percentage: z.number().min(0).max(100),
@@ -45,6 +46,8 @@ export const createHighlightSchema = z.object({
   textContent: z.string().optional(),
   note: z.string().optional(),
   color: highlightColorSchema.default("yellow"),
+  chapterLabel: z.string().optional(),
+  percentage: z.number().min(0).max(100).optional(),
 });
 
 export const strokePointSchema = z.object({

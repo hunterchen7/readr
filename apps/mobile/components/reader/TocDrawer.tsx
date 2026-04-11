@@ -42,6 +42,45 @@ interface TocDrawerProps {
   theme: { bg: string; fg: string };
 }
 
+function SortToggle({
+  mode,
+  onChange,
+  fg,
+}: {
+  mode: "position" | "recent";
+  onChange: (m: "position" | "recent") => void;
+  fg: string;
+}) {
+  const chipBg = fg + "11";
+  return (
+    <View style={styles.sortRow}>
+      {(["position", "recent"] as const).map((m) => {
+        const active = mode === m;
+        return (
+          <Pressable
+            key={m}
+            style={[
+              styles.sortChip,
+              { backgroundColor: active ? fg : chipBg },
+            ]}
+            onPress={() => onChange(m)}
+          >
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: active ? "600" : "400",
+                color: active ? "#fff" : fg + "99",
+              }}
+            >
+              {m === "position" ? "By position" : "By date"}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function TocDrawer({
   visible,
   onClose,
@@ -63,6 +102,11 @@ export function TocDrawer({
   const display = useDisplay();
   const { width: screenWidth } = useWindowDimensions();
   const [tab, setTab] = useState<"chapters" | "bookmarks" | "notes">("chapters");
+  // Sort mode for bookmarks + notes/highlights list. "position" is
+  // the default because it's far more useful when scanning a book;
+  // "recent" keeps the old chronological view for "what did I add
+  // most recently" workflows.
+  const [sortMode, setSortMode] = useState<"position" | "recent">("position");
 
   if (!visible) return null;
 
@@ -99,7 +143,7 @@ export function TocDrawer({
 
           {/* Go to specific page */}
           <Pressable
-            style={styles.backRow}
+            style={[styles.backRow, styles.backRowCompact]}
             onPress={() => {
               onClose();
               onGoToPage();
@@ -186,9 +230,20 @@ export function TocDrawer({
             />
           ) : tab === "bookmarks" ? (
             <FlatList
-              data={bookmarks}
+              data={bookmarks.slice().sort((a, b) =>
+                sortMode === "position"
+                  ? a.position.percentage - b.position.percentage
+                  : b.createdAt.localeCompare(a.createdAt),
+              )}
               keyExtractor={(item) => item.id}
               style={styles.list}
+              ListHeaderComponent={
+                <SortToggle
+                  mode={sortMode}
+                  onChange={setSortMode}
+                  fg={theme.fg}
+                />
+              }
               ListEmptyComponent={
                 <Text style={[styles.emptyText, { color: theme.fg + "66" }]}>
                   No bookmarks yet. Tap the bookmark icon in the header to add one.
@@ -212,12 +267,11 @@ export function TocDrawer({
                       style={[styles.bookmarkLabel, { color: theme.fg }]}
                       numberOfLines={1}
                     >
-                      {item.label ??
-                        `Page ${item.position.page ?? Math.round(item.position.percentage) + "%"}`}
+                      {item.label ?? item.position.chapterLabel ?? "Bookmark"}
                     </Text>
                   </Pressable>
                   <Text style={[styles.bookmarkPct, { color: theme.fg + "66" }]}>
-                    {Math.round(item.position.percentage)}%
+                    {item.position.percentage.toFixed(1)}%
                   </Text>
                   <Pressable
                     onPress={() => onDeleteBookmark(item.id)}
@@ -231,11 +285,36 @@ export function TocDrawer({
           ) : (
             <FlatList
               data={[
-                ...notes.map((n) => ({ type: "note" as const, item: n, at: n.createdAt })),
-                ...highlights.map((h) => ({ type: "highlight" as const, item: h, at: h.createdAt })),
-              ].sort((a, b) => b.at.localeCompare(a.at))}
+                ...notes.map((n) => ({
+                  type: "note" as const,
+                  item: n,
+                  at: n.createdAt,
+                  pct: n.position.percentage,
+                })),
+                ...highlights.map((h) => ({
+                  type: "highlight" as const,
+                  item: h,
+                  at: h.createdAt,
+                  // Highlights created before the chapter/percentage
+                  // columns existed have null percentage — treat
+                  // those as "unknown position" and float them to the
+                  // end in position-sorted view.
+                  pct: h.percentage ?? Number.POSITIVE_INFINITY,
+                })),
+              ].sort((a, b) =>
+                sortMode === "position"
+                  ? a.pct - b.pct
+                  : b.at.localeCompare(a.at),
+              )}
               keyExtractor={(entry) => entry.item.id}
               style={styles.list}
+              ListHeaderComponent={
+                <SortToggle
+                  mode={sortMode}
+                  onChange={setSortMode}
+                  fg={theme.fg}
+                />
+              }
               ListEmptyComponent={
                 <Text style={[styles.emptyText, { color: theme.fg + "66" }]}>
                   No notes or highlights yet. Select text to add one.
@@ -257,6 +336,22 @@ export function TocDrawer({
                         <Text style={[styles.noteText, { color: theme.fg }]} numberOfLines={2}>
                           {(entry.item as Highlight).textContent || "Highlight"}
                         </Text>
+                        {((entry.item as Highlight).percentage != null ||
+                          (entry.item as Highlight).chapterLabel != null) && (
+                          <Text
+                            style={[styles.noteMeta, { color: theme.fg + "66" }]}
+                            numberOfLines={1}
+                          >
+                            {[
+                              (entry.item as Highlight).percentage != null
+                                ? `${((entry.item as Highlight).percentage ?? 0).toFixed(1)}%`
+                                : null,
+                              (entry.item as Highlight).chapterLabel,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </Text>
+                        )}
                       </View>
                       <Pressable
                         onPress={() => onDeleteHighlight(entry.item.id)}
@@ -282,8 +377,13 @@ export function TocDrawer({
                         <Text style={[styles.noteText, { color: theme.fg }]} numberOfLines={2}>
                           {(entry.item as Note).noteType === "handwritten" ? "Handwritten note" : ((entry.item as Note).textContent || "Note")}
                         </Text>
-                        <Text style={[styles.noteMeta, { color: theme.fg + "66" }]}>
-                          {Math.round((entry.item as Note).position.percentage)}%
+                        <Text style={[styles.noteMeta, { color: theme.fg + "66" }]} numberOfLines={1}>
+                          {[
+                            `${(entry.item as Note).position.percentage.toFixed(1)}%`,
+                            (entry.item as Note).position.chapterLabel,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
                         </Text>
                       </View>
                       <Pressable
@@ -333,6 +433,9 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xxl + 24,
     paddingBottom: spacing.md,
   },
+  backRowCompact: {
+    paddingTop: spacing.sm,
+  },
   backText: {
     fontSize: fontSize.md,
     fontWeight: "500",
@@ -354,6 +457,17 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
+  },
+  sortRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  sortChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: 12,
   },
   chapterItem: {
     paddingVertical: spacing.md,

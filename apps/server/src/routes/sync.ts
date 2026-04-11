@@ -282,6 +282,8 @@ async function insertEntity(
         cfiRange: payload.cfiRange as string,
         textContent: (payload.textContent as string) ?? null,
         color: (payload.color as string) ?? "yellow",
+        chapterLabel: (payload.chapterLabel as string) ?? null,
+        percentage: (payload.percentage as number) ?? null,
         createdAt: new Date(timestamp),
       });
       break;

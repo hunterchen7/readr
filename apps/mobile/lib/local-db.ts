@@ -101,6 +101,26 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_notes_book ON notes(book_id);
     CREATE INDEX IF NOT EXISTS idx_sync_queue_ts ON sync_queue(timestamp);
   `);
+
+  // Additive migrations for columns added after v1. SQLite doesn't
+  // support `ADD COLUMN IF NOT EXISTS`, so we just swallow the error
+  // when the column already exists — keeps this file idempotent
+  // without a full version-tracking table.
+  await addColumnIfMissing(database, "highlights", "chapter_label", "TEXT");
+  await addColumnIfMissing(database, "highlights", "percentage", "REAL");
+}
+
+async function addColumnIfMissing(
+  database: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  type: string,
+): Promise<void> {
+  try {
+    await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
 }
 
 function generateId(): string {
@@ -303,6 +323,8 @@ export async function getHighlights(bookId: string): Promise<Highlight[]> {
     text_content: string | null;
     note: string | null;
     color: string;
+    chapter_label: string | null;
+    percentage: number | null;
     created_at: string;
     deleted_at: string | null;
   }>(
@@ -317,6 +339,8 @@ export async function getHighlights(bookId: string): Promise<Highlight[]> {
     textContent: row.text_content,
     note: row.note,
     color: row.color as Highlight["color"],
+    chapterLabel: row.chapter_label,
+    percentage: row.percentage,
     createdAt: row.created_at,
     deletedAt: row.deleted_at,
   }));
@@ -327,14 +351,16 @@ export async function createHighlight(
   cfiRange: string,
   color: Highlight["color"],
   textContent?: string,
+  chapterLabel?: string | null,
+  percentage?: number | null,
 ): Promise<Highlight> {
   const database = await getDb();
   const id = generateId();
   const now = new Date().toISOString();
 
   await database.runAsync(
-    "INSERT INTO highlights (id, book_id, cfi_range, text_content, color, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, 0)",
-    [id, bookId, cfiRange, textContent ?? null, color, now],
+    "INSERT INTO highlights (id, book_id, cfi_range, text_content, color, chapter_label, percentage, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+    [id, bookId, cfiRange, textContent ?? null, color, chapterLabel ?? null, percentage ?? null, now],
   );
 
   await addToSyncQueue("highlight", id, "create", {
@@ -342,6 +368,8 @@ export async function createHighlight(
     cfiRange,
     color,
     textContent,
+    chapterLabel: chapterLabel ?? null,
+    percentage: percentage ?? null,
   });
 
   return {
@@ -352,6 +380,8 @@ export async function createHighlight(
     textContent: textContent ?? null,
     note: null,
     color,
+    chapterLabel: chapterLabel ?? null,
+    percentage: percentage ?? null,
     createdAt: now,
     deletedAt: null,
   };

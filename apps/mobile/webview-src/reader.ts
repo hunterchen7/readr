@@ -115,6 +115,12 @@ let currentTheme: Theme = {};
 // classifications here and consult it when routing a tap.
 const noteCfis = new Map<string, 'typed' | 'handwritten'>();
 
+// Full set of highlights we've added, keyed by cfi → color. Foliate
+// discards its overlayer every time a section iframe is unloaded, so
+// when the user navigates away and back we have to replay everything
+// on the `create-overlay` event. Same for notes (stored in noteCfis).
+const highlightRegistry = new Map<string, string>();
+
 // ─── postMessage helpers ─────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -256,9 +262,11 @@ function handleRNMessage(data: RNMessage): void {
     case 'addHighlight': {
       const cfi = data.payload.cfi || data.payload.cfiRange;
       if (!cfi) break;
+      const color = data.payload.color || 'yellow';
+      highlightRegistry.set(cfi, color);
       if (view.addAnnotation) {
         try {
-          view.addAnnotation({ value: cfi, color: data.payload.color || 'yellow', kind: 'highlight' });
+          view.addAnnotation({ value: cfi, color, kind: 'highlight' });
         } catch (err) {
           post('highlightError', { cfi, error: String(err) });
         }
@@ -268,6 +276,7 @@ function handleRNMessage(data: RNMessage): void {
     case 'removeHighlight': {
       const cfi = data.payload.cfi || data.payload.cfiRange;
       if (!cfi || !view.addAnnotation) break;
+      highlightRegistry.delete(cfi);
       try {
         // foliate: passing truthy 2nd arg removes the annotation
         view.addAnnotation({ value: cfi }, true);
@@ -658,7 +667,10 @@ async function measureOnce(mySeq: number): Promise<boolean> {
     for (let i = 0; i < total; i++) {
       if (mySeq !== _measureSeq) return false;
       try {
-        await mview.goTo({ index: i, anchor: 0 });
+        // foliate-view.goTo accepts a number as a section-index
+        // shortcut. Passing `{ index, anchor }` falls through to the
+        // href branch (it tries `.split()` on the object) and throws.
+        await mview.goTo(i);
       } catch (err) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         post('debug', { msg: `measure goTo ${i} failed: ${(err as any)?.message || err}` });
@@ -969,13 +981,58 @@ async function init(): Promise<void> {
     view.addEventListener('show-annotation', (e) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ann = (e as CustomEvent).detail ?? ({} as any);
+
+      // Translate the annotation range's bounding rect into top-window
+      // coordinates by walking up the iframe chain — the range lives
+      // inside a section iframe, so its rect is relative to that doc.
+      let rect: { x: number; y: number; w: number; h: number } | null = null;
+      try {
+        const range: Range | undefined = ann.range;
+        if (range) {
+          const r = range.getBoundingClientRect();
+          const doc = range.startContainer?.ownerDocument ?? null;
+          let ox = 0, oy = 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let win: any = doc?.defaultView;
+          while (win && win !== window && win.frameElement) {
+            const fr = win.frameElement.getBoundingClientRect();
+            ox += fr.left;
+            oy += fr.top;
+            win = win.parent;
+          }
+          rect = { x: r.left + ox, y: r.top + oy, w: r.width, h: r.height };
+        }
+      } catch { /* ignore */ }
+
       // Foliate strips custom annotation fields before dispatch, so
       // fall back to the noteCfis map to tell a note apart from a
       // highlight by value alone.
       if (ann.value && noteCfis.has(ann.value)) {
-        post('noteTapped', { cfi: ann.value, noteType: noteCfis.get(ann.value) });
+        post('noteTapped', { cfi: ann.value, noteType: noteCfis.get(ann.value), rect });
       } else {
-        post('showAnnotation', ann);
+        post('showAnnotation', { value: ann.value, index: ann.index, rect });
+      }
+    });
+
+    // Foliate destroys the overlayer every time a section iframe is
+    // unloaded and creates a fresh empty one on return. It auto-replays
+    // search results but not user annotations — we have to redraw
+    // highlights + notes ourselves, otherwise they vanish when the
+    // user leaves the page and comes back. addAnnotation() resolves
+    // the cfi to a section index internally and only draws if it
+    // matches the newly-created overlay, so firing every registered
+    // annotation here is cheap and always correct.
+    view.addEventListener('create-overlay', () => {
+      if (!view?.addAnnotation) return;
+      for (const [cfi, color] of highlightRegistry) {
+        try {
+          view.addAnnotation({ value: cfi, color, kind: 'highlight' });
+        } catch { /* ignore */ }
+      }
+      for (const [cfi, noteType] of noteCfis) {
+        try {
+          view.addAnnotation({ value: cfi, kind: 'note', noteType });
+        } catch { /* ignore */ }
       }
     });
 
