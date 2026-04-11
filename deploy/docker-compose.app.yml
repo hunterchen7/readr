@@ -1,0 +1,94 @@
+# Stateless application stack — run with:
+#   docker compose -f deploy/docker-compose.app.yml up -d --build
+#
+# This file holds the things we redeploy on every push: the Hono API
+# server, future workers, and any public web containers. None of these
+# own a data volume — bouncing them is safe and does not affect MinIO,
+# Postgres, or Redis (those live in docker-compose.infra.yml).
+#
+# Prereq: the infra stack must already be running and the shared
+# `readr` network must exist:
+#
+#   docker network create readr           # one-time, on the host
+#   docker compose -f deploy/docker-compose.infra.yml up -d
+#
+# App services reach infra services by their Docker DNS names
+# (`postgres`, `redis`, `minio`) over the shared `readr` network.
+#
+# Reads environment from the repository root ../.env file.
+#
+# IMPORTANT: do NOT use ${VAR:-default} substitution in this file.
+# Compose's `${VAR}` substitution reads `.env` from the project
+# directory (here: `deploy/`), NOT from `../.env`. The operator's
+# real `~/readr/.env` lives one level up, so any interpolation here
+# would silently use defaults and ignore the operator's secrets. All
+# credentials and endpoint URLs are injected into the api container
+# via `env_file: ../.env` instead. The operator's `.env` is the single
+# source of truth — see deploy/.env.example and deploy/OLARES.md.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    # DATABASE_URL, REDIS_URL, S3_ENDPOINT, S3_PUBLIC_ENDPOINT, the S3
+    # credentials, and everything else come from ../.env via env_file.
+    # Operators must set DATABASE_URL to use the in-network DNS names
+    # (e.g. postgresql://reader:<pw>@postgres:5432/reader and
+    # redis://redis:6379), since the api container can only reach the
+    # infra stack containers by their compose service names over the
+    # shared `readr` network. See deploy/.env.example.
+    env_file: ../.env
+    networks:
+      - readr
+    ports:
+      - "3000:3000"
+    # Liveness only — this verifies the api process is up and serving
+    # /health, NOT that postgres / redis / minio are reachable. The
+    # /health endpoint is a bare {status:"ok"} with no upstream pings,
+    # and the postgres-js / ioredis / S3 clients all connect lazily on
+    # first request. Bring the infra stack up first and wait for it to
+    # be healthy before starting the app stack — see deploy/OLARES.md.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # Note: the old React+Vite dashboard (`apps/web`) has been removed.
+  # The web experience is now served by the Expo Web build of apps/mobile;
+  # a matching Dockerfile/service will land in a follow-up PR. For now
+  # Caddy only fronts the API.
+
+  # Caddy is optional — only started with `--profile public` so deployments
+  # that expose the stack via cloudflared tunnel (no port 80/443 needed)
+  # can skip it. On the Olares box in particular ports 80/443 are owned
+  # by the host, so we never start Caddy there.
+  caddy:
+    image: caddy:2-alpine
+    profiles: [public]
+    env_file: ../.env
+    depends_on:
+      - api
+    networks:
+      - readr
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  readr:
+    external: true

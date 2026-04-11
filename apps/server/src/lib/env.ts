@@ -5,20 +5,30 @@ const envSchema = z.object({
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
   TTS_WORKER_URL: z.string().url().optional(),
 
-  S3_ENDPOINT: z.string().url(),
+  // Optional. For AWS S3 the SDK resolves the regional endpoint from
+  // S3_REGION when no endpoint is set, and passing any value (even a
+  // correct one) pins the client to that host. So leave this unset for
+  // AWS, and set it explicitly for MinIO / R2 / B2 / DO Spaces.
+  S3_ENDPOINT: z.string().url().optional(),
   // Public-facing endpoint used ONLY when rewriting presigned URLs that
   // clients (mobile/web) will hit directly. In local dev this is the
   // host alias the Android emulator can reach (http://10.0.2.2:9000);
-  // in production this is the R2 public host. If unset, S3_ENDPOINT is used.
+  // in production this is the R2 public host. Must be PATH-STYLE — we
+  // concatenate /<bucket>/<key> at URL-generation time in storage.ts,
+  // so passing a virtual-hosted URL (e.g. https://my-bucket.s3.amazonaws.com)
+  // would double the bucket name. If unset, presigned URLs are signed
+  // against S3_ENDPOINT instead.
   S3_PUBLIC_ENDPOINT: z.string().url().optional(),
   S3_BUCKET: z.string().min(1),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
   S3_REGION: z.string().default("auto"),
+  // Defaults to false because AWS S3 and Cloudflare R2 use virtual-hosted
+  // style addressing. MinIO operators must set this to "true" explicitly.
   S3_FORCE_PATH_STYLE: z
     .string()
     .transform((v) => v === "true")
-    .default("true"),
+    .default("false"),
 
   PUBLIC_URL: z.string().url().optional(),
 

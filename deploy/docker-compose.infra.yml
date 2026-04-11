@@ -1,0 +1,105 @@
+# Stateful infrastructure stack — run with:
+#   docker compose -f deploy/docker-compose.infra.yml up -d
+#
+# This file holds the always-on services that own data volumes:
+# Postgres, Redis, MinIO, and the one-shot bucket bootstrap. App
+# redeploys (see docker-compose.app.yml) MUST NOT touch this stack —
+# bouncing MinIO during a redeploy briefly 502s books.* through
+# Cloudflare and poisons the edge cache, which is exactly the class of
+# bug this split exists to prevent.
+#
+# Both stacks attach to the external `readr` Docker network. Create it
+# once on the host before bringing either stack up:
+#
+#   docker network create readr
+#
+# Reads environment from the repository root ../.env file.
+#
+# IMPORTANT: do NOT use ${VAR:-default} substitution in this file.
+# Compose's `${VAR}` substitution reads `.env` from the project
+# directory (here: `deploy/`), NOT from `../.env`. The operator's
+# real `~/readr/.env` lives one level up, so any interpolation in
+# this file would silently use defaults and ignore the operator's
+# secrets. Instead, every credential is injected into the container
+# via `env_file: ../.env`, which Compose loads from the path relative
+# to this compose file. The operator's `.env` is the single source of
+# truth — see deploy/.env.example and deploy/OLARES.md.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB come from ../.env
+    # via env_file. The postgres image reads them directly from its
+    # process env on first boot to initialize the cluster.
+    env_file: ../.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - readr
+    healthcheck:
+      # Use the env-injected $$POSTGRES_USER so this still works after
+      # operators rotate the user. The $$ escapes interpolation so the
+      # variable is expanded by the container shell, not by Compose.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    env_file: ../.env
+    volumes:
+      - redisdata:/data
+    networks:
+      - readr
+
+  minio:
+    image: minio/minio:latest
+    profiles: [local-s3]
+    command: server /data --console-address ":9001"
+    # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD come from ../.env via env_file.
+    env_file: ../.env
+    ports:
+      - "9000:9000"  # S3 API (accessible from host for debugging + mobile client)
+      - "9001:9001"  # Web console
+    volumes:
+      - miniodata:/data
+    networks:
+      - readr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: create the bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    profiles: [local-s3]
+    # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD are injected into this
+    # container's env via env_file (same as the minio service). The
+    # `$$VAR` form below is intentional: Compose converts `$$` → `$`
+    # at config-render time, and the busybox shell inside the
+    # container then expands `$VAR` against the container env.
+    env_file: ../.env
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - readr
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb -p local/reader-dev || true &&
+      mc anonymous set download local/reader-dev &&
+      echo 'MinIO bucket reader-dev ready.'
+      "
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+
+networks:
+  readr:
+    external: true
