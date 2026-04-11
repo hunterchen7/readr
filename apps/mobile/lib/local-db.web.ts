@@ -13,6 +13,7 @@
  * device if/when we wire it up on web.
  */
 import type {
+  Book,
   BookPosition,
   ReadingProgress,
   Bookmark,
@@ -175,5 +176,39 @@ export async function getSyncQueue(): Promise<SyncLogEntry[]> {
 }
 
 export async function clearSyncQueue(_upToId: number): Promise<void> {
+  // No-op on web.
+}
+
+// ─── Books cache ─────────────────────────────────────────────────────────
+//
+// Offline mode ships on native only. On web the browser's HTTP cache +
+// query cache already cover the re-open-without-network case well
+// enough for the library screen, and the reader has its own OPFS book
+// cache. These exports exist so cross-platform screens can import them
+// without Metro blowing up; all of them are no-ops or empty returns.
+
+export async function getCachedBooks(): Promise<Book[]> {
+  return [];
+}
+
+export async function getCachedBook(_id: string): Promise<Book | null> {
+  return null;
+}
+
+export async function upsertCachedBooks(_books: Book[]): Promise<void> {
+  // No-op on web.
+}
+
+export async function upsertCachedBook(_book: Book): Promise<void> {
+  // No-op on web.
+}
+
+export async function pruneCachedBooks(
+  _serverIds: Iterable<string>,
+): Promise<void> {
+  // No-op on web.
+}
+
+export async function deleteCachedBook(_id: string): Promise<void> {
   // No-op on web.
 }

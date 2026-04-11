@@ -99,14 +99,23 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
     -- detail, and reader can render without hitting the server. Every
     -- successful listBooks() upserts here. cover_url stays remote until
     -- the cover-cache pass rewrites it to a file:// path.
+    --
+    -- user_id + metadata_json round-trip the full shape of @readr/shared
+    -- Book so rowToBook() doesn't have to lie about values it doesn't
+    -- store. download_url is cached for completeness but stripped on
+    -- read — presigned R2 URLs expire and can't be reused offline
+    -- anyway, so handing one back would only waste a failing request.
     CREATE TABLE IF NOT EXISTS books (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       file_id TEXT,
       title TEXT,
       author TEXT,
       language TEXT,
       total_chapters INTEGER,
+      metadata_json TEXT,
       cover_url TEXT,
+      download_url TEXT,
       format TEXT,
       file_size INTEGER,
       uploaded_at TEXT,
@@ -126,6 +135,13 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
   // without a full version-tracking table.
   await addColumnIfMissing(database, "highlights", "chapter_label", "TEXT");
   await addColumnIfMissing(database, "highlights", "percentage", "REAL");
+
+  // books table columns added after offline-mode's first cut so
+  // rowToBook() can round-trip the full @readr/shared Book shape
+  // instead of synthesizing empty userId / null metadata.
+  await addColumnIfMissing(database, "books", "user_id", "TEXT");
+  await addColumnIfMissing(database, "books", "metadata_json", "TEXT");
+  await addColumnIfMissing(database, "books", "download_url", "TEXT");
 
   // One-time migration for entities created before `generateId()` was
   // switched to UUID v4. Legacy IDs look like `1775770007700-eia8fhb`
@@ -733,12 +749,15 @@ export async function clearSyncQueue(upToId: number): Promise<void> {
 
 interface BookRow {
   id: string;
+  user_id: string | null;
   file_id: string | null;
   title: string | null;
   author: string | null;
   language: string | null;
   total_chapters: number | null;
+  metadata_json: string | null;
   cover_url: string | null;
+  download_url: string | null;
   format: string | null;
   file_size: number | null;
   uploaded_at: string | null;
@@ -746,15 +765,29 @@ interface BookRow {
 }
 
 function rowToBook(row: BookRow): import("@readr/shared").Book {
+  let metadata: Record<string, unknown> | null = null;
+  if (row.metadata_json) {
+    try {
+      metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+    } catch {
+      // Corrupted JSON — treat as no metadata. Better than crashing
+      // the library screen.
+    }
+  }
+  // Deliberately skip download_url. Presigned R2 URLs expire, and the
+  // cache fallback path only fires when the network is flaky or down —
+  // handing back a stale URL would just waste a failing request.
+  // Callers that need a downloadable handle go through book-cache.ts
+  // and hit the network anyway.
   return {
     id: row.id,
-    userId: "", // local cache doesn't store user ids
+    userId: row.user_id ?? "",
     fileId: row.file_id ?? "",
     title: row.title,
     author: row.author,
     language: row.language,
     totalChapters: row.total_chapters,
-    metadata: null,
+    metadata,
     uploadedAt: row.uploaded_at ?? "",
     coverUrl: row.cover_url,
     format: (row.format as "epub" | "pdf" | undefined) ?? undefined,
@@ -801,15 +834,18 @@ export async function upsertCachedBooks(
     for (const b of books) {
       await database.runAsync(
         `INSERT INTO books
-           (id, file_id, title, author, language, total_chapters,
-            cover_url, format, file_size, uploaded_at, last_synced_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, user_id, file_id, title, author, language, total_chapters,
+            metadata_json, cover_url, download_url, format, file_size,
+            uploaded_at, last_synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
+           user_id        = excluded.user_id,
            file_id        = excluded.file_id,
            title          = excluded.title,
            author         = excluded.author,
            language       = excluded.language,
            total_chapters = excluded.total_chapters,
+           metadata_json  = excluded.metadata_json,
            -- Keep a previously-cached file:// cover instead of clobbering
            -- it with a fresh presigned URL. The cover-cache pass owns
            -- the rewrite; this just preserves whatever it produced.
@@ -817,18 +853,22 @@ export async function upsertCachedBooks(
                               WHEN books.cover_url LIKE 'file://%' THEN books.cover_url
                               ELSE excluded.cover_url
                             END,
+           download_url   = excluded.download_url,
            format         = excluded.format,
            file_size      = excluded.file_size,
            uploaded_at    = excluded.uploaded_at,
            last_synced_at = excluded.last_synced_at`,
         [
           b.id,
+          b.userId ?? null,
           b.fileId ?? null,
           b.title ?? null,
           b.author ?? null,
           b.language ?? null,
           b.totalChapters ?? null,
+          b.metadata ? JSON.stringify(b.metadata) : null,
           b.coverUrl ?? null,
+          b.downloadUrl ?? null,
           b.format ?? null,
           b.fileSize ?? null,
           b.uploadedAt ?? null,
@@ -843,15 +883,19 @@ export async function upsertCachedBooks(
  * Drop cached books whose ids don't appear in the given set. Call this
  * only after a clean unfiltered listBooks() so we don't nuke offline
  * entries that the server merely filtered out.
+ *
+ * Refuses to wipe the whole table on an empty input. A flaky listBooks()
+ * that returned `{ books: [] }` instead of throwing would otherwise
+ * erase the user's offline library; if they genuinely have zero books
+ * on the server the next downloadBook() / upsertCachedBook() will be
+ * the authoritative source, and a stale row costs nothing to keep until
+ * then. Callers that really mean "wipe everything" should do so
+ * explicitly via DELETE.
  */
 export async function pruneCachedBooks(serverIds: Iterable<string>): Promise<void> {
   const database = await getDb();
   const ids = Array.from(serverIds);
-  if (ids.length === 0) {
-    // Empty server library — wipe local cache.
-    await database.runAsync("DELETE FROM books");
-    return;
-  }
+  if (ids.length === 0) return;
   const placeholders = ids.map(() => "?").join(",");
   await database.runAsync(
     `DELETE FROM books WHERE id NOT IN (${placeholders})`,
