@@ -100,6 +100,8 @@ export async function createHighlight(
   cfiRange: string,
   color: Highlight["color"],
   textContent?: string,
+  chapterLabel?: string | null,
+  percentage?: number | null,
 ): Promise<Highlight> {
   const now = new Date().toISOString();
   return {
@@ -110,6 +112,8 @@ export async function createHighlight(
     textContent: textContent ?? null,
     note: null,
     color,
+    chapterLabel: chapterLabel ?? null,
+    percentage: percentage ?? null,
     createdAt: now,
     deletedAt: null,
   };
