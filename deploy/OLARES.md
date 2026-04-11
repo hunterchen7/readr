@@ -51,40 +51,59 @@ you need to rotate a key or add a new var.
 ## Set up `.env` on the box
 
 Both compose stacks read a single `.env` from the repo root on the Olares
-side. Put values suitable for the box in there. Replace the placeholder
-hostnames / tokens below with real ones.
+side (i.e. `~/readr/.env`). This file is the **single source of truth**
+for every secret and endpoint — there are no `${VAR:-default}` fallbacks
+in the compose files anymore, so a missing var means the container
+refuses to boot loudly instead of silently running on a default
+password. (Compose's interpolation reads `.env` from the compose-file
+directory, not from `../.env`, so any interpolation against the
+operator's `.env` is a footgun. We removed it.)
 
-Which S3 vars you set depends on which backend mode you pick (see
-[S3 backend modes](#s3-backend-modes) below). The example below is
-**Mode A — Bundled MinIO**.
+The fastest way to seed `~/readr/.env` is to copy the in-repo template:
 
 ```bash
-ssh olares-ebook "cat > ~/readr/.env <<'ENV'
-DATABASE_URL=postgresql://reader:password@localhost:5432/reader
-REDIS_URL=redis://localhost:6379
-
-S3_ENDPOINT=http://localhost:9000
-# Update this once your cloudflared tunnel hostname is live. It's the
-# origin clients (mobile app, web dashboard) will hit for presigned book
-# downloads, so it MUST match the hostname the tunnel terminates at.
-# For LAN-only testing: http://<olares-lan-ip>:9000
-S3_PUBLIC_ENDPOINT=https://books.example.com
-S3_BUCKET=reader-dev
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_REGION=auto
-S3_FORCE_PATH_STYLE=true
-
-PUBLIC_URL=https://reader.example.com
-PORT=3000
-NODE_ENV=production
-LOG_LEVEL=info
-MAX_UPLOAD_SIZE_MB=500
-DEFAULT_STORAGE_QUOTA_MB=4096
-
-TTS_ENABLED=false
-ENV"
+scp deploy/.env.example olares-ebook:~/readr/.env
+ssh olares-ebook "$EDITOR ~/readr/.env"
 ```
+
+Required keys (every one of these must be set):
+
+| Var                    | Notes                                                                 |
+| ---------------------- | --------------------------------------------------------------------- |
+| `POSTGRES_USER`        | Read by the postgres image at first-boot init (e.g. `reader`)         |
+| `POSTGRES_PASSWORD`    | Pick a strong secret. Used by both postgres init and `DATABASE_URL`   |
+| `POSTGRES_DB`          | Database name (e.g. `reader`)                                         |
+| `DATABASE_URL`         | `postgresql://<POSTGRES_USER>:<POSTGRES_PASSWORD>@postgres:5432/<POSTGRES_DB>` — host **must** be `postgres` (in-network DNS) |
+| `REDIS_URL`            | `redis://redis:6379` — host **must** be `redis`                       |
+| `S3_BUCKET`            | Bucket name                                                           |
+| `S3_ACCESS_KEY`        | S3 access key                                                         |
+| `S3_SECRET_KEY`        | S3 secret                                                             |
+| `S3_REGION`            | `auto` for R2/MinIO, real region (e.g. `us-east-1`) for AWS           |
+| `S3_FORCE_PATH_STYLE`  | `true` for MinIO/B2/some Linode, `false` for AWS S3 and R2            |
+| `S3_PUBLIC_ENDPOINT`   | Externally-reachable URL the api concatenates `/<bucket>/<key>` onto. **Must be path-style** (no bucket in the hostname) |
+| `PUBLIC_URL`           | The public origin of the api, e.g. `https://api.reader.example.com`   |
+| `PORT`                 | `3000`                                                                |
+| `NODE_ENV`             | `production`                                                          |
+| `LOG_LEVEL`            | `info`                                                                |
+| `MAX_UPLOAD_SIZE_MB`   | e.g. `500`                                                            |
+| `DEFAULT_STORAGE_QUOTA_MB` | e.g. `4096`                                                       |
+| `TTS_ENABLED`          | `false` unless you've started the GPU overlay                         |
+
+Mode A (bundled MinIO) additionally requires:
+
+| Var                    | Notes                                                                 |
+| ---------------------- | --------------------------------------------------------------------- |
+| `MINIO_ROOT_USER`      | Read by both `minio` and `minio-init` containers                      |
+| `MINIO_ROOT_PASSWORD`  | Pick a strong secret. Must equal `S3_SECRET_KEY` (same credential)    |
+| `S3_ENDPOINT`          | `http://minio:9000` — in-network DNS name of the bundled MinIO        |
+| `S3_FORCE_PATH_STYLE`  | `true` (MinIO requires path-style)                                    |
+
+Mode B (external S3) is described under
+[S3 backend modes](#s3-backend-modes) below — copy the matching block
+out of `deploy/.env.example` and delete the Mode A block.
+
+Optional keys (`RESEND_API_KEY`, `RESEND_FROM`, `TTS_*`, etc.) live in
+the same file — see `deploy/.env.example` for the full annotated list.
 
 ## Two-stack layout
 

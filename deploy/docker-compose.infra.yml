@@ -14,21 +14,33 @@
 #   docker network create readr
 #
 # Reads environment from the repository root ../.env file.
+#
+# IMPORTANT: do NOT use ${VAR:-default} substitution in this file.
+# Compose's `${VAR}` substitution reads `.env` from the project
+# directory (here: `deploy/`), NOT from `../.env`. The operator's
+# real `~/readr/.env` lives one level up, so any interpolation in
+# this file would silently use defaults and ignore the operator's
+# secrets. Instead, every credential is injected into the container
+# via `env_file: ../.env`, which Compose loads from the path relative
+# to this compose file. The operator's `.env` is the single source of
+# truth — see deploy/.env.example and deploy/OLARES.md.
 
 services:
   postgres:
     image: postgres:16-alpine
+    # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB come from ../.env
+    # via env_file. The postgres image reads them directly from its
+    # process env on first boot to initialize the cluster.
     env_file: ../.env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-reader}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      POSTGRES_DB: ${POSTGRES_DB:-reader}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - readr
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U reader"]
+      # Use the env-injected $$POSTGRES_USER so this still works after
+      # operators rotate the user. The $$ escapes interpolation so the
+      # variable is expanded by the container shell, not by Compose.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -45,10 +57,8 @@ services:
     image: minio/minio:latest
     profiles: [local-s3]
     command: server /data --console-address ":9001"
+    # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD come from ../.env via env_file.
     env_file: ../.env
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000"  # S3 API (accessible from host for debugging + mobile client)
       - "9001:9001"  # Web console
@@ -66,10 +76,12 @@ services:
   minio-init:
     image: minio/mc:latest
     profiles: [local-s3]
+    # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD are injected into this
+    # container's env via env_file (same as the minio service). The
+    # `$$VAR` form below is intentional: Compose converts `$$` → `$`
+    # at config-render time, and the busybox shell inside the
+    # container then expands `$VAR` against the container env.
     env_file: ../.env
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     depends_on:
       minio:
         condition: service_healthy

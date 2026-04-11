@@ -16,30 +16,39 @@
 # (`postgres`, `redis`, `minio`) over the shared `readr` network.
 #
 # Reads environment from the repository root ../.env file.
+#
+# IMPORTANT: do NOT use ${VAR:-default} substitution in this file.
+# Compose's `${VAR}` substitution reads `.env` from the project
+# directory (here: `deploy/`), NOT from `../.env`. The operator's
+# real `~/readr/.env` lives one level up, so any interpolation here
+# would silently use defaults and ignore the operator's secrets. All
+# credentials and endpoint URLs are injected into the api container
+# via `env_file: ../.env` instead. The operator's `.env` is the single
+# source of truth — see deploy/.env.example and deploy/OLARES.md.
 
 services:
   api:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+    # DATABASE_URL, REDIS_URL, S3_ENDPOINT, S3_PUBLIC_ENDPOINT, the S3
+    # credentials, and everything else come from ../.env via env_file.
+    # Operators must set DATABASE_URL to use the in-network DNS names
+    # (e.g. postgresql://reader:<pw>@postgres:5432/reader and
+    # redis://redis:6379), since the api container can only reach the
+    # infra stack containers by their compose service names over the
+    # shared `readr` network. See deploy/.env.example.
     env_file: ../.env
-    environment:
-      # Override any host-specific values from .env to use the in-network service names.
-      # These resolve via the shared `readr` network to the infra stack containers.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-reader}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-reader}
-      REDIS_URL: redis://redis:6379
-      # S3_ENDPOINT defaults to the bundled MinIO container for self-hosted
-      # installs. Operators using external S3 (Cloudflare R2, AWS S3, B2,
-      # DigitalOcean Spaces, etc.) override this in .env — see
-      # deploy/OLARES.md "Mode B — External S3" for the full variable set.
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      # S3_PUBLIC_ENDPOINT must be set in .env to the externally-reachable
-      # MinIO URL (e.g. http://<host-ip>:9000). Without it, presigned URLs
-      # are signed against the internal docker hostname and 403 in browsers.
     networks:
       - readr
     ports:
       - "3000:3000"
+    # Liveness only — this verifies the api process is up and serving
+    # /health, NOT that postgres / redis / minio are reachable. The
+    # /health endpoint is a bare {status:"ok"} with no upstream pings,
+    # and the postgres-js / ioredis / S3 clients all connect lazily on
+    # first request. Bring the infra stack up first and wait for it to
+    # be healthy before starting the app stack — see deploy/OLARES.md.
     healthcheck:
       test:
         - CMD
