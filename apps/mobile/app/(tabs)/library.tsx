@@ -69,7 +69,18 @@ const FILTER_LABELS: Record<FilterKey, string> = {
   downloaded: "Downloaded",
 };
 
-const GRID_COLUMNS = 4;
+/**
+ * Picks a column count for the library grid from the current viewport
+ * width. Aims for a card a bit under 200px wide, with a floor of 4
+ * columns so phone layouts stay unchanged, and a ceiling of 8 so
+ * ultra-wide desktops don't turn covers into tiny thumbnails. E-ink
+ * stays pinned to 4 — the Supernote A5X is narrow and prefers
+ * larger, higher-contrast tap targets.
+ */
+function pickGridColumns(screenWidth: number, isEink: boolean): number {
+  if (isEink) return 4;
+  return Math.min(8, Math.max(4, Math.floor(screenWidth / 180)));
+}
 
 function readingStatus(
   item: BookWithProgress,
@@ -107,13 +118,17 @@ export default function LibraryScreen() {
   const setView = useLibraryPrefs((s) => s.setView);
 
   const { width: screenWidth } = useWindowDimensions();
+  const gridColumns = useMemo(
+    () => pickGridColumns(screenWidth, display.isEink),
+    [screenWidth, display.isEink],
+  );
   const gridCardWidth = useMemo(() => {
     const horizontalPadding = spacing.md * 2;
-    const totalGap = spacing.md * (GRID_COLUMNS - 1);
+    const totalGap = spacing.md * (gridColumns - 1);
     return Math.floor(
-      (screenWidth - horizontalPadding - totalGap) / GRID_COLUMNS,
+      (screenWidth - horizontalPadding - totalGap) / gridColumns,
     );
-  }, [screenWidth]);
+  }, [screenWidth, gridColumns]);
 
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -534,11 +549,14 @@ export default function LibraryScreen() {
       ) : view === "grid" ? (
         <FlatList
           data={visibleBooks}
-          numColumns={GRID_COLUMNS}
+          numColumns={gridColumns}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={styles.row}
-          key={`grid-${GRID_COLUMNS}`}
+          // FlatList can't change numColumns without remounting, so
+          // fold the column count into the key. Resizing a desktop
+          // window picks up a new layout cleanly.
+          key={`grid-${gridColumns}`}
           refreshControl={
             <RefreshControl
               refreshing={isRefetching}
