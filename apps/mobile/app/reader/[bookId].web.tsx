@@ -66,6 +66,7 @@ import {
   deleteNote,
 } from "../../lib/local-db";
 import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
+import { getDownloadedBook } from "../../lib/book-cache";
 import {
   DEFAULT_THEME,
   type ReaderTheme,
@@ -258,10 +259,12 @@ export default function WebReaderScreen() {
   );
 
   // Mount the reader core + foliate once the book metadata and the
-  // container div are both ready.
-  const bookUrl = book?.downloadUrl;
+  // container div are both ready. Prefer an OPFS-cached copy (via
+  // book-cache.web.ts) over the remote downloadUrl so offline
+  // reading works and re-opens are instant.
+  const remoteUrl = book?.downloadUrl;
   useEffect(() => {
-    if (!bookUrl || !containerRef.current) return;
+    if (!bookId || !remoteUrl || !containerRef.current) return;
     let cancelled = false;
     setCoreError(null);
     setCoreReady(false);
@@ -269,11 +272,25 @@ export default function WebReaderScreen() {
 
     const container = containerRef.current;
     let core: ReaderCoreHandle | null = null;
+    let blobUrlToRevoke: string | null = null;
 
     (async () => {
       try {
         const foliate = await loadFoliate();
         if (cancelled) return;
+
+        // Check OPFS first. If we have the book cached, pass its
+        // blob URL to the core and skip the network round trip.
+        let effectiveUrl = remoteUrl;
+        try {
+          const cached = await getDownloadedBook(bookId);
+          if (cached && !cancelled) {
+            effectiveUrl = cached.localPath;
+            blobUrlToRevoke = cached.localPath;
+          }
+        } catch {
+          // Cache miss / OPFS unavailable — fall back to network.
+        }
 
         core = createReaderCore({
           makeBook: foliate.makeBook,
@@ -292,7 +309,7 @@ export default function WebReaderScreen() {
           },
         });
         coreRef.current = core;
-        await core.init(bookUrl);
+        await core.init(effectiveUrl);
       } catch (err) {
         if (cancelled) return;
         setCoreError(err instanceof Error ? err.message : String(err));
@@ -303,11 +320,15 @@ export default function WebReaderScreen() {
       cancelled = true;
       try { core?.destroy(); } catch { /* ignore */ }
       coreRef.current = null;
+      if (blobUrlToRevoke) {
+        try { URL.revokeObjectURL(blobUrlToRevoke); } catch { /* ignore */ }
+      }
     };
-    // bookUrl is the only value that should retrigger the bootstrap.
-    // Theme/state changes flow through core.dispatch() below.
+    // Retrigger bootstrap when the remote URL changes (different
+    // book) or bookId flips. Theme/state changes flow through
+    // core.dispatch() below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookUrl]);
+  }, [remoteUrl, bookId]);
 
   // Replay theme whenever it changes and the core is live. Also
   // fires the first time the core reports ready, picking up the

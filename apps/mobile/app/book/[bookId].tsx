@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  Platform,
 } from "react-native";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -324,33 +323,34 @@ export default function BookDetailScreen() {
             </Text>
           </Pressable>
 
-          {/* Offline cache — native only. On web there's no on-device
-              file store, so we drop this row entirely and let the
-              "Download file" button below cover the "get the file"
-              use case. */}
-          {Platform.OS !== "web" ? (
-            !downloaded ? (
-              <Pressable
-                style={[styles.secondaryBtn, downloading && { opacity: 0.5 }]}
-                onPress={handleDownload}
-                disabled={downloading}
-              >
-                {downloading ? (
-                  <Text style={styles.secondaryBtnText}>Downloading {downloadPct}%</Text>
-                ) : (
-                  <>
-                    <Download size={16} color={colors.text} />
-                    <Text style={styles.secondaryBtnText}>Download for offline</Text>
-                  </>
-                )}
-              </Pressable>
-            ) : (
-              <Pressable style={styles.secondaryBtn} onPress={handleRemoveDownload}>
-                <Check size={16} color="#16a34a" />
-                <Text style={styles.secondaryBtnText}>Available offline — tap to remove</Text>
-              </Pressable>
-            )
-          ) : null}
+          {/* Offline cache — native uses expo-file-system, web uses
+              an OPFS-backed store (see lib/book-cache.web.ts). Both
+              implementations present the same downloadBook /
+              getDownloadedBook API so this UI renders identically.
+              Once the book is cached, the same button flips to
+              "tap to remove" so users can free up space without
+              having to delete the book entirely. */}
+          {!downloaded ? (
+            <Pressable
+              style={[styles.secondaryBtn, downloading && { opacity: 0.5 }]}
+              onPress={handleDownload}
+              disabled={downloading}
+            >
+              {downloading ? (
+                <Text style={styles.secondaryBtnText}>Downloading {downloadPct}%</Text>
+              ) : (
+                <>
+                  <Download size={16} color={colors.text} />
+                  <Text style={styles.secondaryBtnText}>Download for offline</Text>
+                </>
+              )}
+            </Pressable>
+          ) : (
+            <Pressable style={styles.secondaryBtn} onPress={handleRemoveDownload}>
+              <Check size={16} color="#16a34a" />
+              <Text style={styles.secondaryBtnText}>Available offline — tap to remove</Text>
+            </Pressable>
+          )}
 
           {/* Download the original EPUB/PDF file. Always available —
               on native it hands off to the OS via Linking, on web it
@@ -526,15 +526,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   secondaryBtnText: { fontSize: fontSize.md, color: colors.text, fontWeight: "500" },
-
-  downloadedPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-  },
-  downloadedText: { fontSize: fontSize.sm, color: "#16a34a", fontWeight: "500" },
 
   listCard: {
     backgroundColor: colors.backgroundSecondary,
