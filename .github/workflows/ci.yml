@@ -30,3 +30,25 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @readr/sync-engine test
+
+  build-web:
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Verify the Expo Web export of apps/mobile builds cleanly and
+      # that no native-only module sneaks into the web bundle. Also
+      # publishes the bundle size summary to the job log so bundle
+      # regressions are visible in PR checks.
+      - name: Build Expo Web
+        run: pnpm --filter @readr/mobile web:build
+      - name: Bundle size summary
+        run: |
+          du -sh apps/mobile/dist
+          find apps/mobile/dist/_expo -type f -name '*.js' | xargs ls -lSh | head -20

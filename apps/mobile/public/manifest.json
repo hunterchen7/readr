@@ -1,0 +1,20 @@
+{
+  "name": "Readr",
+  "short_name": "Readr",
+  "description": "A self-hosted ebook reader for EPUB and PDF with cross-device sync.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#111111",
+  "categories": ["books", "education", "productivity"],
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48 72x72 96x96 144x144 192x192 256x256 512x512",
+      "type": "image/x-icon",
+      "purpose": "any"
+    }
+  ]
+}
