@@ -89,11 +89,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: ${bg}; color: ${fg}; }
-    /* Hidden until RN restores (or explicitly reveals) the saved
-       position — otherwise foliate's initial goTo(firstSection) flashes
-       before the resume nav lands. Visibility (not display) so foliate
-       can still measure for pagination while invisible. */
-    #viewer { width: 100%; height: 100%; background: ${bg}; visibility: hidden; }
+    #viewer { width: 100%; height: 100%; background: ${bg}; }
     foliate-view { width: 100%; height: 100%; background: ${bg}; border: none; }
     iframe { border: none; }
     #loading, #error {

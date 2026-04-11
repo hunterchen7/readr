@@ -221,10 +221,10 @@ function handleRNMessage(data: RNMessage): void {
       applyTheme(data.payload);
       break;
     case 'goToLocation': {
-      // Await the nav and reveal the viewer after it lands, so the
-      // first-section render from init() never flashes on screen
-      // before the saved position is restored. revealViewer() is
-      // idempotent, so later seeks hit it as a cheap no-op.
+      // Await the nav so we can post 'restored' once foliate has
+      // actually laid out the target page. RN uses that signal to
+      // dismiss its loading overlay — avoids the first-section flash
+      // that would otherwise show between init() and the resume nav.
       const v = view;
       (async (): Promise<void> => {
         try {
@@ -232,15 +232,10 @@ function handleRNMessage(data: RNMessage): void {
           else if (data.payload.fraction != null)
             await v.goToFraction(data.payload.fraction);
         } catch { /* ignore */ }
-        revealViewer();
+        post('restored', {});
       })();
       break;
     }
-    case 'revealContent':
-      // No saved position to restore — reveal the first-section render
-      // that init() already navigated to.
-      revealViewer();
-      break;
     case 'goToChapter':
       if (data.payload.href) {
         try {
@@ -1102,18 +1097,6 @@ function showError(msg: string): void {
     errorDiv.style.display = 'flex';
     errorDiv.textContent = msg;
   }
-}
-
-// Unhide the foliate viewport and tear down the "Loading book…" splash.
-// Called after the saved position has been restored (or when RN decides
-// there's nothing to restore) so the user never sees the first-section
-// render flash that precedes the resume navigation. Idempotent — later
-// seeks/chapter jumps hit it as a no-op.
-function revealViewer(): void {
-  const loading = document.getElementById('loading');
-  if (loading) loading.style.display = 'none';
-  const viewer = document.getElementById('viewer');
-  if (viewer) viewer.style.visibility = 'visible';
 }
 
 // Wire up incoming RN messages. postMessage from RN injects a

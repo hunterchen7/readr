@@ -211,6 +211,26 @@ export default function ReaderScreen() {
   const hasLoadedSavedRef = useRef(false);
   const hasRestoredRef = useRef(false);
   const pendingReadyRestoreRef = useRef(false);
+
+  // The RN-side loading curtain. We cover the WebView with a solid
+  // theme-coloured View until foliate has actually laid out the saved
+  // position, then lift the curtain. This avoids the ~100-200ms flash
+  // of the first-section render between init()'s goTo and the resume
+  // navigation — relying on in-WebView visibility was unreliable
+  // because foliate's shadow DOM / iframe rendering doesn't respect
+  // the #viewer element's visibility cascade.
+  const [readerVisible, setReaderVisible] = useState(false);
+  useEffect(() => {
+    setReaderVisible(false);
+  }, [bookId]);
+  // Safety net: if 'restored' never arrives (stale bundle, nav error,
+  // etc.) reveal anyway after 2s so the user isn't stuck behind a
+  // blank curtain. 2s is long enough to cover a legit restore, short
+  // enough that a degraded experience still feels responsive.
+  useEffect(() => {
+    const t = setTimeout(() => setReaderVisible(true), 2000);
+    return () => clearTimeout(t);
+  }, [bookId]);
   const fractionFromPageX = useCallback((pageX: number) => {
     const w = trackWidthRef.current;
     if (w <= 0) return 0;
@@ -411,13 +431,14 @@ export default function ReaderScreen() {
         sentNav = true;
       }
     }
-    if (!sentNav) {
-      // No saved position — the WebView is sitting behind a hidden
-      // viewer waiting for a restore. Tell it to reveal the initial
-      // first-section render that init() already navigated to.
-      sendToWebView("revealContent", {});
-    }
     hasRestoredRef.current = true;
+    if (!sentNav) {
+      // No saved position — nothing will trigger a 'restored' message
+      // from the WebView, so lift the curtain immediately. The first
+      // page that init() already rendered is the correct starting
+      // point for a fresh book.
+      setReaderVisible(true);
+    }
   }, [sendToWebView]);
 
   // Tap- and drag-to-seek on the bottom progress bar. We claim the
@@ -560,6 +581,11 @@ export default function ReaderScreen() {
           } else {
             pendingReadyRestoreRef.current = true;
           }
+          break;
+        case "restored":
+          // Foliate has laid out the resume position — safe to lift
+          // the RN curtain and show the WebView.
+          setReaderVisible(true);
           break;
         case "progressUpdated": {
           // Ignore foliate's relocate stream while the user is
@@ -1023,6 +1049,16 @@ export default function ReaderScreen() {
           setWebViewError("Reader process crashed — tap Reload to restart.")
         }
       />
+
+      {!readerVisible ? (
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFillObject,
+            { backgroundColor: theme.bg },
+          ]}
+        />
+      ) : null}
 
       {controlsVisible ? (
         <>
