@@ -1,4 +1,4 @@
-import * as SecureStore from "expo-secure-store";
+import * as Storage from "./storage";
 import type { SyncLogEntry, SyncConflict } from "@readr/shared";
 import { deduplicateQueue } from "@readr/sync-engine";
 import { getServerUrl, getToken } from "./api";
@@ -7,13 +7,13 @@ import { getSyncQueue, getDb } from "./local-db";
 const LAST_SYNC_KEY = "lastSyncTimestamp";
 
 async function getLastSyncTimestamp(): Promise<string> {
-  const ts = await SecureStore.getItemAsync(LAST_SYNC_KEY);
+  const ts = await Storage.getItem(LAST_SYNC_KEY);
   // Default to epoch if never synced
   return ts ?? "1970-01-01T00:00:00.000Z";
 }
 
 async function setLastSyncTimestamp(ts: string): Promise<void> {
-  await SecureStore.setItemAsync(LAST_SYNC_KEY, ts);
+  await Storage.setItem(LAST_SYNC_KEY, ts);
 }
 
 interface PullResponse {

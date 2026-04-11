@@ -1,31 +1,31 @@
-import * as SecureStore from "expo-secure-store";
+import * as Storage from "./storage";
 import type { Book } from "@readr/shared";
 
 const SERVER_URL_KEY = "serverUrl";
 const TOKEN_KEY = "apiToken";
 
 export async function getServerUrl(): Promise<string | null> {
-  return SecureStore.getItemAsync(SERVER_URL_KEY);
+  return Storage.getItem(SERVER_URL_KEY);
 }
 
 export async function setServerUrl(url: string): Promise<void> {
-  await SecureStore.setItemAsync(SERVER_URL_KEY, url);
+  await Storage.setItem(SERVER_URL_KEY, url);
 }
 
 export async function clearServerUrl(): Promise<void> {
-  await SecureStore.deleteItemAsync(SERVER_URL_KEY);
+  await Storage.deleteItem(SERVER_URL_KEY);
 }
 
 export async function getToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(TOKEN_KEY);
+  return Storage.getItem(TOKEN_KEY);
 }
 
 export async function setToken(token: string): Promise<void> {
-  await SecureStore.setItemAsync(TOKEN_KEY, token);
+  await Storage.setItem(TOKEN_KEY, token);
 }
 
 export async function clearToken(): Promise<void> {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await Storage.deleteItem(TOKEN_KEY);
 }
 
 
@@ -146,11 +146,25 @@ export function deleteBook(id: string) {
   return apiFetch(`/api/books/${id}`, { method: "DELETE" });
 }
 
-export function uploadBook(file: { uri: string; name: string; type: string }) {
+/**
+ * Upload a book to the server. Accepts either:
+ *   - a browser `File` / `Blob` (web), which FormData handles natively
+ *   - an RN file descriptor `{ uri, name, type }` (iOS/Android), which
+ *     the React Native FormData polyfill knows how to turn into a
+ *     multipart part. The `any` cast is required because DOM FormData
+ *     types are stricter than RN's.
+ */
+export function uploadBook(
+  file: File | Blob | { uri: string; name: string; type: string },
+) {
   const form = new FormData();
-  // React Native FormData file spec — see Expo docs. The any cast is
-  // required because DOM FormData types are stricter than RN's.
-  form.append("file", file as any);
+  if (typeof File !== "undefined" && file instanceof File) {
+    form.append("file", file, file.name);
+  } else if (typeof Blob !== "undefined" && file instanceof Blob) {
+    form.append("file", file);
+  } else {
+    form.append("file", file as any);
+  }
   return apiFetch<{ book: Book }>(`/api/books`, {
     method: "POST",
     body: form,

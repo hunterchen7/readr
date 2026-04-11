@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { listBooks, uploadBook } from "../../lib/api";
 import { getAllProgress } from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
+import { DragDropUpload } from "../../components/upload/DragDropUpload";
 import { useSyncStatus } from "../../lib/sync-status";
 import {
   useLibraryPrefs,
@@ -242,10 +243,15 @@ export default function LibraryScreen() {
   }
 
   function handleBookPress(book: BookWithProgress) {
-    // On the home screen we want a tap to *do* the obvious thing: if the
-    // book isn't downloaded yet, kick off the download right there instead
-    // of routing into the detail screen. Tapping again mid-download is a
-    // no-op since downloadProgress is non-null.
+    // On native, a tap on an undownloaded book kicks off the download
+    // in place (no detail-screen detour). Tapping mid-download is a
+    // no-op since downloadProgress is non-null. On web there is no
+    // local "downloaded" state — books stream from the server — so we
+    // always route straight to the book detail screen.
+    if (Platform.OS === "web") {
+      router.push(`/book/${book.id}`);
+      return;
+    }
     if (!book.downloaded) {
       if (book.downloadProgress == null) {
         void handleDownload(book.id);
@@ -255,21 +261,33 @@ export default function LibraryScreen() {
     router.push(`/book/${book.id}`);
   }
 
-  async function handleUpload() {
+  /**
+   * Upload one or more files to the server. Shared between the + button
+   * (DocumentPicker / HTML file input) and the web drag-and-drop
+   * overlay. Validates extension + size, posts sequentially, then
+   * refetches the library.
+   */
+  async function handleFiles(
+    files: Array<File | { uri: string; name: string; type: string }>,
+  ) {
+    if (files.length === 0) return;
+    const MAX_SIZE_MB = 500;
+    setUploading(true);
     try {
-      const picked = await DocumentPicker.getDocumentAsync({
-        type: ["application/epub+zip", "application/pdf", ".epub", ".pdf"],
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-      if (picked.canceled || !picked.assets[0]) return;
-      const asset = picked.assets[0];
-      setUploading(true);
-      await uploadBook({
-        uri: asset.uri,
-        name: asset.name,
-        type: asset.mimeType ?? "application/octet-stream",
-      });
+      for (const f of files) {
+        const isFile = typeof File !== "undefined" && f instanceof File;
+        const name = isFile ? (f as File).name : (f as { name: string }).name;
+        const ext = name.split(".").pop()?.toLowerCase();
+        if (ext !== "epub" && ext !== "pdf") {
+          Alert.alert("Unsupported file", `${name} is not an EPUB or PDF.`);
+          continue;
+        }
+        if (isFile && (f as File).size > MAX_SIZE_MB * 1024 * 1024) {
+          Alert.alert("Too large", `${name} exceeds ${MAX_SIZE_MB} MB.`);
+          continue;
+        }
+        await uploadBook(f);
+      }
       await queryClient.invalidateQueries({ queryKey: ["books"] });
     } catch (err) {
       Alert.alert(
@@ -278,6 +296,45 @@ export default function LibraryScreen() {
       );
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleUpload() {
+    // On web, `<input type="file">` gives us a proper File we can stream
+    // through FormData. expo-document-picker also has web support, but
+    // going through a native DOM input is simpler and matches the drop
+    // zone's code path.
+    if (Platform.OS === "web") {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".epub,.pdf,application/epub+zip,application/pdf";
+      input.onchange = () => {
+        const files = Array.from(input.files ?? []);
+        void handleFiles(files);
+      };
+      input.click();
+      return;
+    }
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ["application/epub+zip", "application/pdf", ".epub", ".pdf"],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (picked.canceled || !picked.assets[0]) return;
+      const asset = picked.assets[0];
+      await handleFiles([
+        {
+          uri: asset.uri,
+          name: asset.name,
+          type: asset.mimeType ?? "application/octet-stream",
+        },
+      ]);
+    } catch (err) {
+      Alert.alert(
+        "Upload failed",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -302,6 +359,7 @@ export default function LibraryScreen() {
   }
 
   return (
+    <DragDropUpload onFiles={(files) => void handleFiles(files)}>
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Text style={styles.heading}>Library</Text>
@@ -511,6 +569,7 @@ export default function LibraryScreen() {
         />
       )}
     </View>
+    </DragDropUpload>
   );
 }
 

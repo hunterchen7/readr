@@ -1,12 +1,12 @@
-import * as SecureStore from "expo-secure-store";
+import * as Storage from "./storage";
 import type { ReaderTheme } from "../components/reader/ReaderControls";
 
 const KEY = "readerPrefs";
 
 /**
- * Persisted reader preferences. Stored in SecureStore (the same place as
- * the bearer token) as a JSON blob — they're small, per-device, and don't
- * need to be synced across devices.
+ * Persisted reader preferences — stored via the platform storage wrapper
+ * (SecureStore on native, localStorage on web). Small JSON blob, per
+ * device, no cross-device sync.
  */
 export interface ReaderPrefs {
   theme: ReaderTheme;
@@ -14,7 +14,7 @@ export interface ReaderPrefs {
 
 export async function loadReaderPrefs(): Promise<ReaderPrefs | null> {
   try {
-    const raw = await SecureStore.getItemAsync(KEY);
+    const raw = await Storage.getItem(KEY);
     if (!raw) return null;
     return JSON.parse(raw) as ReaderPrefs;
   } catch {
@@ -24,7 +24,7 @@ export async function loadReaderPrefs(): Promise<ReaderPrefs | null> {
 
 export async function saveReaderPrefs(prefs: ReaderPrefs): Promise<void> {
   try {
-    await SecureStore.setItemAsync(KEY, JSON.stringify(prefs));
+    await Storage.setItem(KEY, JSON.stringify(prefs));
   } catch (err) {
     console.warn("saveReaderPrefs failed:", err);
   }

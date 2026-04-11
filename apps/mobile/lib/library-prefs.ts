@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import * as SecureStore from "expo-secure-store";
+import * as Storage from "./storage";
 
 export type LibrarySort = "recent" | "lastRead" | "title" | "author";
 export type LibrarySortDir = "asc" | "desc";
@@ -44,16 +44,16 @@ interface Persisted {
 
 async function save(state: Persisted) {
   try {
-    await SecureStore.setItemAsync(KEY, JSON.stringify(state));
+    await Storage.setItem(KEY, JSON.stringify(state));
   } catch {
     // Non-fatal — the UI keeps working with in-memory state.
   }
 }
 
 /**
- * Persisted library UI preferences — sort/filter/view mode. Stored in
- * SecureStore alongside the bearer token because they're per-device.
- * Hydrate() is called from the root layout on app launch.
+ * Persisted library UI preferences — sort/filter/view mode. Stored via
+ * the platform storage wrapper (SecureStore on native, localStorage on
+ * web). Hydrate() is called from the root layout on app launch.
  */
 export const useLibraryPrefs = create<LibraryPrefsState>((set, get) => ({
   sort: "recent",
@@ -88,7 +88,7 @@ export const useLibraryPrefs = create<LibraryPrefsState>((set, get) => ({
   hydrate: async () => {
     if (get()._hydrated) return;
     try {
-      const raw = await SecureStore.getItemAsync(KEY);
+      const raw = await Storage.getItem(KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<Persisted>;
         const sort = parsed.sort ?? "recent";

@@ -35,6 +35,11 @@ module.exports = ({ config }) => ({
     edgeToEdgeEnabled: true,
     package: "com.readr.app",
   },
+  web: {
+    bundler: "metro",
+    output: "single",
+    favicon: "./assets/icon.png",
+  },
   plugins: ["expo-router", "expo-secure-store", "expo-sqlite", "./plugins/copy-fonts"],
   extra: {
     defaultServerUrl: process.env.EXPO_PUBLIC_DEFAULT_SERVER_URL ?? "",
