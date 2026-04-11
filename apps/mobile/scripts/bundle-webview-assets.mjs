@@ -101,6 +101,20 @@ copyFileSync(join(pdfjsDir, "pdf.min.mjs"), join(outDir, "pdf.min.mjs"));
 copyFileSync(join(pdfjsDir, "pdf.worker.min.mjs"), join(outDir, "pdf.worker.min.mjs"));
 console.log("✓ pdf.min.mjs + pdf.worker.min.mjs");
 
+// Also copy pdfjs into public/ so the web build serves it as plain
+// static assets at /pdf.min.mjs + /pdf.worker.min.mjs.
+//
+// Metro can't bundle pdfjs-dist directly: pdfjs's main entry contains
+// a dynamic `import(this.workerSrc)` with a non-static argument, and
+// Metro rejects that at parse time. The web reader side-loads pdfjs
+// at runtime with a dodged import() (see app/reader/[bookId].web.tsx)
+// against these public/ copies, bypassing Metro entirely.
+const publicDir = join(root, "public");
+mkdirSync(publicDir, { recursive: true });
+copyFileSync(join(pdfjsDir, "pdf.min.mjs"), join(publicDir, "pdf.min.mjs"));
+copyFileSync(join(pdfjsDir, "pdf.worker.min.mjs"), join(publicDir, "pdf.worker.min.mjs"));
+console.log("✓ public/pdf.min.mjs + public/pdf.worker.min.mjs");
+
 // ─── Copy to android assets if prebuild has run ────────────────────
 const androidOut = join(root, "android", "app", "src", "main", "assets", "js");
 try {

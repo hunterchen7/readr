@@ -1,0 +1,44 @@
+FROM node:22-alpine AS base
+RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
+WORKDIR /app
+
+# ─── Install workspace deps ─────────────────────────────────────────
+# We only need apps/mobile + its workspace deps. Copy the lockfile and
+# manifests, install the full dev deps (expo CLI lives in mobile's
+# devDependencies), then copy the real sources.
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/sync-engine/package.json packages/sync-engine/
+COPY apps/mobile/package.json apps/mobile/
+# Install only the mobile filter + its workspace deps. `--frozen-lockfile`
+# matches the repo lockfile exactly; fail the build if the lockfile is
+# stale. Skip the postinstall that rebuilds webview assets — the web
+# build doesn't need reader-bundle.js or foliate-bundle.js since foliate
+# is imported directly by the web reader screen.
+ENV CI=1
+RUN pnpm install --frozen-lockfile --filter @readr/mobile... --prod=false \
+    && pnpm rebuild
+
+# ─── Build the Expo Web bundle ──────────────────────────────────────
+FROM deps AS build
+COPY tsconfig.base.json ./
+COPY packages/shared/ packages/shared/
+COPY packages/sync-engine/ packages/sync-engine/
+COPY apps/mobile/ apps/mobile/
+
+# The mobile app reads EXPO_PUBLIC_DEFAULT_SERVER_URL at build time
+# and bakes it into the bundle. Override at docker build --build-arg
+# time to point a build at a specific backend. Leave empty to force
+# the user to enter a server URL on first login.
+ARG EXPO_PUBLIC_DEFAULT_SERVER_URL=""
+ENV EXPO_PUBLIC_DEFAULT_SERVER_URL=${EXPO_PUBLIC_DEFAULT_SERVER_URL}
+
+WORKDIR /app/apps/mobile
+RUN pnpm run web:build
+
+# ─── Serve with nginx ──────────────────────────────────────────────
+FROM nginx:alpine AS production
+COPY --from=build /app/apps/mobile/dist /usr/share/nginx/html
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

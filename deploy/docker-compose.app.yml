@@ -60,10 +60,26 @@ services:
       retries: 10
       start_period: 20s
 
-  # Note: the old React+Vite dashboard (`apps/web`) has been removed.
-  # The web experience is now served by the Expo Web build of apps/mobile;
-  # a matching Dockerfile/service will land in a follow-up PR. For now
-  # Caddy only fronts the API.
+  web:
+    # Serves the Expo Web export of apps/mobile via nginx. The same
+    # apps/mobile codebase drives iOS, Android, and the browser client —
+    # see deploy/Dockerfile.web for the build pipeline. Caddy fronts
+    # this container on `/` (the API/health paths take precedence).
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      # Bake the default server URL into the bundle so users don't
+      # have to type it on first login. Override per-deploy by setting
+      # EXPO_PUBLIC_DEFAULT_SERVER_URL in the host shell before the
+      # `docker compose build`. Build args are read from the host
+      # environment at build time, not from env_file — see the header
+      # note about .env substitution.
+      args:
+        EXPO_PUBLIC_DEFAULT_SERVER_URL: ${EXPO_PUBLIC_DEFAULT_SERVER_URL:-}
+    networks:
+      - readr
+    ports:
+      - "8080:80"
 
   # Caddy is optional — only started with `--profile public` so deployments
   # that expose the stack via cloudflared tunnel (no port 80/443 needed)
@@ -75,6 +91,7 @@ services:
     env_file: ../.env
     depends_on:
       - api
+      - web
     networks:
       - readr
     ports:

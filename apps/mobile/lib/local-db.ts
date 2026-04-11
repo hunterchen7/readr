@@ -914,3 +914,166 @@ export async function upsertCachedBook(
 ): Promise<void> {
   await upsertCachedBooks([book]);
 }
+
+// ─── Sync queue drain ───────────────────────────────────────────────────
+
+/**
+ * Remove a specific set of sync queue entries by id. Called after
+ * the server accepts a push — only the accepted rows get dropped,
+ * so entries that arrived after the push started (or were
+ * rejected) stay pending.
+ */
+export async function removeFromSyncQueue(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  const database = await getDb();
+  for (const id of ids) {
+    await database.runAsync("DELETE FROM sync_queue WHERE id = ?", [id]);
+  }
+}
+
+// ─── Remote change application ──────────────────────────────────────────
+//
+// Called by sync.ts after a successful pull. Writes land with
+// synced = 1 so they don't bounce back through the push queue. The
+// dispatch + per-entity writes used to live in sync.ts, but were
+// moved here so sync.ts can run unchanged on top of the web
+// IndexedDB backend (local-db.web.ts implements the same helpers).
+
+export async function applyRemoteChange(change: SyncLogEntry): Promise<void> {
+  const database = await getDb();
+  try {
+    switch (change.entityType) {
+      case "progress":
+        await _applyRemoteProgress(database, change);
+        break;
+      case "bookmark":
+        await _applyRemoteBookmark(database, change);
+        break;
+      case "highlight":
+        await _applyRemoteHighlight(database, change);
+        break;
+      case "note":
+        await _applyRemoteNote(database, change);
+        break;
+    }
+  } catch (err) {
+    console.warn(
+      `Failed to apply sync change ${change.entityType}:${change.entityId}:`,
+      err,
+    );
+  }
+}
+
+async function _applyRemoteProgress(
+  database: SQLite.SQLiteDatabase,
+  change: SyncLogEntry,
+): Promise<void> {
+  const payload = change.payload;
+  if (!payload) return;
+  await database.runAsync(
+    `INSERT INTO reading_progress (id, book_id, device_id, position, updated_at, synced)
+     VALUES (?, ?, ?, ?, ?, 1)
+     ON CONFLICT(book_id, device_id) DO UPDATE SET
+       position = excluded.position,
+       updated_at = excluded.updated_at,
+       synced = 1`,
+    [
+      change.entityId,
+      payload.bookId as string,
+      (payload.deviceId as string) ?? change.deviceId ?? "unknown",
+      JSON.stringify(payload.position),
+      change.timestamp,
+    ],
+  );
+}
+
+async function _applyRemoteBookmark(
+  database: SQLite.SQLiteDatabase,
+  change: SyncLogEntry,
+): Promise<void> {
+  if (change.operation === "delete") {
+    await database.runAsync(
+      "UPDATE bookmarks SET deleted_at = ?, synced = 1 WHERE id = ?",
+      [change.timestamp, change.entityId],
+    );
+    return;
+  }
+  const payload = change.payload;
+  if (!payload) return;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO bookmarks (id, book_id, position, label, created_at, synced)
+     VALUES (?, ?, ?, ?, ?, 1)`,
+    [
+      change.entityId,
+      payload.bookId as string,
+      JSON.stringify(payload.position),
+      (payload.label as string) ?? null,
+      change.timestamp,
+    ],
+  );
+}
+
+async function _applyRemoteHighlight(
+  database: SQLite.SQLiteDatabase,
+  change: SyncLogEntry,
+): Promise<void> {
+  if (change.operation === "delete") {
+    await database.runAsync(
+      "UPDATE highlights SET deleted_at = ?, synced = 1 WHERE id = ?",
+      [change.timestamp, change.entityId],
+    );
+    return;
+  }
+  const payload = change.payload;
+  if (!payload) return;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO highlights
+       (id, book_id, cfi_range, text_content, note, color,
+        chapter_label, percentage, created_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [
+      change.entityId,
+      payload.bookId as string,
+      payload.cfiRange as string,
+      (payload.textContent as string) ?? null,
+      (payload.note as string) ?? null,
+      (payload.color as string) ?? "yellow",
+      (payload.chapterLabel as string | null) ?? null,
+      (payload.percentage as number | null) ?? null,
+      change.timestamp,
+    ],
+  );
+}
+
+async function _applyRemoteNote(
+  database: SQLite.SQLiteDatabase,
+  change: SyncLogEntry,
+): Promise<void> {
+  if (change.operation === "delete") {
+    await database.runAsync(
+      "UPDATE notes SET deleted_at = ?, synced = 1 WHERE id = ?",
+      [change.timestamp, change.entityId],
+    );
+    return;
+  }
+  const payload = change.payload;
+  if (!payload) return;
+  const now = change.timestamp;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO notes
+       (id, book_id, position, note_type, text_content, strokes,
+        pen_config, created_at, updated_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [
+      change.entityId,
+      payload.bookId as string,
+      JSON.stringify(payload.position),
+      (payload.noteType as string) ?? "typed",
+      (payload.textContent as string) ?? null,
+      payload.strokes ? JSON.stringify(payload.strokes) : null,
+      payload.penConfig ? JSON.stringify(payload.penConfig) : null,
+      now,
+      now,
+    ],
+  );
+}

@@ -8,6 +8,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "web:build": "expo export --platform web --output-dir dist && node scripts/patch-web-html.mjs dist && node scripts/generate-service-worker.mjs dist && node scripts/audit-web-bundle.mjs dist",
+    "test:web": "playwright test",
     "typecheck": "tsc --noEmit",
     "build:webview-assets": "node scripts/bundle-webview-assets.mjs",
     "postinstall": "node scripts/bundle-webview-assets.mjs"
@@ -48,8 +50,10 @@
     "zustand": "^5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.48.0",
     "@types/react": "~19.1.0",
     "esbuild": "^0.28.0",
+    "serve": "^14.2.4",
     "typescript": "~5.9.2"
   }
 }

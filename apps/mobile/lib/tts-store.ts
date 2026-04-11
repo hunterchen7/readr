@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import * as Speech from "expo-speech";
+import {
+  speakChunk,
+  stopSpeaking,
+  pauseSpeaking,
+  resumeSpeaking,
+} from "./tts-engine";
 
 export type TtsState = "idle" | "playing" | "paused";
 
@@ -63,7 +68,7 @@ export const useTtsStore = create<TtsStoreState>((set, get) => ({
       return;
     }
 
-    Speech.stop();
+    stopSpeaking();
     set({ state: "playing" });
 
     let index = 0;
@@ -74,10 +79,10 @@ export const useTtsStore = create<TtsStoreState>((set, get) => ({
         return;
       }
       const chunk = chunks[index++];
-      Speech.speak(chunk, {
+      speakChunk(chunk, {
         rate,
         pitch,
-        voice: voice ?? undefined,
+        voice,
         onDone: () => {
           // Only advance if we haven't been paused/stopped in the
           // meantime.
@@ -92,17 +97,17 @@ export const useTtsStore = create<TtsStoreState>((set, get) => ({
   },
 
   pause: () => {
-    Speech.pause();
+    pauseSpeaking();
     set({ state: "paused" });
   },
 
   resume: () => {
-    Speech.resume();
+    resumeSpeaking();
     set({ state: "playing" });
   },
 
   stop: () => {
-    Speech.stop();
+    stopSpeaking();
     set({ state: "idle" });
   },
 

@@ -341,18 +341,15 @@ export default function LibraryScreen() {
   }
 
   function handleBookPress(book: BookWithProgress) {
-    // On native, a tap on an undownloaded book kicks off the download
-    // in place (no detail-screen detour). Tapping mid-download is a
-    // no-op since downloadProgress is non-null. On web there is no
-    // local "downloaded" state — books stream from the server — so we
-    // always route straight to the book detail screen.
-    if (Platform.OS === "web") {
-      router.push(`/book/${book.id}`);
-      return;
-    }
-    // Finished books skip the download-on-tap shortcut — the user is
-    // done with it, so tapping should just open the detail screen
-    // where they can choose to re-download or delete.
+    // A tap on an undownloaded book kicks off the download in place
+    // (no detail-screen detour) and tapping mid-download is a no-op
+    // since downloadProgress is non-null. Same UX on native (expo-fs)
+    // and web (OPFS via book-cache.web.ts) — both implement the
+    // downloadBook/getDownloadedBook pair behind the same interface.
+    //
+    // Finished books skip the download-on-tap shortcut: the user is
+    // done with it, so tapping routes to the detail screen where
+    // they can re-download, mark unread, or delete.
     const finished = book.progressPct >= 98;
     if (!book.downloaded && !finished) {
       if (book.downloadProgress == null) {

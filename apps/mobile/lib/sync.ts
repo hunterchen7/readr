@@ -2,7 +2,11 @@ import * as Storage from "./storage";
 import type { SyncLogEntry, SyncConflict } from "@readr/shared";
 import { deduplicateQueue } from "@readr/sync-engine";
 import { getServerUrl, getToken } from "./api";
-import { getSyncQueue, getDb } from "./local-db";
+import {
+  getSyncQueue,
+  applyRemoteChange,
+  removeFromSyncQueue,
+} from "./local-db";
 
 const LAST_SYNC_KEY = "lastSyncTimestamp";
 
@@ -95,146 +99,16 @@ async function pushChanges(changes: SyncLogEntry[]): Promise<PushResponse | null
 }
 
 /**
- * Apply remote changes to local SQLite database.
+ * Apply remote changes to local storage. Backend-agnostic — the
+ * actual writes live in local-db.ts (native, SQLite) and
+ * local-db.web.ts (web, IndexedDB). Failures inside applyRemoteChange
+ * are already swallowed and logged there, so this loop stays linear
+ * and side-effect-free on error.
  */
 async function applyRemoteChanges(changes: SyncLogEntry[]): Promise<void> {
-  const database = await getDb();
-
   for (const change of changes) {
-    try {
-      switch (change.entityType) {
-        case "progress":
-          await applyProgressChange(database, change);
-          break;
-        case "bookmark":
-          await applyBookmarkChange(database, change);
-          break;
-        case "highlight":
-          await applyHighlightChange(database, change);
-          break;
-        case "note":
-          await applyNoteChange(database, change);
-          break;
-      }
-    } catch (err) {
-      console.warn(`Failed to apply sync change ${change.entityType}:${change.entityId}:`, err);
-    }
+    await applyRemoteChange(change);
   }
-}
-
-async function applyProgressChange(
-  database: Awaited<ReturnType<typeof getDb>>,
-  change: SyncLogEntry,
-): Promise<void> {
-  const payload = change.payload;
-  if (!payload) return;
-
-  await database.runAsync(
-    `INSERT INTO reading_progress (id, book_id, device_id, position, updated_at, synced)
-     VALUES (?, ?, ?, ?, ?, 1)
-     ON CONFLICT(book_id, device_id) DO UPDATE SET
-       position = excluded.position,
-       updated_at = excluded.updated_at,
-       synced = 1`,
-    [
-      change.entityId,
-      payload.bookId as string,
-      (payload.deviceId as string) ?? change.deviceId ?? "unknown",
-      JSON.stringify(payload.position),
-      change.timestamp,
-    ],
-  );
-}
-
-async function applyBookmarkChange(
-  database: Awaited<ReturnType<typeof getDb>>,
-  change: SyncLogEntry,
-): Promise<void> {
-  if (change.operation === "delete") {
-    await database.runAsync(
-      "UPDATE bookmarks SET deleted_at = ?, synced = 1 WHERE id = ?",
-      [change.timestamp, change.entityId],
-    );
-    return;
-  }
-
-  const payload = change.payload;
-  if (!payload) return;
-
-  await database.runAsync(
-    `INSERT OR REPLACE INTO bookmarks (id, book_id, position, label, created_at, synced)
-     VALUES (?, ?, ?, ?, ?, 1)`,
-    [
-      change.entityId,
-      payload.bookId as string,
-      JSON.stringify(payload.position),
-      (payload.label as string) ?? null,
-      change.timestamp,
-    ],
-  );
-}
-
-async function applyHighlightChange(
-  database: Awaited<ReturnType<typeof getDb>>,
-  change: SyncLogEntry,
-): Promise<void> {
-  if (change.operation === "delete") {
-    await database.runAsync(
-      "UPDATE highlights SET deleted_at = ?, synced = 1 WHERE id = ?",
-      [change.timestamp, change.entityId],
-    );
-    return;
-  }
-
-  const payload = change.payload;
-  if (!payload) return;
-
-  await database.runAsync(
-    `INSERT OR REPLACE INTO highlights (id, book_id, cfi_range, text_content, note, color, created_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-    [
-      change.entityId,
-      payload.bookId as string,
-      payload.cfiRange as string,
-      (payload.textContent as string) ?? null,
-      (payload.note as string) ?? null,
-      (payload.color as string) ?? "yellow",
-      change.timestamp,
-    ],
-  );
-}
-
-async function applyNoteChange(
-  database: Awaited<ReturnType<typeof getDb>>,
-  change: SyncLogEntry,
-): Promise<void> {
-  if (change.operation === "delete") {
-    await database.runAsync(
-      "UPDATE notes SET deleted_at = ?, synced = 1 WHERE id = ?",
-      [change.timestamp, change.entityId],
-    );
-    return;
-  }
-
-  const payload = change.payload;
-  if (!payload) return;
-
-  const now = change.timestamp;
-  await database.runAsync(
-    `INSERT OR REPLACE INTO notes (id, book_id, position, note_type, text_content, strokes, pen_config, created_at, updated_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [
-      change.entityId,
-      payload.bookId as string,
-      JSON.stringify(payload.position),
-      (payload.noteType as string) ?? "typed",
-      (payload.textContent as string) ?? null,
-      payload.strokes ? JSON.stringify(payload.strokes) : null,
-      payload.penConfig ? JSON.stringify(payload.penConfig) : null,
-      now,
-      now,
-    ],
-  );
 }
 
 /**
@@ -260,14 +134,11 @@ export async function pushPending(): Promise<{ pushed: number; conflicts: SyncCo
     (pushResult.acceptedEntities ?? []).map((entry) => `${entry.entityType}:${entry.entityId}`),
   );
   if (acceptedKeys.size > 0) {
-    const db = await getDb();
     const idsToRemove = queue
       .filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`))
       .map((e) => e.id)
       .filter((id): id is number => id != null);
-    for (const id of idsToRemove) {
-      await db.runAsync("DELETE FROM sync_queue WHERE id = ?", [id]);
-    }
+    await removeFromSyncQueue(idsToRemove);
   }
 
   return { pushed: pushResult.accepted ?? 0, conflicts: pushResult.conflicts ?? [] };
@@ -339,15 +210,11 @@ export async function runSync(): Promise<{
       );
 
       if (acceptedKeys.size > 0) {
-        const db = await getDb();
         const idsToRemove = queue
           .filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`))
           .map((e) => e.id)
           .filter((id): id is number => id != null);
-
-        for (const id of idsToRemove) {
-          await db.runAsync("DELETE FROM sync_queue WHERE id = ?", [id]);
-        }
+        await removeFromSyncQueue(idsToRemove);
       }
     }
   }

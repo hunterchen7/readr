@@ -17,6 +17,13 @@ android/
 apps/mobile/apps/
 # WebView assets generated from npm deps by scripts/bundle-webview-assets.mjs
 apps/mobile/assets/js/
+# pdfjs copies dropped into public/ by the same script for the web build
+apps/mobile/public/pdf.min.mjs
+apps/mobile/public/pdf.worker.min.mjs
+
+# Playwright outputs
+apps/mobile/test-results/
+apps/mobile/playwright-report/
 
 # Environment
 .env
