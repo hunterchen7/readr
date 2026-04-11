@@ -526,3 +526,161 @@ export async function pruneCachedBooks(
 export async function deleteCachedBook(_id: string): Promise<void> {
   // No-op on web.
 }
+
+// ─── Sync queue drain ───────────────────────────────────────────────────
+
+/**
+ * Remove a specific set of sync queue entries by numeric id. Called
+ * after the server accepts a push. Runs inside a single readwrite
+ * transaction so the delete set is atomic.
+ */
+export async function removeFromSyncQueue(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  await tx([STORE.syncQueue], "readwrite", async ([store]) => {
+    for (const id of ids) await req(store.delete(id));
+  });
+}
+
+// ─── Remote change application ──────────────────────────────────────────
+//
+// Called by sync.ts after a successful pull. Writes land with
+// synced: 1 so they don't bounce back through the push queue. The
+// native local-db.ts has the same function exported — sync.ts calls
+// whichever one Metro resolves based on platform.
+
+export async function applyRemoteChange(change: SyncLogEntry): Promise<void> {
+  try {
+    switch (change.entityType) {
+      case "progress":
+        await _applyRemoteProgress(change);
+        break;
+      case "bookmark":
+        await _applyRemoteBookmark(change);
+        break;
+      case "highlight":
+        await _applyRemoteHighlight(change);
+        break;
+      case "note":
+        await _applyRemoteNote(change);
+        break;
+    }
+  } catch (err) {
+    console.warn(
+      `Failed to apply sync change ${change.entityType}:${change.entityId}:`,
+      err,
+    );
+  }
+}
+
+async function _applyRemoteProgress(change: SyncLogEntry): Promise<void> {
+  const payload = change.payload;
+  if (!payload) return;
+  await tx([STORE.progress], "readwrite", async ([store]) => {
+    const record: ProgressRecord = {
+      id: change.entityId,
+      bookId: payload.bookId as string,
+      deviceId:
+        (payload.deviceId as string) ?? change.deviceId ?? "unknown",
+      position: payload.position as BookPosition,
+      updatedAt: change.timestamp,
+      synced: 1,
+    };
+    await req(store.put(record));
+  });
+}
+
+async function _applyRemoteBookmark(change: SyncLogEntry): Promise<void> {
+  if (change.operation === "delete") {
+    await tx([STORE.bookmarks], "readwrite", async ([store]) => {
+      const existing = await req<BookmarkRecord | undefined>(
+        store.get(change.entityId),
+      );
+      if (!existing) return;
+      await req(
+        store.put({ ...existing, deletedAt: change.timestamp, synced: 1 }),
+      );
+    });
+    return;
+  }
+  const payload = change.payload;
+  if (!payload) return;
+  await tx([STORE.bookmarks], "readwrite", async ([store]) => {
+    const record: BookmarkRecord = {
+      id: change.entityId,
+      bookId: payload.bookId as string,
+      position: payload.position as BookPosition,
+      label: (payload.label as string) ?? null,
+      createdAt: change.timestamp,
+      deletedAt: null,
+      synced: 1,
+    };
+    await req(store.put(record));
+  });
+}
+
+async function _applyRemoteHighlight(change: SyncLogEntry): Promise<void> {
+  if (change.operation === "delete") {
+    await tx([STORE.highlights], "readwrite", async ([store]) => {
+      const existing = await req<HighlightRecord | undefined>(
+        store.get(change.entityId),
+      );
+      if (!existing) return;
+      await req(
+        store.put({ ...existing, deletedAt: change.timestamp, synced: 1 }),
+      );
+    });
+    return;
+  }
+  const payload = change.payload;
+  if (!payload) return;
+  await tx([STORE.highlights], "readwrite", async ([store]) => {
+    const record: HighlightRecord = {
+      id: change.entityId,
+      bookId: payload.bookId as string,
+      cfiRange: payload.cfiRange as string,
+      textContent: (payload.textContent as string) ?? null,
+      note: (payload.note as string) ?? null,
+      color: ((payload.color as Highlight["color"]) ?? "yellow"),
+      chapterLabel: (payload.chapterLabel as string | null) ?? null,
+      percentage: (payload.percentage as number | null) ?? null,
+      createdAt: change.timestamp,
+      deletedAt: null,
+      synced: 1,
+    };
+    await req(store.put(record));
+  });
+}
+
+async function _applyRemoteNote(change: SyncLogEntry): Promise<void> {
+  if (change.operation === "delete") {
+    await tx([STORE.notes], "readwrite", async ([store]) => {
+      const existing = await req<NoteRecord | undefined>(
+        store.get(change.entityId),
+      );
+      if (!existing) return;
+      await req(
+        store.put({ ...existing, deletedAt: change.timestamp, synced: 1 }),
+      );
+    });
+    return;
+  }
+  const payload = change.payload;
+  if (!payload) return;
+  await tx([STORE.notes], "readwrite", async ([store]) => {
+    const now = change.timestamp;
+    const record: NoteRecord = {
+      id: change.entityId,
+      bookId: payload.bookId as string,
+      position: payload.position as BookPosition,
+      noteType: (payload.noteType as NoteRecord["noteType"]) ?? "typed",
+      textContent: (payload.textContent as string) ?? null,
+      strokes: (payload.strokes as Stroke[] | null) ?? null,
+      penConfig: (payload.penConfig as PenConfig | null) ?? null,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      synced: 1,
+    };
+    await req(store.put(record));
+  });
+}
