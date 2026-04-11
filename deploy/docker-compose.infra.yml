@@ -35,6 +35,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    env_file: ../.env
     volumes:
       - redisdata:/data
     networks:
