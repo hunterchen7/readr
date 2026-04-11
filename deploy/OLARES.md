@@ -142,12 +142,19 @@ gated behind the `local-s3` profile. Run infra with the profile:
 ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
 ```
 
-This brings up postgres, redis, minio, and minio-init. No additional
-S3-related env vars are required beyond the `.env` example above —
-`S3_ENDPOINT` defaults to `http://minio:9000` (the in-network service
-name) and the app container talks to it via the shared `readr`
-network. You still need to set `S3_PUBLIC_ENDPOINT` to whatever
-hostname the external tunnel/LB terminates books. traffic on.
+This brings up postgres, redis, minio, and minio-init. In addition to
+the required keys table above, your `~/readr/.env` MUST contain the
+MinIO-specific block:
+
+- `MINIO_ROOT_USER` (used by both `minio` and `minio-init`)
+- `MINIO_ROOT_PASSWORD` (must equal `S3_SECRET_KEY` — same credential)
+- `S3_ENDPOINT=http://minio:9000` (the in-network DNS name; the api
+  container reaches it over the shared `readr` network)
+- `S3_FORCE_PATH_STYLE=true` (MinIO requires path-style addressing —
+  the server now defaults this to `false` so AWS/R2 work out of the
+  box, so MinIO operators must opt in explicitly)
+- `S3_PUBLIC_ENDPOINT` set to whatever hostname the external tunnel/LB
+  terminates books. traffic on (e.g. `https://books.example.com`)
 
 ### Mode B — External S3 (R2, AWS S3, B2, DO Spaces, …)
 
@@ -174,22 +181,19 @@ and will not run. Set the following in `~/readr/.env`:
 
 Notes:
 
-- `S3_ENDPOINT` in `.env` flows through the app compose file via
-  `${S3_ENDPOINT:-http://minio:9000}`, so setting it in `.env`
-  overrides the default and points the api container at your external
-  provider.
-- AWS S3 itself doesn't need `S3_ENDPOINT` set at all — leave it unset
-  in `.env` and the AWS SDK will resolve the regional endpoint from
-  `S3_REGION`. (The compose override will then fall back to
-  `http://minio:9000`, which is harmless as long as MinIO isn't
-  running — the api container will never connect to it because the
-  server-side env precedence is driven by what the SDK actually uses.
-  If that fallback makes you uneasy, set `S3_ENDPOINT` to the explicit
-  regional host.)
+- `S3_ENDPOINT` is now optional. The server schema accepts an unset
+  value, and the api only passes `endpoint:` to the AWS SDK when it's
+  set. For AWS S3, **leave `S3_ENDPOINT` unset entirely** in `.env`
+  and the SDK will resolve the regional endpoint from `S3_REGION`.
+  Setting any value (even the right one) pins the client to that host.
+- `S3_FORCE_PATH_STYLE` now defaults to `false`. AWS S3 and R2 use
+  virtual-hosted addressing and need `false`; MinIO and some
+  B2/Linode endpoints need `true`. Set it explicitly in `.env` for
+  the backend you use.
 - `S3_PUBLIC_ENDPOINT` is the origin your clients (mobile/web) will
   hit directly for presigned downloads — it's signed into the URL.
   For R2 this is typically your R2 custom domain or public `r2.dev`
-  URL. For AWS S3 it's the virtual-hosted bucket URL.
+  URL. For AWS S3 see the path-style note below.
 - Cloudflared ingress for `books.example.com` is not needed in Mode
   B — the public S3 host is reachable directly from the internet.
   Drop the `books.reader.example.com` entry from
