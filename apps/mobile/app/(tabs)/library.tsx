@@ -19,7 +19,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { listBooks, uploadBook } from "../../lib/api";
-import { getAllProgress } from "../../lib/local-db";
+import {
+  getAllProgress,
+  upsertCachedBooks,
+  pruneCachedBooks,
+} from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { DragDropUpload } from "../../components/upload/DragDropUpload";
 import { useSyncStatus } from "../../lib/sync-status";
@@ -140,7 +144,21 @@ export default function LibraryScreen() {
 
   const { data, isLoading, error, isRefetching, refetch } = useQuery({
     queryKey: ["books", sort],
-    queryFn: () => listBooks(sort),
+    queryFn: async () => {
+      const result = await listBooks(sort);
+      // Shadow-write into the local cache so the library, book detail,
+      // and reader can render offline. We only prune for the default
+      // sort because other sorts/filters can return a partial list.
+      try {
+        await upsertCachedBooks(result.books);
+        if (sort === "recent") {
+          await pruneCachedBooks(result.books.map((b) => b.id));
+        }
+      } catch (err) {
+        console.warn("upsertCachedBooks failed:", err);
+      }
+      return result;
+    },
   });
 
   const rawBooks = data?.books ?? [];

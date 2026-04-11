@@ -15,7 +15,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Download, BookOpen, Check, Trash2, FileDown } from "lucide-react-native";
 import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
-import { getProgress, upsertProgress } from "../../lib/local-db";
+import {
+  getProgress,
+  upsertProgress,
+  upsertCachedBook,
+  deleteCachedBook,
+} from "../../lib/local-db";
 import { downloadFile } from "../../lib/download-file";
 import { useSyncStatus } from "../../lib/sync-status";
 import { colors, spacing, fontSize } from "../../lib/theme";
@@ -39,7 +44,17 @@ export default function BookDetailScreen() {
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
-    queryFn: () => getBook(bookId!),
+    queryFn: async () => {
+      const result = await getBook(bookId!);
+      // Shadow-write into the local cache so the next visit (and the
+      // reader) can render offline.
+      try {
+        await upsertCachedBook(result.book);
+      } catch (err) {
+        console.warn("upsertCachedBook failed:", err);
+      }
+      return result;
+    },
     enabled: !!bookId,
   });
 
@@ -171,6 +186,9 @@ export default function BookDetailScreen() {
           try {
             if (downloaded && bookId) await deleteDownloadedBook(bookId);
             await deleteBook(bookId!);
+            // Drop the local cache row too so the offline library
+            // doesn't keep a ghost entry pointing at a deleted book.
+            if (bookId) await deleteCachedBook(bookId);
             queryClient.invalidateQueries({ queryKey: ["books"] });
             router.back();
           } catch (err) {
