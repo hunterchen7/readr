@@ -1,5 +1,5 @@
 import * as SQLite from "expo-sqlite";
-import * as SecureStore from "expo-secure-store";
+import * as Storage from "./storage";
 import type {
   BookPosition,
   ReadingProgress,
@@ -147,10 +147,10 @@ function getDeviceId(): string {
 
 /** Call once on app startup to load or generate a persistent device ID. */
 export async function initDeviceId(): Promise<void> {
-  let id = await SecureStore.getItemAsync("deviceId");
+  let id = await Storage.getItem("deviceId");
   if (!id) {
     id = `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    await SecureStore.setItemAsync("deviceId", id);
+    await Storage.setItem("deviceId", id);
   }
   cachedDeviceId = id;
 }
