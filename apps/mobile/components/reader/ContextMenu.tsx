@@ -10,7 +10,6 @@ import {
 import { HIGHLIGHT_COLORS, type HighlightColor } from "@readr/shared";
 import {
   Highlighter,
-  Bookmark,
   StickyNote,
   Copy,
   BookText,
@@ -37,7 +36,6 @@ interface ContextMenuProps {
   anchorRect?: SelectionRect | null;
   onClose: () => void;
   onHighlight: (color: HighlightColor) => void;
-  onBookmark: () => void;
   onNote: () => void;
   onDraw: () => void;
   onCopy: () => void;
@@ -77,7 +75,6 @@ export function ContextMenu({
   anchorRect,
   onClose,
   onHighlight,
-  onBookmark,
   onNote,
   onDraw,
   onCopy,
@@ -187,10 +184,6 @@ export function ContextMenu({
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onDefine}>
                 <BookText size={20} color={iconColor} />
                 <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Define</Text>
-              </Pressable>
-              <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onBookmark}>
-                <Bookmark size={20} color={iconColor} />
-                <Text style={[styles.actionLabel, display.isEink && styles.actionLabelEink]}>Bookmark</Text>
               </Pressable>
               <Pressable style={[styles.actionButton, { minHeight: tapTarget }]} onPress={onNote}>
                 <StickyNote size={20} color={iconColor} />

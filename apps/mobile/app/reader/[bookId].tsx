@@ -448,18 +448,6 @@ export default function ReaderScreen() {
     setContextMenuVisible(false);
   }
 
-  async function handleBookmarkFromMenu() {
-    if (!bookId || !currentPosition) return;
-    try {
-      const label = selectedText.slice(0, 60) || undefined;
-      const bm = await createBookmark(bookId, currentPosition, label);
-      setBookmarks((prev) => [bm, ...prev]);
-    } catch {
-      Alert.alert("Error", "Failed to save bookmark");
-    }
-    setContextMenuVisible(false);
-  }
-
   function handleNoteFromMenu() {
     setContextMenuVisible(false);
     setShowTypedNote(true);
@@ -912,7 +900,6 @@ export default function ReaderScreen() {
         anchorRect={selectionRect}
         onClose={() => setContextMenuVisible(false)}
         onHighlight={handleHighlight}
-        onBookmark={handleBookmarkFromMenu}
         onNote={handleNoteFromMenu}
         onDraw={handleDrawFromMenu}
         onCopy={handleCopy}
