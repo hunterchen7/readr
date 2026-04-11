@@ -11,6 +11,7 @@ import {
 } from "../services/storage.js";
 import {
   computeSha256,
+  computeMd5,
   getFileExtension,
   getContentType,
   extractMetadata,
@@ -173,7 +174,10 @@ app.post("/", async (c) => {
 
   // Content-addressable dedup. Every upload of the same bytes collapses
   // onto a single files row; metadata is extracted ONCE on first upload.
+  // MD5 is stored alongside for cross-reference with external services
+  // (Anna's Archive etc.) that key on MD5.
   const sha256 = computeSha256(buffer);
+  const md5 = computeMd5(buffer);
 
   const [existingFile] = await db
     .select()
@@ -197,6 +201,14 @@ app.post("/", async (c) => {
       throw conflict("You already have this book in your library");
     }
 
+    // Opportunistically backfill md5 for files that pre-date this column.
+    if (!existingFile.md5) {
+      await db
+        .update(schema.files)
+        .set({ md5 })
+        .where(eq(schema.files.id, existingFile.id));
+    }
+
     fileId = existingFile.id;
   } else {
     // First time we see this file anywhere — upload to S3, extract
@@ -217,6 +229,7 @@ app.post("/", async (c) => {
         .insert(schema.files)
         .values({
           sha256,
+          md5,
           s3Key,
           coverKey,
           size: buffer.length,

@@ -14,6 +14,10 @@ export function computeSha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+export function computeMd5(buffer: Buffer): string {
+  return createHash("md5").update(buffer).digest("hex");
+}
+
 export function getFileExtension(filename: string): string {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   return ext;

@@ -69,6 +69,10 @@ export const emailVerifications = pgTable("email_verifications", {
 export const files = pgTable("files", {
   id: uuid("id").primaryKey().defaultRandom(),
   sha256: text("sha256").unique().notNull(),
+  // MD5 of the file bytes. Stored alongside sha256 so we can cross-reference
+  // against external services (Anna's Archive etc.) that key on MD5. Not
+  // used for dedup — sha256 is still the unique key.
+  md5: text("md5"),
   s3Key: text("s3_key").notNull(),
   coverKey: text("cover_key"),
   size: bigint("size", { mode: "number" }).notNull(),
