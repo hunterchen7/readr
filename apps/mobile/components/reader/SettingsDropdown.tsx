@@ -56,7 +56,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
   const display = useDisplay();
   const [fontOpen, setFontOpen] = useState(false);
   const insets = useSafeAreaInsets();
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const drawerWidth = Math.min(320, screenWidth * 0.8);
 
   // Drawer colors follow the reader theme
@@ -226,33 +226,54 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
               })}
             </View>
 
-            {/* Horizontal margin */}
+            {/* Horizontal margin — shown as % of screen width since a
+                raw px value reads meaningless across phone/tablet
+                sizes. The underlying theme field is still px (kept so
+                old saved values + the reader runtime don't need a
+                migration); we derive a step size from the screen so
+                each +/- tap moves the margin by ~1% of the viewport. */}
             <Text style={[styles.label, { color: muted }]}>Horizontal margin</Text>
-            <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.max(0, theme.margin - 4) })}>
-                <Text style={[styles.stepperText, { color: fg }]}>-</Text>
-              </Pressable>
-              <View style={styles.stepperValue}>
-                <Text style={[styles.stepperValueText, { color: fg }]}>{theme.margin}px</Text>
-              </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.min(128, theme.margin + 4) })}>
-                <Text style={[styles.stepperText, { color: fg }]}>+</Text>
-              </Pressable>
-            </View>
+            {(() => {
+              const stepH = Math.max(2, Math.round(screenWidth * 0.01));
+              const maxH = Math.round(screenWidth * 0.3);
+              const pctH = Math.round((theme.margin / screenWidth) * 100);
+              return (
+                <View style={styles.stepperRow}>
+                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.max(0, theme.margin - stepH) })}>
+                    <Text style={[styles.stepperText, { color: fg }]}>-</Text>
+                  </Pressable>
+                  <View style={styles.stepperValue}>
+                    <Text style={[styles.stepperValueText, { color: fg }]}>{pctH}%</Text>
+                  </View>
+                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.min(maxH, theme.margin + stepH) })}>
+                    <Text style={[styles.stepperText, { color: fg }]}>+</Text>
+                  </Pressable>
+                </View>
+              );
+            })()}
 
-            {/* Vertical margin */}
+            {/* Vertical margin — same story: displayed as % of screen
+                height, stepped by ~1% of the viewport, stored as px. */}
             <Text style={[styles.label, { color: muted }]}>Vertical margin</Text>
-            <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.max(0, (theme.marginV ?? 24) - 4) })}>
-                <Text style={[styles.stepperText, { color: fg }]}>-</Text>
-              </Pressable>
-              <View style={styles.stepperValue}>
-                <Text style={[styles.stepperValueText, { color: fg }]}>{theme.marginV ?? 24}px</Text>
-              </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(96, (theme.marginV ?? 24) + 4) })}>
-                <Text style={[styles.stepperText, { color: fg }]}>+</Text>
-              </Pressable>
-            </View>
+            {(() => {
+              const curV = theme.marginV ?? 24;
+              const stepV = Math.max(2, Math.round(screenHeight * 0.01));
+              const maxV = Math.round(screenHeight * 0.2);
+              const pctV = Math.round((curV / screenHeight) * 100);
+              return (
+                <View style={styles.stepperRow}>
+                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.max(0, curV - stepV) })}>
+                    <Text style={[styles.stepperText, { color: fg }]}>-</Text>
+                  </Pressable>
+                  <View style={styles.stepperValue}>
+                    <Text style={[styles.stepperValueText, { color: fg }]}>{pctV}%</Text>
+                  </View>
+                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(maxV, curV + stepV) })}>
+                    <Text style={[styles.stepperText, { color: fg }]}>+</Text>
+                  </Pressable>
+                </View>
+              );
+            })()}
 
             {/* Page turn gestures */}
             <Text style={[styles.label, { color: muted }]}>Page turn</Text>

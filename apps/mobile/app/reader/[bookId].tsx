@@ -857,7 +857,11 @@ export default function ReaderScreen() {
             style={[
               styles.header,
               styles.headerOverlay,
-              { backgroundColor: theme.bg, paddingTop: insets.top + 8 },
+              {
+                backgroundColor: theme.bg,
+                paddingTop: insets.top + 8,
+                borderBottomColor: theme.fg + "22",
+              },
             ]}
           >
             <Pressable onPress={() => setShowTocDrawer(true)} style={styles.headerButton} accessibilityLabel="Table of contents">
@@ -877,7 +881,11 @@ export default function ReaderScreen() {
           <View
             style={[
               styles.progressOverlay,
-              { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
+              {
+                backgroundColor: theme.bg,
+                paddingBottom: Math.max(insets.bottom, 8),
+                borderTopColor: theme.fg + "22",
+              },
             ]}
           >
             {/* Scrubber track — drag to seek. Wrapped in a hit-slop
@@ -1150,6 +1158,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerButton: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },
   headerButtonText: { fontSize: 20 },
@@ -1164,6 +1173,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
     paddingHorizontal: 16,
     paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   // 24px-tall transparent hit area so dragging is forgiving — the
   // visible track lives inside, vertically centered.
