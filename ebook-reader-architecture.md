@@ -40,15 +40,15 @@ readr/
   services/
     tts-worker/      Python FastAPI + BullMQ Redis queue worker
   deploy/
-    docker-compose.yml       Full production stack
-    docker-compose.dev.yml   Infrastructure only (Postgres, Redis, MinIO)
-    docker-compose.gpu.yml   TTS worker with GPU passthrough
-    Dockerfile.server        API server container
-    Dockerfile.web           Web client (Vite build -> nginx)
-    Caddyfile                Optional reverse proxy
-    nginx.conf               SPA + static asset config for web container
-    CLOUDFLARE.md            Cloudflare tunnel deployment notes
-    OLARES.md                Olares box deployment notes
+    docker-compose.infra.yml  Stateful infra stack: Postgres, Redis, MinIO (under `local-s3` profile) + bucket bootstrap
+    docker-compose.app.yml    Stateless app stack: api (and optional caddy under `public` profile). Both stacks join the external `readr` Docker network so the api can reach `postgres`/`redis`/`minio` by service name across stacks.
+    docker-compose.dev.yml    Infrastructure only (Postgres, Redis, MinIO) for local dev
+    docker-compose.gpu.yml    TTS worker overlay with GPU passthrough (overlays the app stack)
+    Dockerfile.server         API server container
+    Caddyfile                 Optional reverse proxy
+    .env.example              Template for the production .env operators copy to the deploy host
+    CLOUDFLARE.md             Cloudflare tunnel deployment notes
+    OLARES.md                 Olares box deployment notes
   package.json               Root workspace config
   pnpm-workspace.yaml        Workspace package list
   turbo.json                 Turborepo task config
@@ -887,24 +887,60 @@ covers/<sha256>.jpg                  Book cover (600x900 JPEG)
 
 ### Docker Compose (production)
 
-**File:** `deploy/docker-compose.yml`
-**Run:** `docker compose -f deploy/docker-compose.yml up -d --build`
+The production deploy is split across two compose files plus a shared
+external Docker network. The split exists so app redeploys never bounce
+MinIO (which would otherwise let Cloudflare cache a transient failure
+response for `books.*` and poison the edge).
+
+**Files:**
+
+- `deploy/docker-compose.infra.yml` — stateful infra. Owns `pgdata`,
+  `redisdata`, `miniodata`. Brought up once and left alone.
+- `deploy/docker-compose.app.yml` — stateless app. Owns `caddy_data` /
+  `caddy_config` only. Rebuilt on every push.
+
+**One-time host setup:**
+
+```bash
+docker network create readr
+```
+
+**Bring up infra (Mode A — bundled MinIO):**
+
+```bash
+docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d
+```
+
+**Bring up infra (Mode B — external S3 like R2/AWS/B2):**
+
+```bash
+docker compose -f deploy/docker-compose.infra.yml up -d
+```
+
+**Bring up the app stack (every deploy):**
+
+```bash
+docker compose -f deploy/docker-compose.app.yml up -d --build
+```
 
 Services:
 
-| Service      | Image / Build                  | Ports        | Notes                          |
-|--------------|--------------------------------|--------------|--------------------------------|
-| `api`        | `deploy/Dockerfile.server`     | 3000         | Hono API, depends on pg/redis/minio |
-| `web`        | `deploy/Dockerfile.web`        | 8080 -> 80   | Vite build served by nginx     |
-| `postgres`   | postgres:16-alpine             | --           | Internal only, health checked  |
-| `redis`      | redis:7-alpine                 | --           | Internal only                  |
-| `minio`      | minio/minio:latest             | 9000, 9001   | S3 API + web console           |
-| `minio-init` | minio/mc:latest                | --           | One-shot: creates bucket       |
-| `caddy`      | caddy:2-alpine                 | 80, 443      | Optional (profile: `public`)   |
+| Service      | Stack | Image / Build              | Ports        | Notes                          |
+|--------------|-------|----------------------------|--------------|--------------------------------|
+| `api`        | app   | `deploy/Dockerfile.server` | 3000         | Hono API. Liveness healthcheck only — assumes infra is already up. |
+| `caddy`      | app   | caddy:2-alpine             | 80, 443      | Optional (profile: `public`)   |
+| `postgres`   | infra | postgres:16-alpine         | --           | Internal only, health checked  |
+| `redis`      | infra | redis:7-alpine             | --           | Internal only                  |
+| `minio`      | infra | minio/minio:latest         | 9000, 9001   | S3 API + web console (profile: `local-s3`) |
+| `minio-init` | infra | minio/mc:latest            | --           | One-shot: creates bucket (profile: `local-s3`) |
+
+Both stacks attach all services to the external `readr` Docker network,
+so the `api` container resolves `postgres` / `redis` / `minio` by service
+name across stacks.
 
 **Caddy** is optional and only started with `--profile public`. Proxies
-`/api/*` and `/health` to the API server, everything else to the web container.
-Deployments using Cloudflare tunnel skip Caddy.
+`/api/*` and `/health` to the API server. Deployments using Cloudflare
+tunnel skip Caddy.
 
 **Volumes:** `pgdata`, `redisdata`, `miniodata`, `caddy_data`, `caddy_config`
 
@@ -922,10 +958,12 @@ URLs). Production stack uses `mc anonymous set download` (public read).
 ### Docker Compose (GPU / TTS)
 
 **File:** `deploy/docker-compose.gpu.yml`
-**Run:** Overlay with: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up`
+**Run:** Overlay on the app stack:
+`docker compose -f deploy/docker-compose.app.yml -f deploy/docker-compose.gpu.yml up -d --build`
 
 Adds `tts-worker` service with NVIDIA GPU passthrough (1 GPU). Mounts
-`tts-models` volume at `/models`.
+`tts-models` volume at `/models`. Joins the external `readr` network
+so the worker can reach `redis://redis:6379` in the infra stack.
 
 ### Dockerfiles
 

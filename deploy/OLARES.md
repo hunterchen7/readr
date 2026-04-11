@@ -228,12 +228,14 @@ Pick the command for the S3 backend mode you chose above.
 ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
 ```
 
-This starts:
+This starts (Compose project name resolves to `deploy` from the
+compose-file directory, which means containers and volumes pick up
+the existing `deploy_*` names from the pre-split deploy):
 
-- `readr-postgres-1` — internal only, owns `pgdata` volume
-- `readr-redis-1` — internal only, owns `redisdata` volume
-- `readr-minio-1` — S3 on `:9000`, console on `:9001`, owns `miniodata` volume
-- `readr-minio-init-1` — one-shot bucket bootstrap, exits 0
+- `deploy-postgres-1` — internal only, owns `deploy_pgdata` volume
+- `deploy-redis-1` — internal only, owns `deploy_redisdata` volume
+- `deploy-minio-1` — S3 on `:9000`, console on `:9001`, owns `deploy_miniodata` volume
+- `deploy-minio-init-1` — one-shot bucket bootstrap, exits 0
 
 **Mode B — External S3:**
 
@@ -243,8 +245,8 @@ ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.ym
 
 This starts only:
 
-- `readr-postgres-1` — internal only, owns `pgdata` volume
-- `readr-redis-1` — internal only, owns `redisdata` volume
+- `deploy-postgres-1` — internal only, owns `deploy_pgdata` volume
+- `deploy-redis-1` — internal only, owns `deploy_redisdata` volume
 
 Leave whichever you chose running. Only re-run `up -d` against the
 infra file when you deliberately want to bump a version (e.g.
@@ -274,7 +276,7 @@ ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml 
 
 This starts (or rebuilds + restarts):
 
-- `readr-api-1` — Hono server on `:3000`
+- `deploy-api-1` — Hono server on `:3000`
 
 Caddy is behind a `public` profile and NOT started here — the host's k8s
 ingress already owns :80/:443, and we terminate TLS at Cloudflare anyway.
@@ -316,26 +318,40 @@ opening ports on the Olares host. You'll need:
 
 ### Ingress rules
 
-The stack has three distinct HTTP origins that the client talks to directly.
-Pick subdomains for each in your Cloudflare zone and point them at the
-matching container port via `~/.cloudflared/config.yml` (or the dashboard):
+Pick subdomains in your Cloudflare zone and point them at the matching
+container port via `~/.cloudflared/config.yml` (or the dashboard).
+Mode A operators need both `api.*` and `books.*`; Mode B operators
+need only `api.*` because their external S3 provider serves the
+bucket directly from its own host.
+
+**Mode A — bundled MinIO:**
 
 ```yaml
 tunnel: <your-tunnel-id>
 credentials-file: /home/ebook-deploy/.cloudflared/<your-tunnel-id>.json
 
 ingress:
-  # React web dashboard
-  - hostname: reader.example.com
-    service: http://localhost:8080
-
-  # Hono API — the mobile app + web dashboard both hit this
+  # Hono API — the mobile app hits this
   - hostname: api.reader.example.com
     service: http://localhost:3000
 
   # MinIO S3 endpoint used by presigned book/cover downloads
   - hostname: books.reader.example.com
     service: http://localhost:9000
+
+  - service: http_status:404
+```
+
+**Mode B — external S3 (R2/AWS/B2/DO Spaces):** drop the `books.*`
+row entirely; your provider already serves the bucket directly.
+
+```yaml
+tunnel: <your-tunnel-id>
+credentials-file: /home/ebook-deploy/.cloudflared/<your-tunnel-id>.json
+
+ingress:
+  - hostname: api.reader.example.com
+    service: http://localhost:3000
 
   - service: http_status:404
 ```
@@ -366,7 +382,7 @@ ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml 
 `.env` values — `restart` reuses the existing env baked into the
 container at create time.)
 
-On the mobile and web clients, set the server URL to
+On the mobile client (and the Expo Web build), set the server URL to
 `https://api.reader.example.com` on the sign-in screen and paste or generate
 a new token.
 
@@ -393,8 +409,15 @@ ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.ym
 ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
 ```
 
-In Mode A this *will* briefly bounce MinIO and may cause
-`books.hunterchen.ca` to flap, so schedule it like any other infra
-maintenance (and consider purging the Cloudflare cache for that
-hostname after). Mode B only touches postgres/redis, so the books
-origin is unaffected.
+In Mode A this *will* briefly bounce MinIO and may cause the
+`books.*` host to flap, so schedule it like any other infra
+maintenance and purge the Cloudflare cache for the books hostname
+afterwards to make sure no transient failure response sticks around
+at the edge. Dashboard path:
+
+> Cloudflare → your zone → **Caching → Configuration → Purge Cache →
+> Purge By Hostname** → enter `books.hunterchen.ca` (or whatever your
+> books hostname is) → **Purge**.
+
+Mode B only touches postgres/redis, so the books origin is unaffected
+and no cache purge is needed.
