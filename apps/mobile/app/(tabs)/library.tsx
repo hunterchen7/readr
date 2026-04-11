@@ -23,6 +23,7 @@ import {
   getAllProgress,
   upsertCachedBooks,
   pruneCachedBooks,
+  getCachedBooks,
 } from "../../lib/local-db";
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { DragDropUpload } from "../../components/upload/DragDropUpload";
@@ -144,20 +145,35 @@ export default function LibraryScreen() {
 
   const { data, isLoading, error, isRefetching, refetch } = useQuery({
     queryKey: ["books", sort],
+    // Local-first read: if the network call fails (offline, server
+    // unreachable), fall back to whatever's in the local cache. We only
+    // throw when both the network and the cache are empty, which is the
+    // genuine "no books to show" state. Filters/searches still happen
+    // client-side downstream from `rawBooks`, so the cache returning the
+    // full library is fine — we don't need to re-apply the server's sort
+    // because the client already re-sorts via SORT_SERVER_DEFAULT_DIR.
     queryFn: async () => {
-      const result = await listBooks(sort);
-      // Shadow-write into the local cache so the library, book detail,
-      // and reader can render offline. We only prune for the default
-      // sort because other sorts/filters can return a partial list.
       try {
-        await upsertCachedBooks(result.books);
-        if (sort === "recent") {
-          await pruneCachedBooks(result.books.map((b) => b.id));
+        const result = await listBooks(sort);
+        try {
+          await upsertCachedBooks(result.books);
+          if (sort === "recent") {
+            await pruneCachedBooks(result.books.map((b) => b.id));
+          }
+        } catch (err) {
+          console.warn("upsertCachedBooks failed:", err);
         }
-      } catch (err) {
-        console.warn("upsertCachedBooks failed:", err);
+        return result;
+      } catch (networkErr) {
+        const cached = await getCachedBooks();
+        if (cached.length > 0) {
+          // Tag the response so downstream code can tell it came from
+          // the offline cache (e.g. to show a "stale" badge).
+          return { books: cached, fromCache: true as const };
+        }
+        // Truly nothing to show — let React Query surface the error.
+        throw networkErr;
       }
-      return result;
     },
   });
 

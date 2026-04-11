@@ -19,6 +19,7 @@ import {
   getProgress,
   upsertProgress,
   upsertCachedBook,
+  getCachedBook,
   deleteCachedBook,
 } from "../../lib/local-db";
 import { downloadFile } from "../../lib/download-file";
@@ -45,15 +46,22 @@ export default function BookDetailScreen() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
     queryFn: async () => {
-      const result = await getBook(bookId!);
-      // Shadow-write into the local cache so the next visit (and the
-      // reader) can render offline.
       try {
-        await upsertCachedBook(result.book);
-      } catch (err) {
-        console.warn("upsertCachedBook failed:", err);
+        const result = await getBook(bookId!);
+        try {
+          await upsertCachedBook(result.book);
+        } catch (err) {
+          console.warn("upsertCachedBook failed:", err);
+        }
+        return result;
+      } catch (networkErr) {
+        // Offline / server unreachable — fall back to the local mirror
+        // so the user can still see the book metadata for anything
+        // they've previously visited or downloaded.
+        const cached = await getCachedBook(bookId!);
+        if (cached) return { book: cached };
+        throw networkErr;
       }
-      return result;
     },
     enabled: !!bookId,
   });

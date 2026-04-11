@@ -54,6 +54,8 @@ import {
   getNotes,
   updateNote,
   deleteNote,
+  getCachedBook,
+  upsertCachedBook,
 } from "../../lib/local-db";
 import type { Highlight, Note } from "@readr/shared";
 import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
@@ -262,9 +264,39 @@ export default function ReaderScreen() {
   const ttsSpeak = useTtsStore((s) => s.speak);
   const ttsStop = useTtsStore((s) => s.stop);
 
+  // Local-first read for the reader's book metadata. The reader needs:
+  //   1. format (epub vs pdf) — to pick the WebView HTML
+  //   2. a source URL — either a local file:// path (preferred) or the
+  //      server's presigned downloadUrl as a fallback
+  //
+  // For downloaded books we can skip the network entirely: the cached
+  // metadata + the local file path are everything the WebView needs. We
+  // only hit the server when the book isn't downloaded AND we don't have
+  // cached metadata (e.g. first visit to a brand-new book).
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
-    queryFn: () => getBook(bookId!),
+    queryFn: async () => {
+      const [downloaded, cached] = await Promise.all([
+        getDownloadedBook(bookId!),
+        getCachedBook(bookId!),
+      ]);
+      if (downloaded && cached) {
+        // Fully offline path — no network needed.
+        return { book: cached };
+      }
+      try {
+        const result = await getBook(bookId!);
+        try {
+          await upsertCachedBook(result.book);
+        } catch (err) {
+          console.warn("upsertCachedBook failed:", err);
+        }
+        return result;
+      } catch (networkErr) {
+        if (cached) return { book: cached };
+        throw networkErr;
+      }
+    },
     enabled: !!bookId,
   });
 
