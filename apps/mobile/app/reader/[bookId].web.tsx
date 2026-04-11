@@ -644,10 +644,19 @@ export default function WebReaderScreen() {
   }
 
   function handleJumpToNote(n: Note) {
+    // Prefer CFI for in-note-page jumps, fall back to fraction so
+    // notes with no CFI (older rows from the web reader before
+    // selectionChanged landed) still navigate somewhere useful
+    // instead of silently no-op'ing. Mirrors native.
     if (n.position.cfi) {
       coreRef.current?.dispatch({
         type: "goToLocation",
         payload: { cfi: n.position.cfi },
+      });
+    } else {
+      coreRef.current?.dispatch({
+        type: "goToLocation",
+        payload: { fraction: n.position.percentage / 100 },
       });
     }
     setShowTocDrawer(false);

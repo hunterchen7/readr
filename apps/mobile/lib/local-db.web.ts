@@ -477,15 +477,10 @@ async function enqueueInTx(
 
 function schedulePushSoon(): void {
   // Kick the debounced background push so cross-device sync sees
-  // the write within ~1s. Lazy import mirrors the native file; the
-  // optional chaining is there because sync.web.ts (today) doesn't
-  // export schedulePush, and we don't want the missing symbol to
-  // poison this code path before #8 lands.
+  // the write within ~1s. Lazy import avoids a circular dep — sync.ts
+  // pulls getSyncQueue from this file.
   void import("./sync")
-    .then((mod) => {
-      const fn = (mod as unknown as { schedulePush?: () => void }).schedulePush;
-      if (typeof fn === "function") fn();
-    })
+    .then((mod) => mod.schedulePush())
     .catch(() => {});
 }
 
