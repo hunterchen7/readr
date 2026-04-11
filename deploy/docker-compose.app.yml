@@ -26,7 +26,7 @@ services:
     environment:
       # Override any host-specific values from .env to use the in-network service names.
       # These resolve via the shared `readr` network to the infra stack containers.
-      DATABASE_URL: postgresql://reader:password@postgres:5432/reader
+      DATABASE_URL: postgresql://${POSTGRES_USER:-reader}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-reader}
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
       # S3_PUBLIC_ENDPOINT must be set in .env to the externally-reachable
