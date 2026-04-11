@@ -13,7 +13,9 @@
  */
 
 const DB_NAME = "readr";
-const DB_VERSION = 1;
+// v2: add a `by_book` index on reading_progress so getProgress()
+// can find the latest row across all devices without scanning.
+const DB_VERSION = 2;
 
 // Object store names. Mirror the SQLite table names in local-db.ts so
 // the two files track each other when reading side-by-side.
@@ -37,15 +39,27 @@ export function openDb(): Promise<IDBDatabase> {
   }
   dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
+      const oldVersion = event.oldVersion;
+      const upgradeTx = req.transaction;
 
       // reading_progress — keyed by synthetic `id`, with a compound
-      // (bookId, deviceId) index for the "one row per device" query.
+      // (bookId, deviceId) index for the "one row per device" query
+      // and a bare bookId index for "latest row across devices".
       if (!db.objectStoreNames.contains(STORE.progress)) {
         const s = db.createObjectStore(STORE.progress, { keyPath: "id" });
         s.createIndex("by_book_device", ["bookId", "deviceId"], { unique: true });
         s.createIndex("by_device", "deviceId", { unique: false });
+        s.createIndex("by_book", "bookId", { unique: false });
+      } else if (oldVersion < 2 && upgradeTx) {
+        // Existing install — the store exists without the new index.
+        // onupgradeneeded gives us a `versionchange` transaction we
+        // can reach into to mutate the schema in-place.
+        const s = upgradeTx.objectStore(STORE.progress);
+        if (!s.indexNames.contains("by_book")) {
+          s.createIndex("by_book", "bookId", { unique: false });
+        }
       }
 
       // bookmarks, highlights, notes — keyed by id, with a book_id

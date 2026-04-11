@@ -187,8 +187,21 @@ export default function WebReaderScreen() {
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  // Guard initial-position restore so it only fires once per book open.
-  const restoredRef = useRef(false);
+  // Initial-position handling. Mirrors the native reader
+  // (f3e1cd8 + 395cba9):
+  //   - savedPositionRef pins the DB-loaded position so the restore
+  //     effect doesn't read the live `currentPosition` state, which
+  //     gets clobbered by the first progressUpdated event.
+  //   - hasLoadedSavedRef says "DB load finished".
+  //   - hasRestoredRef gates progressUpdated persistence — foliate
+  //     fires a relocate at pct=0 before the restore runs, and
+  //     persisting it would clobber the real saved row.
+  //   - pendingReadyRestoreRef buffers a "ready" that arrived
+  //     before the DB load finished, so we don't skip the restore.
+  const savedPositionRef = useRef<BookPosition | null>(null);
+  const hasLoadedSavedRef = useRef(false);
+  const hasRestoredRef = useRef(false);
+  const pendingReadyRestoreRef = useRef(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
@@ -197,10 +210,34 @@ export default function WebReaderScreen() {
   });
   const book = data?.book;
 
+  // Issue the initial restore navigation once the saved position is
+  // loaded AND the core reports ready. Prefer `fraction` over `cfi`
+  // because CFIs embed structural indices that can land on the wrong
+  // paragraph when the resuming device paginates differently than
+  // the writing one — fraction is stable across layout differences.
+  // Mirrors native applySavedRestore() in f3e1cd8.
+  const applySavedRestore = useCallback(() => {
+    const saved = savedPositionRef.current;
+    const core = coreRef.current;
+    if (core && saved) {
+      const pct = saved.percentage;
+      if (typeof pct === "number" && pct > 0) {
+        core.dispatch({ type: "goToLocation", payload: { fraction: pct / 100 } });
+      } else if (saved.cfi) {
+        core.dispatch({ type: "goToLocation", payload: { cfi: saved.cfi } });
+      }
+    }
+    hasRestoredRef.current = true;
+  }, []);
+
   // Load persisted state on mount.
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
+    savedPositionRef.current = null;
+    hasLoadedSavedRef.current = false;
+    hasRestoredRef.current = false;
+    pendingReadyRestoreRef.current = false;
     (async () => {
       const [savedProgress, savedBookmarks, savedHighlights, savedNotes, savedPrefs] = await Promise.all([
         getProgress(bookId),
@@ -211,16 +248,24 @@ export default function WebReaderScreen() {
       ]);
       if (cancelled) return;
       if (savedProgress) {
+        savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
       }
+      hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
       setHighlights(savedHighlights);
       setNotes(savedNotes);
       if (savedPrefs?.theme) setTheme({ ...DEFAULT_THEME, ...savedPrefs.theme });
+      // If the core already fired `ready` while we were waiting on
+      // the DB load, run the buffered restore now.
+      if (pendingReadyRestoreRef.current) {
+        pendingReadyRestoreRef.current = false;
+        applySavedRestore();
+      }
     })();
     return () => { cancelled = true; };
-  }, [bookId]);
+  }, [bookId, applySavedRestore]);
 
   // Reading session tracking — log duration when the reader unmounts.
   const sessionStartRef = useRef<{ at: number; pct: number }>({
@@ -262,6 +307,16 @@ export default function WebReaderScreen() {
       switch (type) {
         case "ready":
           setCoreReady(true);
+          // If the DB load already finished, apply the restore now;
+          // otherwise buffer the intent and let the DB-load effect
+          // fire it once savedPositionRef is populated. Either way,
+          // `hasRestoredRef` won't flip until the actual dispatch
+          // runs, so progressUpdated persistence stays blocked.
+          if (hasLoadedSavedRef.current) {
+            applySavedRestore();
+          } else {
+            pendingReadyRestoreRef.current = true;
+          }
           break;
         case "tocLoaded":
           setToc(payload.chapters ?? []);
@@ -286,7 +341,13 @@ export default function WebReaderScreen() {
             setCurrentPage(null);
             setTotalPages(null);
           }
-          if (bookId) void upsertProgress(bookId, position);
+          // Don't persist until the initial restore has run — the very
+          // first relocate from foliate fires at pct=0 and would
+          // otherwise clobber the saved position. Mirrors the native
+          // reader's hasRestoredRef gate.
+          if (bookId && hasRestoredRef.current) {
+            void upsertProgress(bookId, position);
+          }
           break;
         }
         case "tapCenter":
@@ -329,7 +390,10 @@ export default function WebReaderScreen() {
     let cancelled = false;
     setCoreError(null);
     setCoreReady(false);
-    restoredRef.current = false;
+    // Reset the restore gate for this fresh reader mount. The DB-load
+    // effect (keyed on bookId) resets the other refs separately.
+    hasRestoredRef.current = false;
+    pendingReadyRestoreRef.current = false;
 
     const container = containerRef.current;
     let core: ReaderCoreHandle | PdfCoreHandle | null = null;
@@ -423,16 +487,12 @@ export default function WebReaderScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coreReady]);
 
-  // Restore saved position once after the reader reports ready.
-  useEffect(() => {
-    if (!coreReady || !coreRef.current) return;
-    if (restoredRef.current) return;
-    const cfi = currentPosition?.cfi;
-    if (cfi) {
-      coreRef.current.dispatch({ type: "goToLocation", payload: { cfi } });
-      restoredRef.current = true;
-    }
-  }, [coreReady, currentPosition]);
+  // NOTE: initial position restore is handled by applySavedRestore
+  // above, triggered either from the `ready` event or (if the DB load
+  // hasn't finished yet) from the DB-load effect via
+  // pendingReadyRestoreRef. Keeping it out of a useEffect avoids
+  // racing with the very first `progressUpdated` that setState would
+  // have clobbered savedPositionRef's source otherwise.
 
   // Sync the browser document title to the current book title.
   // Keeps the browser history dropdown and tab label useful when
@@ -693,7 +753,8 @@ export default function WebReaderScreen() {
           onRetry={() => {
             setCoreError(null);
             setCoreReady(false);
-            restoredRef.current = false;
+            hasRestoredRef.current = false;
+            pendingReadyRestoreRef.current = false;
           }}
         />
       </View>

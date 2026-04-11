@@ -159,12 +159,30 @@ export async function downloadBook(
   // this scale. On Safari < 17 createWritable may not exist on the
   // public file handle API; if so, the write throws and we surface
   // it to the caller.
+  //
+  // `getFileHandle({create:true})` creates an empty file as soon as
+  // it resolves, so any failure in the subsequent writable path
+  // would leave an orphan zero-byte entry in OPFS. Wrap the whole
+  // write in a try/catch that deletes the entry on failure so we
+  // never accumulate garbage across failed downloads.
+  const fileName = fileNameFor(bookId, format);
   const dir = await opfsRoot();
-  const fh = await dir.getFileHandle(fileNameFor(bookId, format), { create: true });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const writable = await (fh as any).createWritable();
-  await writable.write(blob);
-  await writable.close();
+  const fh = await dir.getFileHandle(fileName, { create: true });
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const writable = await (fh as any).createWritable();
+    try {
+      await writable.write(blob);
+    } finally {
+      // close() must run even on write() failure so the draft isn't
+      // locked; swallow its own errors — the outer catch handles
+      // teardown if it throws.
+      try { await writable.close(); } catch { /* ignore */ }
+    }
+  } catch (err) {
+    try { await dir.removeEntry(fileName); } catch { /* ignore */ }
+    throw err;
+  }
 
   const record: DownloadedBookRecord = {
     bookId,

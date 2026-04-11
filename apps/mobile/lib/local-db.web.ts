@@ -138,11 +138,24 @@ function progressToPublic(row: ProgressRecord): ReadingProgress {
 }
 
 export async function getProgress(bookId: string): Promise<ReadingProgress | null> {
-  const deviceId = getDeviceId();
+  // Return the most recently updated row for this book across ALL
+  // devices, not just the local one. Progress is keyed per-device
+  // server-side so each device owns its LWW slot, but when the
+  // reader opens we want the freshest position regardless of where
+  // it was written — so you can start on phone, pick up on laptop,
+  // and resume exactly where you left off. Mirrors the native
+  // getProgress() behaviour added in f3e1cd8.
   return tx([STORE.progress], "readonly", async ([store]) => {
-    const idx = store.index("by_book_device");
-    const row = await req<ProgressRecord | undefined>(idx.get([bookId, deviceId]));
-    return row ? progressToPublic(row) : null;
+    const idx = store.index("by_book");
+    const rows = await req<ProgressRecord[]>(idx.getAll(IDBKeyRange.only(bookId)));
+    if (rows.length === 0) return null;
+    // Single pass to find the max — faster than sort() for the
+    // typical "one row per device, handful of devices" case.
+    let latest = rows[0];
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i].updatedAt > latest.updatedAt) latest = rows[i];
+    }
+    return progressToPublic(latest);
   });
 }
 
@@ -171,10 +184,18 @@ export async function upsertProgress(
 }
 
 export async function getAllProgress(): Promise<Map<string, ReadingProgress>> {
-  const deviceId = getDeviceId();
+  // Same cross-device rule as getProgress(): the library tile
+  // should show the freshest read-through from any device, not
+  // just this browser's. Walk the whole store (typical size is
+  // devices × books, small enough to sort in JS) and keep the
+  // latest row per bookId. Mirrors the native getAllProgress()
+  // behaviour added in f3e1cd8.
   return tx([STORE.progress], "readonly", async ([store]) => {
-    const idx = store.index("by_device");
-    const rows = await req<ProgressRecord[]>(idx.getAll(IDBKeyRange.only(deviceId)));
+    const rows = await req<ProgressRecord[]>(store.getAll());
+    // Sort ASC so the Map's overwrite semantics keep the final
+    // (latest) entry per book — matches the native SQL `ORDER BY
+    // updated_at ASC` + Map.set loop exactly.
+    rows.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     const map = new Map<string, ReadingProgress>();
     for (const row of rows) map.set(row.bookId, progressToPublic(row));
     return map;
