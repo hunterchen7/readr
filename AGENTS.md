@@ -95,8 +95,9 @@ The implementation spec is `ebook-reader-architecture.md`. Always consult it bef
 ## Project Structure
 
 Follow the monorepo structure from the spec exactly:
-- `apps/mobile` — React Native (Expo)
-- `apps/web` — React + Vite
+- `apps/mobile` — React Native (Expo). Also builds the web client via
+  Expo Web (`pnpm --filter @readr/mobile web`); the old standalone
+  React+Vite dashboard at `apps/web` has been removed.
 - `apps/server` — Hono API
 - `packages/shared` — shared types, constants, Zod validators
 - `packages/sync-engine` — isomorphic sync logic
