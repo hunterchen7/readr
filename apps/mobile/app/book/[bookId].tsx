@@ -18,6 +18,15 @@ import { getProgress } from "../../lib/local-db";
 import { colors, spacing, fontSize } from "../../lib/theme";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
 export default function BookDetailScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const insets = useSafeAreaInsets();
@@ -163,20 +172,28 @@ export default function BookDetailScreen() {
             </View>
           ) : null}
 
-          <View style={styles.detailsCard}>
-            {book.language ? (
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Language</Text>
-                <Text style={styles.detailValue}>{book.language}</Text>
+          {(() => {
+            const rows: { label: string; value: string }[] = [];
+            if (book.language) rows.push({ label: "Language", value: book.language });
+            if (book.totalChapters)
+              rows.push({ label: "Chapters", value: String(book.totalChapters) });
+            if (typeof book.fileSize === "number" && book.fileSize > 0)
+              rows.push({ label: "File size", value: formatFileSize(book.fileSize) });
+            if (rows.length === 0) return null;
+            return (
+              <View style={styles.detailsCard}>
+                {rows.map((row, i) => (
+                  <View
+                    key={row.label}
+                    style={[styles.detailRow, i === rows.length - 1 && styles.detailRowLast]}
+                  >
+                    <Text style={styles.detailLabel}>{row.label}</Text>
+                    <Text style={styles.detailValue}>{row.value}</Text>
+                  </View>
+                ))}
               </View>
-            ) : null}
-            {book.totalChapters ? (
-              <View style={[styles.detailRow, styles.detailRowLast]}>
-                <Text style={styles.detailLabel}>Chapters</Text>
-                <Text style={styles.detailValue}>{book.totalChapters}</Text>
-              </View>
-            ) : null}
-          </View>
+            );
+          })()}
 
           {/* Primary action */}
           <Pressable style={styles.primaryBtn} onPress={handleRead}>

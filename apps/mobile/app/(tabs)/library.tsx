@@ -38,6 +38,7 @@ import {
   Plus,
   ArrowDown,
   ArrowUp,
+  Download,
 } from "lucide-react-native";
 import type { Book } from "@readr/shared";
 
@@ -235,6 +236,16 @@ export default function LibraryScreen() {
   }
 
   function handleBookPress(book: BookWithProgress) {
+    // On the home screen we want a tap to *do* the obvious thing: if the
+    // book isn't downloaded yet, kick off the download right there instead
+    // of routing into the detail screen. Tapping again mid-download is a
+    // no-op since downloadProgress is non-null.
+    if (!book.downloaded) {
+      if (book.downloadProgress == null) {
+        void handleDownload(book.id);
+      }
+      return;
+    }
     router.push(`/book/${book.id}`);
   }
 
@@ -541,11 +552,17 @@ function renderStatusPill(
   if (!item.downloaded) {
     return (
       <View style={[styles.statusPill, styles.statusPillMuted]}>
-        <Text style={styles.statusPillText} numberOfLines={1}>
-          {downloading
-            ? `↓ ${Math.round((item.downloadProgress ?? 0) * 100)}%`
-            : "Not downloaded"}
-        </Text>
+        {downloading ? (
+          <View style={[styles.statusPillFill, { width: `${Math.round((item.downloadProgress ?? 0) * 100)}%` }]} />
+        ) : null}
+        <View style={styles.statusPillRow}>
+          {!downloading ? <Download size={12} color="#555" /> : null}
+          <Text style={[styles.statusPillText, styles.statusPillTextNoPad]} numberOfLines={1}>
+            {downloading
+              ? `Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`
+              : "Download"}
+          </Text>
+        </View>
       </View>
     );
   }
@@ -597,18 +614,25 @@ function renderRow(
         <Text style={styles.rowAuthor} numberOfLines={1}>
           {item.author ?? "Unknown"}
         </Text>
-        <Text
-          style={[
-            styles.rowStatus,
-            status?.tone === "reading" && styles.rowStatusReading,
-          ]}
-        >
-          {!item.downloaded
-            ? downloading
-              ? `Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`
-              : "Tap to download"
-            : (status?.label ?? "")}
-        </Text>
+        {!item.downloaded ? (
+          <View style={styles.rowStatusDownload}>
+            {!downloading ? <Download size={12} color={colors.textMuted} /> : null}
+            <Text style={styles.rowStatus}>
+              {downloading
+                ? `Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`
+                : "Tap to download"}
+            </Text>
+          </View>
+        ) : (
+          <Text
+            style={[
+              styles.rowStatus,
+              status?.tone === "reading" && styles.rowStatusReading,
+            ]}
+          >
+            {status?.label ?? ""}
+          </Text>
+        )}
       </View>
     </Pressable>
   );
@@ -795,6 +819,15 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     paddingHorizontal: 6,
   },
+  statusPillRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+  },
+  statusPillTextNoPad: {
+    paddingHorizontal: 0,
+  },
   statusPillMuted: {
     backgroundColor: colors.backgroundSecondary,
   },
@@ -856,4 +889,10 @@ const styles = StyleSheet.create({
   },
   rowStatus: { fontSize: 11, color: colors.textMuted, marginTop: spacing.xs },
   rowStatusReading: { color: colors.primary, fontWeight: "600" },
+  rowStatusDownload: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: spacing.xs,
+  },
 });
