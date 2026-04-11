@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { View, Text, StyleSheet, Pressable, Alert, PanResponder } from "react-native";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
+import { ErrorFallback } from "../../components/ErrorFallback";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
@@ -222,11 +223,17 @@ export default function ReaderScreen() {
   const ttsSpeak = useTtsStore((s) => s.speak);
   const ttsStop = useTtsStore((s) => s.stop);
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
     queryFn: () => getBook(bookId!),
     enabled: !!bookId,
   });
+
+  // WebView-level load failures — the JS inside might crash or the
+  // HTML source might fail to load entirely. Surfacing this as a
+  // retryable error is the only way out since the WebView renders
+  // nothing on its own when this happens.
+  const [webViewError, setWebViewError] = useState<string | null>(null);
 
 
   const book = data?.book;
@@ -245,9 +252,25 @@ export default function ReaderScreen() {
 
   const _format = data?.book?.format ?? "epub";
   const _sourceUrl = localFileUrl ?? data?.book?.downloadUrl ?? "";
-  const _readerHtml = _sourceUrl
-    ? (_format === "pdf" ? getPdfReaderHtml(_sourceUrl) : getReaderHtml(_sourceUrl, theme.bg, theme.fg))
-    : "";
+  // IMPORTANT: memoize on source+format ONLY — never on theme. The
+  // WebView's `source` prop is compared by reference; if this string
+  // changes react-native-webview tears down and rebuilds the entire
+  // WebView, which loses the user's reading position. Theme colours
+  // are applied post-mount via the `setTheme` message. The HTML only
+  // sees the initial theme so the shell renders in the right colour
+  // during the 100ms before the first setTheme lands.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const _readerHtml = useMemo(
+    () =>
+      _sourceUrl
+        ? _format === "pdf"
+          ? getPdfReaderHtml(_sourceUrl)
+          : getReaderHtml(_sourceUrl, theme.bg, theme.fg)
+        : "",
+    // Only rebuild HTML when source/format change — NOT on theme.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [_sourceUrl, _format],
+  );
 
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
   useEffect(() => {
@@ -776,12 +799,11 @@ export default function ReaderScreen() {
 
   if (error || !book) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.error}>{error?.message ?? "Book not found"}</Text>
-        <Pressable onPress={() => router.back()}>
-          <Text style={styles.link}>Go back</Text>
-        </Pressable>
-      </View>
+      <ErrorFallback
+        title={error ? "Couldn't load book" : "Book not found"}
+        message={error?.message}
+        onRetry={() => refetch()}
+      />
     );
   }
 
@@ -792,6 +814,22 @@ export default function ReaderScreen() {
     icon: p.icon ?? "🔍",
     urlTemplate: p.urlTemplate,
   }));
+
+  if (webViewError) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.bg }]}>
+        <ErrorFallback
+          title="Reader crashed"
+          message={webViewError}
+          retryLabel="Reload"
+          onRetry={() => {
+            setWebViewError(null);
+            webviewRef.current?.reload();
+          }}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -808,6 +846,9 @@ export default function ReaderScreen() {
         domStorageEnabled
         mixedContentMode="always"
         menuItems={[]}
+        onError={(e) => setWebViewError(e.nativeEvent?.description || "WebView failed to load")}
+        onHttpError={(e) => setWebViewError(`HTTP ${e.nativeEvent?.statusCode ?? "?"}: failed to load book resource`)}
+        onRenderProcessGone={() => setWebViewError("Reader process crashed — tap Reload to restart.")}
       />
 
       {controlsVisible ? (
