@@ -1,4 +1,0 @@
-# Cloudflare Pages SPA fallback — every route that isn't a real file
-# rewrites to index.html so client-side routing (TanStack Router) can
-# take over.
-/*    /index.html   200

@@ -1,11 +1,12 @@
 {$DOMAIN:localhost} {
+  # The old React+Vite dashboard was removed — the web client is now
+  # the Expo Web build of apps/mobile and is not yet wired into this
+  # stack. Until it is, Caddy just fronts the API; any non-/api/
+  # request falls through to a 404.
   handle /api/* {
     reverse_proxy api:3000
   }
   handle /health {
     reverse_proxy api:3000
-  }
-  handle {
-    reverse_proxy web:80
   }
 }
