@@ -9,6 +9,15 @@ Readr uses Cloudflare for two different things:
    (`apps/web`) so readers can visit it from any browser without the
    Olares box having to serve HTML.
 
+> **Note:** this doc assumes the **Mode A — Bundled MinIO** deploy
+> from `deploy/OLARES.md`, where the stack runs its own MinIO and
+> proxies it out through the tunnel as `books.reader.example.com`.
+> If you're running **Mode B — External S3** (R2, AWS S3, B2, DO
+> Spaces, …), your bucket is already reachable directly from the
+> internet and you don't need a `books.*` tunnel ingress entry at
+> all — only the `api.*` hostname below still applies. See the
+> "S3 backend modes" section in `deploy/OLARES.md` for details.
+
 You can do either one on its own. The tunnel is only needed so that
 the api/books subdomains are reachable; Pages is purely the UI and
 talks to those subdomains from the client side.

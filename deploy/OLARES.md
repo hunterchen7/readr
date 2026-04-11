@@ -50,9 +50,13 @@ you need to rotate a key or add a new var.
 
 ## Set up `.env` on the box
 
-The compose file reads `.env` from the repo root on the Olares side. Put
-values suitable for the box in there. Replace the placeholder hostnames /
-tokens below with real ones.
+Both compose stacks read a single `.env` from the repo root on the Olares
+side. Put values suitable for the box in there. Replace the placeholder
+hostnames / tokens below with real ones.
+
+Which S3 vars you set depends on which backend mode you pick (see
+[S3 backend modes](#s3-backend-modes) below). The example below is
+**Mode A — Bundled MinIO**.
 
 ```bash
 ssh olares-ebook "cat > ~/readr/.env <<'ENV'
@@ -87,9 +91,10 @@ ENV"
 The deploy is split into two compose files so we can redeploy the app
 without disturbing MinIO:
 
-- `deploy/docker-compose.infra.yml` — Postgres, Redis, MinIO, and the
-  one-shot `minio-init` bucket bootstrap. Long-lived; only touched
-  when you intentionally bump infra.
+- `deploy/docker-compose.infra.yml` — Postgres, Redis, and (under the
+  `local-s3` profile) MinIO plus the one-shot `minio-init` bucket
+  bootstrap. Long-lived; only touched when you intentionally bump
+  infra.
 - `deploy/docker-compose.app.yml` — the Hono `api` (and optional
   `caddy` profile). This is what gets rebuilt and `up -d`'d on every
   push.
@@ -103,6 +108,74 @@ so the `api` container can still resolve `postgres`, `redis`, and
 Cloudflare never caches a poisoned 403/502 at the edge. That whole
 class of cache-poisoning bug is gone.
 
+## S3 backend modes
+
+readr stores uploaded books in an S3-compatible bucket. You have two
+ways to provide that bucket, and you pick between them by whether or
+not you include the `local-s3` compose profile when bringing up infra.
+
+### Mode A — Bundled MinIO (default for self-hosted)
+
+The infra stack includes MinIO and a bucket-bootstrap init container,
+gated behind the `local-s3` profile. Run infra with the profile:
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
+```
+
+This brings up postgres, redis, minio, and minio-init. No additional
+S3-related env vars are required beyond the `.env` example above —
+`S3_ENDPOINT` defaults to `http://minio:9000` (the in-network service
+name) and the app container talks to it via the shared `readr`
+network. You still need to set `S3_PUBLIC_ENDPOINT` to whatever
+hostname the external tunnel/LB terminates books. traffic on.
+
+### Mode B — External S3 (R2, AWS S3, B2, DO Spaces, …)
+
+Skip the `local-s3` profile. Infra becomes just postgres + redis:
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+```
+
+In this mode you're responsible for creating the bucket and its
+credentials in your external provider's console **before** starting
+the app stack — the bundled `minio-init` is gated behind `local-s3`
+and will not run. Set the following in `~/readr/.env`:
+
+| Var                    | R2 example                                            | AWS S3 example        | MinIO-compat example (B2/Linode) |
+| ---------------------- | ----------------------------------------------------- | --------------------- | -------------------------------- |
+| `S3_ENDPOINT`          | `https://<account-id>.r2.cloudflarestorage.com`       | *(leave unset)*       | `https://s3.us-west-004.backblazeb2.com` |
+| `S3_REGION`            | `auto`                                                | `us-east-1`           | `us-west-004`                    |
+| `S3_BUCKET`            | `my-readr-books`                                      | `my-readr-books`      | `my-readr-books`                 |
+| `S3_ACCESS_KEY`        | R2 access key ID                                      | IAM access key ID     | B2 application key ID            |
+| `S3_SECRET_KEY`        | R2 secret                                             | IAM secret            | B2 application key               |
+| `S3_PUBLIC_ENDPOINT`   | `https://books.example.com` (R2 custom domain or dev.r2.dev) | `https://my-readr-books.s3.amazonaws.com` | `https://books.example.com` |
+| `S3_FORCE_PATH_STYLE`  | `false`                                               | `false`               | `true`                           |
+
+Notes:
+
+- `S3_ENDPOINT` in `.env` flows through the app compose file via
+  `${S3_ENDPOINT:-http://minio:9000}`, so setting it in `.env`
+  overrides the default and points the api container at your external
+  provider.
+- AWS S3 itself doesn't need `S3_ENDPOINT` set at all — leave it unset
+  in `.env` and the AWS SDK will resolve the regional endpoint from
+  `S3_REGION`. (The compose override will then fall back to
+  `http://minio:9000`, which is harmless as long as MinIO isn't
+  running — the api container will never connect to it because the
+  server-side env precedence is driven by what the SDK actually uses.
+  If that fallback makes you uneasy, set `S3_ENDPOINT` to the explicit
+  regional host.)
+- `S3_PUBLIC_ENDPOINT` is the origin your clients (mobile/web) will
+  hit directly for presigned downloads — it's signed into the URL.
+  For R2 this is typically your R2 custom domain or public `r2.dev`
+  URL. For AWS S3 it's the virtual-hosted bucket URL.
+- Cloudflared ingress for `books.example.com` is not needed in Mode
+  B — the public S3 host is reachable directly from the internet.
+  Drop the `books.reader.example.com` entry from
+  `~/.cloudflared/config.yml`.
+
 ## Bring up the stack
 
 ### One-time: create the shared network
@@ -115,8 +188,12 @@ ssh olares-ebook "docker network create readr"
 
 ### One-time (or when infra changes): start the infra stack
 
+Pick the command for the S3 backend mode you chose above.
+
+**Mode A — Bundled MinIO:**
+
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
 ```
 
 This starts:
@@ -126,10 +203,21 @@ This starts:
 - `readr-minio-1` — S3 on `:9000`, console on `:9001`, owns `miniodata` volume
 - `readr-minio-init-1` — one-shot bucket bootstrap, exits 0
 
-Leave this running. Only re-run `up -d` against the infra file when
-you deliberately want to bump a version (e.g. `postgres:16` →
-`postgres:17`) or change a healthcheck. **Never bounce it during a
-normal app redeploy.**
+**Mode B — External S3:**
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+```
+
+This starts only:
+
+- `readr-postgres-1` — internal only, owns `pgdata` volume
+- `readr-redis-1` — internal only, owns `redisdata` volume
+
+Leave whichever you chose running. Only re-run `up -d` against the
+infra file when you deliberately want to bump a version (e.g.
+`postgres:16` → `postgres:17`) or change a healthcheck. **Never
+bounce it during a normal app redeploy.**
 
 ### Every deploy: start / restart the app stack
 
@@ -243,13 +331,19 @@ MinIO/Postgres/Redis containers it owns are left completely alone, so
 and Cloudflare's edge cache stays clean. `docker compose` will reuse
 cached image layers for everything that didn't change.
 
-To deliberately bump infra (e.g. a Postgres minor upgrade):
+To deliberately bump infra (e.g. a Postgres minor upgrade), re-run
+the infra stack with the same profile flag you originally used:
 
 ```bash
+# Mode A (bundled MinIO):
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
+
+# Mode B (external S3):
 ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
 ```
 
-Same flag set, just pointed at the other file. Be aware this *will*
-briefly bounce MinIO and may cause `books.hunterchen.ca` to flap, so
-schedule it like any other infra maintenance (and consider purging
-the Cloudflare cache for that hostname after).
+In Mode A this *will* briefly bounce MinIO and may cause
+`books.hunterchen.ca` to flap, so schedule it like any other infra
+maintenance (and consider purging the Cloudflare cache for that
+hostname after). Mode B only touches postgres/redis, so the books
+origin is unaffected.
