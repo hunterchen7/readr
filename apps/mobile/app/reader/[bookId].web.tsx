@@ -44,8 +44,10 @@ import type {
   BookPosition,
   Bookmark,
   Highlight,
+  HighlightColor,
   Note,
 } from "@readr/shared";
+import { DEFAULT_LOOKUP_PROVIDERS } from "@readr/shared";
 import { BookOpen, Settings, Bookmark as BookmarkIcon, ArrowLeft } from "lucide-react-native";
 import { getBook, logReadingSession } from "../../lib/api";
 import {
@@ -55,11 +57,17 @@ import {
   type FoliateOverlayer,
 } from "../../reader-core/reader-core";
 import {
+  createPdfCore,
+  type PdfCoreHandle,
+  type PdfjsLib,
+} from "../../reader-core/pdf-core";
+import {
   upsertProgress,
   getProgress,
   getBookmarks,
   createBookmark,
   deleteBookmark,
+  createHighlight,
   deleteHighlight,
   getHighlights,
   getNotes,
@@ -71,6 +79,7 @@ import {
   DEFAULT_THEME,
   type ReaderTheme,
 } from "../../components/reader/ReaderControls";
+import { ContextMenu } from "../../components/reader/ContextMenu";
 import { TocDrawer } from "../../components/reader/TocDrawer";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { ErrorFallback } from "../../components/ErrorFallback";
@@ -114,6 +123,34 @@ function loadFoliate(): Promise<FoliateGlobals> {
   return foliatePromise;
 }
 
+/**
+ * Lazy-load pdfjs-dist at runtime from /pdf.min.mjs. We can't use
+ * Metro's dynamic `import("pdfjs-dist")` here because pdfjs 4.x's
+ * entry does `import(this.workerSrc)` with a non-literal — Metro
+ * rejects that at parse time with "Invalid call at line 21:
+ * import(this.workerSrc)".
+ *
+ * Sidestep: bundle-webview-assets.mjs copies pdf.min.mjs +
+ * pdf.worker.min.mjs into public/ so they're served as plain static
+ * assets in the exported bundle. Then we import them via a
+ * `new Function(...)` shim that Metro doesn't try to resolve.
+ */
+let pdfjsPromise: Promise<PdfjsLib> | null = null;
+function loadPdfjs(): Promise<PdfjsLib> {
+  if (pdfjsPromise) return pdfjsPromise;
+  pdfjsPromise = (async () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+    const dyn = new Function("url", "return import(url)") as (
+      url: string,
+    ) => Promise<Record<string, unknown>>;
+    const mod = await dyn("/pdf.min.mjs");
+    const pdfjs = ((mod as { default?: PdfjsLib }).default ?? (mod as unknown)) as PdfjsLib;
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    return pdfjs;
+  })();
+  return pdfjsPromise;
+}
+
 export default function WebReaderScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const insets = useSafeAreaInsets();
@@ -132,9 +169,21 @@ export default function WebReaderScreen() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [coreError, setCoreError] = useState<string | null>(null);
   const [coreReady, setCoreReady] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
+  const [selectionCfi, setSelectionCfi] = useState<string | null>(null);
+  const [selectionRect, setSelectionRect] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const [contextMenuVisible, setContextMenuVisible] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const coreRef = useRef<ReaderCoreHandle | null>(null);
+  // Either an EPUB ReaderCoreHandle or a PDF core handle; both
+  // expose the same {init, dispatch, destroy} surface so the React
+  // glue can stay format-agnostic.
+  const coreRef = useRef<ReaderCoreHandle | PdfCoreHandle | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -249,8 +298,18 @@ export default function WebReaderScreen() {
         case "externalLink":
           try { window.open(payload.href, "_blank", "noopener"); } catch { /* ignore */ }
           break;
-        // selectionChanged / showAnnotation / pageText / searchResults
-        // aren't wired up yet — deferred to follow-ups.
+        case "selectionChanged":
+          if (payload?.text) {
+            setSelectedText(payload.text);
+            setSelectionCfi(payload.cfi ?? "");
+            setSelectionRect(payload.rect ?? null);
+            setContextMenuVisible(true);
+          }
+          break;
+        case "selectionCleared":
+          // Don't auto-close the menu — the user might be picking
+          // a color. They close it explicitly via the overlay.
+          break;
         default:
           break;
       }
@@ -258,11 +317,13 @@ export default function WebReaderScreen() {
     [bookId],
   );
 
-  // Mount the reader core + foliate once the book metadata and the
-  // container div are both ready. Prefer an OPFS-cached copy (via
-  // book-cache.web.ts) over the remote downloadUrl so offline
-  // reading works and re-opens are instant.
+  // Mount the reader core once book metadata and container are
+  // ready. Branch on format: EPUB uses foliate via reader-core,
+  // PDF uses pdf-core with dynamically-loaded pdfjs-dist. Either
+  // way we prefer an OPFS-cached copy over the remote URL so
+  // offline reading works and re-opens are instant.
   const remoteUrl = book?.downloadUrl;
+  const format = book?.format ?? "epub";
   useEffect(() => {
     if (!bookId || !remoteUrl || !containerRef.current) return;
     let cancelled = false;
@@ -271,14 +332,11 @@ export default function WebReaderScreen() {
     restoredRef.current = false;
 
     const container = containerRef.current;
-    let core: ReaderCoreHandle | null = null;
+    let core: ReaderCoreHandle | PdfCoreHandle | null = null;
     let blobUrlToRevoke: string | null = null;
 
     (async () => {
       try {
-        const foliate = await loadFoliate();
-        if (cancelled) return;
-
         // Check OPFS first. If we have the book cached, pass its
         // blob URL to the core and skip the network round trip.
         let effectiveUrl = remoteUrl;
@@ -292,22 +350,37 @@ export default function WebReaderScreen() {
           // Cache miss / OPFS unavailable — fall back to network.
         }
 
-        core = createReaderCore({
-          makeBook: foliate.makeBook,
-          Overlayer: foliate.Overlayer,
-          container,
-          fetchBookFile: (url) => fetch(url).then((r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.blob();
-          }),
-          fontBaseUrl: null, // web doesn't ship the bundled Android fonts yet
-          onEvent: handleCoreEvent,
-          onThemeChange: (bg) => {
-            // Keep the container bg in sync; deliberately avoid
-            // touching <html>/<body> so other routes stay clean.
-            container.style.background = bg;
-          },
-        });
+        if (format === "pdf") {
+          const pdfjs = await loadPdfjs();
+          if (cancelled) return;
+          core = createPdfCore({
+            pdfjsLib: pdfjs,
+            container,
+            onEvent: handleCoreEvent,
+            // pdfjs handles its own fetching for http(s) and blob:
+            // URLs, no pre-fetch helper needed on web.
+            fetchBookFile: undefined,
+          });
+        } else {
+          const foliate = await loadFoliate();
+          if (cancelled) return;
+          core = createReaderCore({
+            makeBook: foliate.makeBook,
+            Overlayer: foliate.Overlayer,
+            container,
+            fetchBookFile: (url) => fetch(url).then((r) => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              return r.blob();
+            }),
+            fontBaseUrl: null, // web doesn't ship the bundled Android fonts yet
+            onEvent: handleCoreEvent,
+            onThemeChange: (bg) => {
+              // Keep the container bg in sync; deliberately avoid
+              // touching <html>/<body> so other routes stay clean.
+              container.style.background = bg;
+            },
+          });
+        }
         coreRef.current = core;
         await core.init(effectiveUrl);
       } catch (err) {
@@ -324,11 +397,10 @@ export default function WebReaderScreen() {
         try { URL.revokeObjectURL(blobUrlToRevoke); } catch { /* ignore */ }
       }
     };
-    // Retrigger bootstrap when the remote URL changes (different
-    // book) or bookId flips. Theme/state changes flow through
-    // core.dispatch() below.
+    // Retrigger bootstrap when the remote URL, format, or bookId
+    // changes. Theme/state updates flow through core.dispatch().
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteUrl, bookId]);
+  }, [remoteUrl, bookId, format]);
 
   // Replay theme whenever it changes and the core is live. Also
   // fires the first time the core reports ready, picking up the
@@ -361,6 +433,16 @@ export default function WebReaderScreen() {
       restoredRef.current = true;
     }
   }, [coreReady, currentPosition]);
+
+  // Sync the browser document title to the current book title.
+  // Keeps the browser history dropdown and tab label useful when
+  // multiple books are open in different tabs.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const prev = document.title;
+    if (book?.title) document.title = `${book.title} — Readr`;
+    return () => { document.title = prev; };
+  }, [book?.title]);
 
   // Keyboard shortcuts. Arrow/space advance, Esc closes overlays,
   // Home/End jump to start/end.
@@ -520,6 +602,67 @@ export default function WebReaderScreen() {
     saveReaderPrefs({ theme: next });
   }
 
+  // ── Context menu handlers ──────────────────────────────────────────
+
+  async function handleHighlightFromMenu(color: HighlightColor) {
+    if (!bookId || !selectionCfi) {
+      setContextMenuVisible(false);
+      return;
+    }
+    try {
+      const chapterLabel =
+        toc.find((t) => t.href === currentChapterHref)?.label ?? null;
+      const hl = await createHighlight(
+        bookId,
+        selectionCfi,
+        color,
+        selectedText,
+        chapterLabel,
+        currentPosition?.percentage ?? null,
+      );
+      setHighlights((prev) => [hl, ...prev]);
+      coreRef.current?.dispatch({
+        type: "addHighlight",
+        payload: { cfi: selectionCfi, color },
+      });
+    } catch {
+      Alert.alert("Error", "Failed to save highlight");
+    }
+    setContextMenuVisible(false);
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function handleCopyFromMenu() {
+    if (selectedText) {
+      try {
+        void navigator.clipboard?.writeText(selectedText).catch(() => {});
+      } catch {
+        /* ignore */
+      }
+    }
+    setContextMenuVisible(false);
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function handleLookupFromMenu(url: string) {
+    setContextMenuVisible(false);
+    try {
+      window.open(url, "_blank", "noopener");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const lookupProviders = useMemo(
+    () =>
+      DEFAULT_LOOKUP_PROVIDERS.map((p) => ({
+        name: p.name,
+        icon: p.icon ?? "🔍",
+        urlTemplate: p.urlTemplate,
+      })),
+    [],
+  );
+
   // ── Render ──────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -553,46 +696,6 @@ export default function WebReaderScreen() {
             restoredRef.current = false;
           }}
         />
-      </View>
-    );
-  }
-
-  // PDF runtime port is a follow-up task of #6 — the native PDF
-  // reader lives as a 500-line inline HTML template inside
-  // components/reader/pdf-html.ts and needs a ReaderCore-style
-  // extraction before web can use it. For now, detect the format
-  // and surface a placeholder so users at least get a clean
-  // message instead of a foliate-makeBook crash.
-  if (book.format === "pdf") {
-    return (
-      <View style={[styles.container, styles.center, { backgroundColor: theme.bg }]}>
-        <BookOpen size={48} color={theme.fg} />
-        <Text style={[styles.headerTitle, { color: theme.fg, marginTop: spacing.md }]}>
-          PDF reader coming soon on web
-        </Text>
-        <Text
-          style={{
-            color: theme.fg,
-            opacity: 0.6,
-            textAlign: "center",
-            maxWidth: 420,
-            marginTop: spacing.sm,
-            padding: spacing.lg,
-          }}
-        >
-          Use the "Download file" button on the book detail screen to grab the
-          original PDF, or open the book on mobile. Web PDF rendering is
-          tracked in #6.
-        </Text>
-        <Pressable
-          onPress={() => router.back()}
-          style={[
-            styles.headerButton,
-            { marginTop: spacing.lg, paddingHorizontal: spacing.lg },
-          ]}
-        >
-          <Text style={{ color: theme.fg, fontSize: fontSize.md }}>Back</Text>
-        </Pressable>
       </View>
     );
   }
@@ -694,6 +797,41 @@ export default function WebReaderScreen() {
           </View>
         </>
       ) : null}
+
+      <ContextMenu
+        visible={contextMenuVisible}
+        selectedText={selectedText}
+        anchorRect={selectionRect}
+        onClose={() => {
+          setContextMenuVisible(false);
+          window.getSelection()?.removeAllRanges();
+        }}
+        onHighlight={handleHighlightFromMenu}
+        onNote={() => {
+          // Typed/handwritten note UIs aren't wired on web yet.
+          setContextMenuVisible(false);
+        }}
+        onDraw={() => {
+          setContextMenuVisible(false);
+        }}
+        onCopy={handleCopyFromMenu}
+        onDefine={() => {
+          // No dictionary sheet on web yet — send the user to the
+          // first lookup provider instead.
+          const p = lookupProviders[0];
+          if (p) {
+            const url = p.urlTemplate.replace(
+              "{{query}}",
+              encodeURIComponent(selectedText),
+            );
+            handleLookupFromMenu(url);
+            return;
+          }
+          setContextMenuVisible(false);
+        }}
+        onLookup={handleLookupFromMenu}
+        lookupProviders={lookupProviders}
+      />
 
       <TocDrawer
         visible={showTocDrawer}

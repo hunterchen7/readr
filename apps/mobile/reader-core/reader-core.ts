@@ -733,10 +733,18 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
           capture: true,
           passive: false,
         });
+        // Suppress the native WebView long-press / right-click menu
+        // when a selection exists — our ContextMenu is taking over
+        // in that case. With no selection (right-clicking blank
+        // space on web), fall through so the browser's default menu
+        // still works.
         doc.addEventListener("contextmenu", (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          return false;
+          const sel = doc!.getSelection?.();
+          if (sel && !sel.isCollapsed && sel.toString().trim()) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            return false;
+          }
         });
         let selDebounce: ReturnType<typeof setTimeout> | null = null;
         function checkSelection() {
