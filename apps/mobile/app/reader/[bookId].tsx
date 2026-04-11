@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { View, Text, StyleSheet, Pressable, Alert } from "react-native";
+import { View, Text, StyleSheet, Pressable, Alert, PanResponder } from "react-native";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -81,6 +81,7 @@ export default function ReaderScreen() {
   const [toc, setToc] = useState<TocItem[]>([]);
   const [progress, setProgress] = useState(0);
   const [currentPosition, setCurrentPosition] = useState<BookPosition | null>(null);
+  const [currentChapterHref, setCurrentChapterHref] = useState<string | null>(null);
 
   // Context menu state
   const [contextMenuVisible, setContextMenuVisible] = useState(false);
@@ -143,6 +144,43 @@ export default function ReaderScreen() {
   const [pageInSection, setPageInSection] = useState<number | null>(null);
   const [pagesInSection, setPagesInSection] = useState<number | null>(null);
   const [showGotoDialog, setShowGotoDialog] = useState(false);
+
+  // Scrubber drag state. While the user is touching the bottom
+  // progress bar we render a local preview (not the live `progress`
+  // from the WebView) so the dot tracks the finger 1:1, and only
+  // commit the seek to foliate on release.
+  const [dragFraction, setDragFraction] = useState<number | null>(null);
+  // Track geometry in screen-absolute coordinates, captured via
+  // measureInWindow on layout. We use absolute pageX + width here
+  // (rather than nativeEvent.locationX inside the touch handlers)
+  // because PanResponder's locationX is sometimes reported relative
+  // to a child of the responder element instead of the responder
+  // itself, which makes the dot snap to 0 mid-drag.
+  const trackRef = useRef<View>(null);
+  const trackPageXRef = useRef(0);
+  const trackWidthRef = useRef(0);
+  // Latest fraction from the active touch — kept in a ref so the
+  // release handler can read it without relying on stale closure
+  // state from React.
+  const lastDragFractionRef = useRef(0);
+  // True while the user is actively touching the scrubber. Used by
+  // the progressUpdated message handler to ignore foliate's
+  // background relocate events mid-drag (otherwise the dot, page
+  // number, chapter label, etc. flicker between the old position
+  // and the user's drag position).
+  const isDraggingRef = useRef(false);
+  const fractionFromPageX = useCallback((pageX: number) => {
+    const w = trackWidthRef.current;
+    if (w <= 0) return 0;
+    const x = pageX - trackPageXRef.current;
+    return Math.max(0, Math.min(1, x / w));
+  }, []);
+  const measureTrack = useCallback(() => {
+    trackRef.current?.measureInWindow((x, _y, w) => {
+      trackPageXRef.current = x;
+      trackWidthRef.current = w;
+    });
+  }, []);
 
   // Reading session tracking — we log a session to the server whenever
   // the user leaves the reader, so the stats screen has data to show.
@@ -252,6 +290,48 @@ export default function ReaderScreen() {
     [],
   );
 
+  // Tap- and drag-to-seek on the bottom progress bar. We claim the
+  // gesture on touchdown so a tap anywhere along the bar jumps
+  // straight to that point; drag updates the live preview every
+  // frame; release commits the seek and optimistically updates the
+  // local progress so the dot doesn't flash back to the old
+  // position before foliate's next relocate arrives.
+  const scrubberPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderGrant: (_e, gs) => {
+          // Re-measure once at the start of the gesture in case the
+          // header / progress overlay shifted between mounts.
+          measureTrack();
+          isDraggingRef.current = true;
+          const f = fractionFromPageX(gs.x0);
+          lastDragFractionRef.current = f;
+          setDragFraction(f);
+        },
+        onPanResponderMove: (_e, gs) => {
+          const f = fractionFromPageX(gs.moveX);
+          lastDragFractionRef.current = f;
+          setDragFraction(f);
+        },
+        onPanResponderRelease: () => {
+          const f = lastDragFractionRef.current;
+          isDraggingRef.current = false;
+          sendToWebView("goToLocation", { fraction: f });
+          setProgress(f * 100);
+          setDragFraction(null);
+        },
+        onPanResponderTerminate: () => {
+          isDraggingRef.current = false;
+          setDragFraction(null);
+        },
+      }),
+    [fractionFromPageX, measureTrack, sendToWebView],
+  );
+
   function handleThemeChange(newTheme: ReaderTheme) {
     setTheme(newTheme);
     sendToWebView("setTheme", { ...newTheme, isEink: display.isEink });
@@ -338,6 +418,11 @@ export default function ReaderScreen() {
           }
           break;
         case "progressUpdated": {
+          // Ignore foliate's relocate stream while the user is
+          // actively dragging the scrubber — otherwise the dot,
+          // chapter label, and page number flicker between the
+          // user's drag position and the old foliate position.
+          if (isDraggingRef.current) break;
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
           const position: BookPosition = {
@@ -347,6 +432,7 @@ export default function ReaderScreen() {
             page: msg.payload.currentPage ?? msg.payload.page,
           };
           setCurrentPosition(position);
+          setCurrentChapterHref(msg.payload.chapterHref ?? null);
           const rawPage = msg.payload.currentPage;
           const rawTotal = msg.payload.totalPages;
           if (typeof rawPage === "number" && typeof rawTotal === "number" && rawTotal > 0) {
@@ -747,35 +833,44 @@ export default function ReaderScreen() {
             </Pressable>
           </View>
 
-          <Pressable
-            onPress={() => setShowGotoDialog(true)}
+          <View
             style={[
               styles.progressOverlay,
               { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
             ]}
           >
-            {/* Scrubber track — e-ink uses solid theme.fg/bg since
-                 translucent grays collapse into ghost smudges. */}
+            {/* Scrubber track — drag to seek. Wrapped in a hit-slop
+                area so the finger doesn't have to land precisely on
+                the 4px line. E-ink uses solid theme.fg/bg since
+                translucent grays collapse into ghost smudges. */}
             <View
-              style={[
-                styles.progressTrack,
-                display.isEink && { backgroundColor: theme.fg + "22", borderWidth: 1, borderColor: theme.fg },
-              ]}
+              ref={trackRef}
+              style={styles.progressTrackHitArea}
+              onLayout={measureTrack}
+              {...scrubberPanResponder.panHandlers}
             >
               <View
                 style={[
-                  styles.progressFill,
-                  { width: `${progress}%` },
-                  display.isEink && { backgroundColor: theme.fg },
+                  styles.progressTrack,
+                  display.isEink && { backgroundColor: theme.fg + "22", borderWidth: 1, borderColor: theme.fg },
                 ]}
-              />
-              <View
-                style={[
-                  styles.progressDot,
-                  { left: `${progress}%` },
-                  display.isEink && { backgroundColor: theme.fg },
-                ]}
-              />
+              >
+                <View
+                  style={[
+                    styles.progressFill,
+                    { width: `${dragFraction != null ? dragFraction * 100 : progress}%` },
+                    display.isEink && { backgroundColor: theme.fg },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.progressDot,
+                    { left: `${dragFraction != null ? dragFraction * 100 : progress}%` },
+                    dragFraction != null && styles.progressDotDragging,
+                    display.isEink && { backgroundColor: theme.fg },
+                  ]}
+                />
+              </View>
             </View>
 
             <Text
@@ -822,7 +917,7 @@ export default function ReaderScreen() {
             >
               {`${progress.toFixed(1)}%`}
             </Text>
-          </Pressable>
+          </View>
         </>
       ) : (
         /* Minimal progress bar always visible at bottom.
@@ -872,7 +967,9 @@ export default function ReaderScreen() {
         bookmarks={bookmarks}
         notes={notes}
         highlights={highlights}
+        currentChapterHref={currentChapterHref}
         onGoToChapter={handleGoToChapter}
+        onGoToPage={() => setShowGotoDialog(true)}
         onJumpToBookmark={handleGoToBookmark}
         onDeleteBookmark={(id) => handleDeleteBookmark(id)}
         onJumpToNote={(n) => {
@@ -1039,11 +1136,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
   },
+  // 24px-tall transparent hit area so dragging is forgiving — the
+  // visible track lives inside, vertically centered.
+  progressTrackHitArea: {
+    height: 24,
+    justifyContent: "center",
+    marginBottom: 4,
+  },
   progressTrack: {
     height: 4,
     backgroundColor: "rgba(0,0,0,0.08)",
     borderRadius: 2,
-    marginBottom: 8,
     position: "relative",
   },
   progressFill: {
@@ -1053,12 +1156,20 @@ const styles = StyleSheet.create({
   },
   progressDot: {
     position: "absolute",
-    top: -4,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    top: -6,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: "rgba(0,0,0,0.4)",
-    marginLeft: -6,
+    marginLeft: -8,
+  },
+  progressDotDragging: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    top: -8,
+    marginLeft: -10,
+    backgroundColor: "rgba(0,0,0,0.7)",
   },
   progressChapter: {
     fontSize: 13,

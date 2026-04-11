@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { useState } from "react";
 import { router } from "expo-router";
-import { Home, Trash2 } from "lucide-react-native";
+import { Home, Trash2, Hash } from "lucide-react-native";
 import type { Bookmark, Note, Highlight } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
 import { colors, spacing, fontSize } from "../../lib/theme";
@@ -28,7 +28,11 @@ interface TocDrawerProps {
   bookmarks: Bookmark[];
   notes: Note[];
   highlights: Highlight[];
+  /** href of the chapter currently visible in the reader, used to
+   *  highlight the matching row in the chapters list. */
+  currentChapterHref?: string | null;
   onGoToChapter: (href: string) => void;
+  onGoToPage: () => void;
   onJumpToBookmark: (bookmark: Bookmark) => void;
   onDeleteBookmark: (id: string) => void;
   onJumpToNote: (note: Note) => void;
@@ -45,7 +49,9 @@ export function TocDrawer({
   bookmarks,
   notes,
   highlights,
+  currentChapterHref,
   onGoToChapter,
+  onGoToPage,
   onJumpToBookmark,
   onDeleteBookmark,
   onJumpToNote,
@@ -91,6 +97,21 @@ export function TocDrawer({
             </Text>
           </Pressable>
 
+          {/* Go to specific page */}
+          <Pressable
+            style={styles.backRow}
+            onPress={() => {
+              onClose();
+              onGoToPage();
+            }}
+            accessibilityLabel="Go to page"
+          >
+            <Hash size={18} color={theme.fg} />
+            <Text style={[styles.backText, { color: theme.fg }]}>
+              Go to page…
+            </Text>
+          </Pressable>
+
           {/* Tabs */}
           <View
             style={[styles.tabs, { borderBottomColor: theme.fg + "22" }]}
@@ -127,28 +148,41 @@ export function TocDrawer({
               data={toc}
               keyExtractor={(_, i) => String(i)}
               style={styles.list}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={[
-                    styles.chapterItem,
-                    {
-                      paddingLeft: spacing.lg + item.depth * 16,
-                      borderBottomColor: theme.fg + "11",
-                    },
-                  ]}
-                  onPress={() => {
-                    onGoToChapter(item.href);
-                    onClose();
-                  }}
-                >
-                  <Text
-                    style={[styles.chapterLabel, { color: theme.fg }]}
-                    numberOfLines={1}
+              renderItem={({ item }) => {
+                const isCurrent =
+                  currentChapterHref != null && item.href === currentChapterHref;
+                return (
+                  <Pressable
+                    style={[
+                      styles.chapterItem,
+                      {
+                        paddingLeft: spacing.lg + item.depth * 16,
+                        borderBottomColor: theme.fg + "11",
+                      },
+                      isCurrent && {
+                        backgroundColor: theme.fg + "10",
+                        borderLeftWidth: 3,
+                        borderLeftColor: theme.fg,
+                      },
+                    ]}
+                    onPress={() => {
+                      onGoToChapter(item.href);
+                      onClose();
+                    }}
                   >
-                    {item.label}
-                  </Text>
-                </Pressable>
-              )}
+                    <Text
+                      style={[
+                        styles.chapterLabel,
+                        { color: theme.fg },
+                        isCurrent && { fontWeight: "700" },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              }}
             />
           ) : tab === "bookmarks" ? (
             <FlatList
