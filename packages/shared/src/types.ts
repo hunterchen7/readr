@@ -21,6 +21,8 @@ export interface User {
 export interface FileRecord {
   id: string;
   sha256: string;
+  /** MD5 of the file bytes, for cross-reference with external services. */
+  md5: string | null;
   s3Key: string;
   coverKey: string | null;
   size: number;
