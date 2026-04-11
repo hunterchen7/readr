@@ -43,6 +43,12 @@ interface FoliateOverlayer {
   underline: unknown;
   squiggly: unknown;
 }
+interface FoliateRenderer extends HTMLElement {
+  page?: number;
+  pages?: number;
+  setStyles?(styles: string | [string, string]): void;
+  getContents?(): Array<{ doc: Document; index: number }>;
+}
 interface FoliateView extends HTMLElement {
   open(book: FoliateBook): Promise<void>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,11 +61,7 @@ interface FoliateView extends HTMLElement {
   addAnnotation?(ann: any, remove?: boolean): void;
   getCFI?(index: number, range: Range): string;
   getSectionFractions?(): number[];
-  renderer?: {
-    page?: number;
-    pages?: number;
-    getContents?(): Array<{ doc: Document; index: number }>;
-  };
+  renderer?: FoliateRenderer;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   lastLocation?: any;
 }
@@ -105,20 +107,6 @@ let currentSectionIndex = 0;
 // Theme CSS that gets injected into every new section document.
 let currentThemeCSS = '';
 let currentTheme: Theme = {};
-// Latest CFI we've seen, mirrored from every relocate event the user
-// triggered. Used to restore position across theme changes.
-let currentCfi: string | null = null;
-// Suppresses relocate-driven currentCfi updates while applyTheme is
-// reflowing. The reflow fires intermediate relocate events with the
-// wrong CFI (start of section, page 1, etc.) — if those leak into
-// currentCfi the *next* theme change saves a corrupted value and
-// "restores" you to page 1.
-let suppressCfiUpdates = false;
-// Generation counter for applyTheme. Each call bumps it; in-flight
-// async work checks the generation and bails out if a newer theme
-// change has started, so stale IIFEs can't show the viewer at the
-// wrong time or overwrite state after the user moved on.
-let themeGen = 0;
 // Map of note CFI → noteType ('typed' | 'handwritten'). Foliate's
 // show-annotation event drops custom annotation fields, so we mirror
 // classifications here and consult it when routing a tap.
@@ -270,7 +258,6 @@ function buildThemeCSS(theme: Theme): string {
   const fw = theme.fontWeight || 400;
   const ff = theme.fontFamily || '';
   const marginH = theme.margin ?? 48;
-  const marginV = theme.marginV ?? 24;
 
   const base = [
     fontFaceCSS(),
@@ -299,11 +286,10 @@ function buildThemeCSS(theme: Theme): string {
     // themed border for table cells only.
     `table, th, td { border: 1px solid ${fg} !important; border-collapse: collapse !important; }`,
     `html { font-size: ${fs}px !important; }`,
-    // Keep all user-visible page margins inside the section document
-    // itself. Foliate's `margin` attribute only controls the outer
-    // paginator grid, and host padding is too indirect to be a reliable
-    // page-margin control.
-    `body { margin: 0 !important; padding: ${marginV}px ${marginH}px !important; box-sizing: border-box !important; }`,
+    // Horizontal page inset lives inside the section document. Vertical
+    // top/bottom gutter comes from foliate's paginator `margin`
+    // attribute, which is the renderer primitive intended for it.
+    `body { margin: 0 !important; padding: 0 ${marginH}px !important; box-sizing: border-box !important; }`,
     'img { max-width: 100% !important; height: auto !important; background-color: transparent !important; }',
     'a, a:link, a:visited { text-decoration: underline; }',
   ];
@@ -355,6 +341,19 @@ function injectThemeIntoAllDocs(): void {
   // Also cover currentSectionDoc in case getContents is empty (fresh
   // load, renderer not ready yet).
   if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
+}
+
+function applyThemeStyles(): void {
+  if (!currentThemeCSS) return;
+  try {
+    // Foliate's renderer.setStyles() is the path that updates the
+    // live paginator and calls expand() after the style change. Just
+    // mutating a style tag inside the iframe can leave pagination
+    // stale, which is why the margin controls looked dead.
+    view?.renderer?.setStyles?.(currentThemeCSS);
+  } catch { /* ignore */ }
+  // Keep any already-mounted adjacent docs in sync as a fallback.
+  injectThemeIntoAllDocs();
 }
 
 // Serialized signature of layout-affecting theme fields. We compare
@@ -409,104 +408,31 @@ function applyTheme(theme: Theme): void {
   // foliate's column positions stay put through an in-iframe restyle,
   // so the visible page doesn't jump on a colour-only change.
   currentThemeCSS = buildThemeCSS(theme);
-  if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
+  applyThemeStyles();
 
-  if (!view) return;
+  const renderer = view?.renderer;
+  if (!renderer) return;
 
   // ── Layout work (only when something layout-affecting changed) ───
   if (!layoutChanged) return;
 
-  // Hide the viewer BEFORE any reflow-triggering setAttribute calls.
-  // setAttribute on foliate-view fires attributeChangedCallback →
-  // render() → paint synchronously; if the cover isn't up first, the
-  // user sees a frame of "page 1" before it's hidden.
-  //
-  // On the very first applyTheme call the book is still loading so
-  // the viewer is already empty — we only need to cover on subsequent
-  // (user-triggered) layout changes.
-  const needsRestore = !isFirst;
-  const myGen = needsRestore ? ++themeGen : themeGen;
-  const savedCfi = needsRestore ? currentCfi : null;
-  const cover = document.getElementById('theme-transition-cover');
-  if (needsRestore) {
-    suppressCfiUpdates = true;
-    if (cover) {
-      cover.style.background = bgColor;
-      cover.style.display = 'block';
-    }
-  }
-
-  // Apply attributes/styles. setAttribute on foliate-view triggers
-  // attributeChangedCallback → render() → reflow, which is what
-  // moves us off the user's current page and forces the restore.
-  // Foliate's paginator drops the attribute value straight into a CSS
-  // variable (--_gap, --_max-inline-size, --_max-block-size) and uses
-  // it inside calc()/minmax() as a length. CSS length values need a
-  // unit (other than literal `0`), so bare `99999` silently resolves
-  // to invalid and the cap falls back to foliate's 720px/1440px
-  // default — that's why "0 isn't 0" and the horizontal margin slider
-  // appears to do nothing on wide screens.
-  view.setAttribute('gap', '0px');
-  view.setAttribute('max-inline-size', '99999px');
-  view.setAttribute('max-block-size', '99999px');
-  // The visible page margins now come from the injected section CSS.
-  // Keep foliate's own outer grid gutters disabled so the controls map
-  // 1:1 to the text block.
-  view.setAttribute('margin', '0px');
-  view.style.paddingLeft = '0';
-  view.style.paddingRight = '0';
-  view.style.paddingTop = '0';
-  view.style.paddingBottom = '0';
-
-  if (!needsRestore) return;
+  // Apply layout attributes to foliate's actual paginator, not the
+  // outer foliate-view wrapper. The paginator keeps its own anchor
+  // across render() calls, so we can let it reflow in place instead of
+  // blanking the screen and manually restoring by CFI.
+  // Foliate expects `gap` as a percentage, while the max-* caps and
+  // margin use px lengths. Keep those units aligned with the paginator
+  // contract or its grid math falls back to the defaults.
+  renderer.setAttribute('flow', 'paginated');
+  renderer.setAttribute('gap', '0%');
+  renderer.setAttribute('max-inline-size', '99999px');
+  renderer.setAttribute('max-block-size', '99999px');
+  renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
   sectionPageCounts = {};
   sectionPageCountsLocked = false;
-  (async () => {
-    const stale = () => myGen !== themeGen;
-    // Only the newest IIFE may touch the cover on the way out; stale
-    // IIFEs would otherwise reveal the viewer mid-transition.
-    const hideCover = () => {
-      if (cover) cover.style.display = 'none';
-    };
-    try {
-      try { await document.fonts?.ready; } catch { /* ignore */ }
-      await new Promise((r) => setTimeout(r, 200));
-      if (stale()) return;
-      if (savedCfi && view?.goTo) {
-        try {
-          await view.goTo(savedCfi);
-          post('debug', { msg: `restore gen=${myGen} goTo done` });
-        } catch (err) {
-          post('debug', { msg: `restore gen=${myGen} goTo THREW: ${(err as Error)?.message}` });
-        }
-      } else {
-        post('debug', { msg: `restore gen=${myGen} SKIPPED savedCfi=${savedCfi}` });
-      }
-      if (stale()) return;
-      // Wait two animation frames so the new page actually paints
-      // before we uncover — without this the cover drops a frame
-      // early and the user sees the old/wrong page.
-      await new Promise<void>((r) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => r())),
-      );
-      if (stale()) return;
-      hideCover();
-      if (savedCfi) currentCfi = savedCfi;
-      suppressCfiUpdates = false;
-      await precomputeAllPages();
-      if (stale()) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const loc = (view as any)?.lastLocation;
-      if (loc) {
-        view!.dispatchEvent(new CustomEvent('relocate', { detail: loc }));
-      }
-    } catch {
-      if (!stale()) {
-        hideCover();
-        suppressCfiUpdates = false;
-      }
-    }
-  })();
+  requestAnimationFrame(() => {
+    void precomputeAllPages();
+  });
 }
 
 // Force our bg color onto every element inside the foliate-view's
@@ -716,11 +642,12 @@ async function init(): Promise<void> {
     if (!viewer) throw new Error('#viewer not found');
     view = document.createElement('foliate-view') as FoliateView;
     viewer.appendChild(view);
-
-    view.setAttribute('flow', 'paginated');
-    view.setAttribute('margin', '48px');
-
     await view.open(book);
+    view.renderer?.setAttribute('flow', 'paginated');
+    view.renderer?.setAttribute('gap', '0%');
+    view.renderer?.setAttribute('max-inline-size', '99999px');
+    view.renderer?.setAttribute('max-block-size', '99999px');
+    view.renderer?.setAttribute('margin', `${currentTheme.marginV ?? 24}px`);
 
     // Docs we've already wired up. Each new section gets its own iframe
     // document; track in a WeakSet so re-attachment is idempotent.
@@ -853,14 +780,6 @@ async function init(): Promise<void> {
       ensureAllDocsAttached();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const d = (e as CustomEvent).detail as any;
-      // Mirror the latest CFI for theme-change restoration. Skip if
-      // missing — never overwrite a known-good CFI with null. Also
-      // skip while applyTheme is mid-transition: the reflow fires
-      // intermediate relocate events with start-of-section CFIs that
-      // would corrupt the saved value.
-      if (!suppressCfiUpdates && typeof d.cfi === 'string' && d.cfi) {
-        currentCfi = d.cfi;
-      }
       const frac: number = d.fraction ?? 0;
       const totalSections = book?.sections?.length ?? 1;
       const secIdx = Math.max(0, Math.min(totalSections - 1, d.section?.current ?? 0));

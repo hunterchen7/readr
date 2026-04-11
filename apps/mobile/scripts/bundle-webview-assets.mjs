@@ -77,6 +77,22 @@ try { unlinkSync(entryPath); } catch {}
 
 console.log("✓ foliate-bundle.js");
 
+// ─── reader.ts → reader-bundle.js ──────────────────────────────────
+// The reader client (theming, tap handling, paging, selection, etc)
+// lives in webview-src/reader.ts as real TypeScript. We bundle it here
+// so epub-html.ts can stay a thin HTML shell instead of a 700-line
+// string template that doesn't type-check.
+await build({
+  entryPoints: [join(root, "webview-src", "reader.ts")],
+  bundle: true,
+  format: "iife",
+  outfile: join(outDir, "reader-bundle.js"),
+  platform: "browser",
+  target: "es2020",
+  minify: true,
+});
+console.log("✓ reader-bundle.js");
+
 // ─── pdfjs-dist ────────────────────────────────────────────────────
 const require = createRequire(import.meta.url);
 const pdfjsDir = join(dirname(require.resolve("pdfjs-dist/package.json")), "build");
@@ -89,7 +105,7 @@ console.log("✓ pdf.min.mjs + pdf.worker.min.mjs");
 const androidOut = join(root, "android", "app", "src", "main", "assets", "js");
 try {
   mkdirSync(androidOut, { recursive: true });
-  for (const f of ["foliate-bundle.js", "pdf.min.mjs", "pdf.worker.min.mjs"]) {
+  for (const f of ["foliate-bundle.js", "reader-bundle.js", "pdf.min.mjs", "pdf.worker.min.mjs"]) {
     copyFileSync(join(outDir, f), join(androidOut, f));
   }
   console.log("✓ Copied to android assets");
