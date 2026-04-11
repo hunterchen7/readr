@@ -49,6 +49,7 @@ import {
   ArrowUp,
   Download,
   CloudOff,
+  BookOpen,
 } from "lucide-react-native";
 import type { Book } from "@readr/shared";
 
@@ -57,6 +58,10 @@ type BookWithProgress = Book & {
   downloaded: boolean;
   /** 0..1 when a download is in flight, null when idle or done. */
   downloadProgress: number | null;
+  /** ISO timestamp of the most recent progress update across all devices. */
+  lastReadAt: string | null;
+  /** Chapter label from the last saved position — shown in the Jump-back-in card. */
+  lastReadChapter: string | null;
 };
 
 type SortKey = "recent" | "lastRead" | "title" | "author";
@@ -238,6 +243,8 @@ export default function LibraryScreen() {
           progressPct: localPct ?? serverPct,
           downloaded: downloadedSet.has(b.id),
           downloadProgress: null,
+          lastReadAt: p?.updatedAt ?? null,
+          lastReadChapter: p?.position.chapterLabel ?? null,
         };
       });
       if (!cancelled) setBooksWithProgress(results);
@@ -276,6 +283,30 @@ export default function LibraryScreen() {
       ? filtered
       : filtered.toReversed();
   }, [booksWithProgress, filter, search, sort, sortDir]);
+
+  // Most recently read, partially-finished, locally-available book — shown
+  // in the "Jump back in" card at the top of the library so the user can
+  // resume with a single tap. Gated on filter/search being inactive so the
+  // card doesn't clutter an intentional exploration of a subset.
+  const resumeBook = useMemo(() => {
+    if (filter !== "all" || search.trim()) return null;
+    let best: BookWithProgress | null = null;
+    for (const b of booksWithProgress) {
+      if (!b.lastReadAt) continue;
+      if (b.progressPct <= 0 || b.progressPct >= 98) continue;
+      // On native the reader needs a local copy to render offline. Web
+      // streams everything, so downloaded state doesn't apply there.
+      if (Platform.OS !== "web" && !b.downloaded) continue;
+      if (!best || b.lastReadAt > (best.lastReadAt ?? "")) best = b;
+    }
+    return best;
+  }, [booksWithProgress, filter, search]);
+
+  function handleResume(book: BookWithProgress) {
+    // Skip the detail screen — the whole point of the resume card is
+    // "one tap back into the book", not a detour through metadata.
+    router.push(`/reader/${book.id}`);
+  }
 
   async function handleDownload(bookId: string) {
     setBooksWithProgress((prev) =>
@@ -543,6 +574,8 @@ export default function LibraryScreen() {
         </View>
       ) : null}
 
+      {resumeBook ? renderResumeCard(resumeBook, handleResume) : null}
+
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -661,6 +694,53 @@ export default function LibraryScreen() {
       )}
     </View>
     </DragDropUpload>
+  );
+}
+
+function renderResumeCard(
+  item: BookWithProgress,
+  onPress: (b: BookWithProgress) => void,
+) {
+  const pct = Math.min(100, Math.max(0, item.progressPct));
+  return (
+    <Pressable style={styles.resumeCard} onPress={() => onPress(item)}>
+      <View style={styles.resumeCover}>
+        {item.coverUrl ? (
+          <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
+        ) : (
+          <Text style={styles.resumeCoverText} numberOfLines={3}>
+            {item.title ?? "Untitled"}
+          </Text>
+        )}
+      </View>
+      <View style={styles.resumeBody}>
+        <Text style={styles.resumeLabel}>Jump back in</Text>
+        <Text style={styles.resumeTitle} numberOfLines={1}>
+          {item.title ?? "Untitled"}
+        </Text>
+        <Text style={styles.resumeAuthor} numberOfLines={1}>
+          {item.author ?? "Unknown"}
+        </Text>
+        {item.lastReadChapter ? (
+          <Text style={styles.resumeChapter} numberOfLines={1}>
+            {item.lastReadChapter}
+          </Text>
+        ) : null}
+        <View style={styles.resumeProgressRow}>
+          <View style={styles.resumeProgressTrack}>
+            <View
+              style={[styles.resumeProgressFill, { width: `${pct}%` }]}
+            />
+          </View>
+          <Text style={styles.resumeProgressText}>{pct}%</Text>
+        </View>
+      </View>
+      <BookOpen
+        size={22}
+        color={colors.primary}
+        style={styles.resumeIcon}
+      />
+    </Pressable>
   );
 }
 
@@ -1063,5 +1143,90 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     marginTop: spacing.xs,
+  },
+
+  // "Jump back in" card — sits right under the header so a one-tap
+  // resume is the first thing the user sees on a library re-open.
+  resumeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  resumeCover: {
+    width: 56,
+    aspectRatio: 2 / 3,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 6,
+    overflow: "hidden",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resumeCoverText: {
+    padding: 4,
+    fontSize: 9,
+    color: colors.textMuted,
+    textAlign: "center",
+  },
+  resumeBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  resumeLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.primary,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    marginBottom: 2,
+  },
+  resumeTitle: {
+    fontSize: fontSize.md,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  resumeAuthor: {
+    fontSize: fontSize.xs,
+    color: colors.textSecondary,
+    marginTop: 1,
+  },
+  resumeChapter: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    marginTop: 2,
+    fontStyle: "italic",
+  },
+  resumeProgressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: 6,
+  },
+  resumeProgressTrack: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.borderLight,
+    overflow: "hidden",
+  },
+  resumeProgressFill: {
+    height: "100%",
+    backgroundColor: colors.primary,
+  },
+  resumeProgressText: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontWeight: "600",
+    minWidth: 28,
+    textAlign: "right",
+  },
+  resumeIcon: {
+    alignSelf: "center",
   },
 });
