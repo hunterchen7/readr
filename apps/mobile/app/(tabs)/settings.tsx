@@ -7,8 +7,12 @@ import { clearAllDownloads } from "../../lib/book-cache";
 import { colors, spacing, fontSize } from "../../lib/theme";
 
 export default function SettingsScreen() {
-  const { serverUrl, signOut } = useAuthStore();
-  const { settings, toggleEink } = useDisplayStore();
+  // Explicit selectors — zustand v5 requires them to keep
+  // useSyncExternalStore snapshots stable across renders.
+  const serverUrl = useAuthStore((s) => s.serverUrl);
+  const signOut = useAuthStore((s) => s.signOut);
+  const settings = useDisplayStore((s) => s.settings);
+  const toggleEink = useDisplayStore((s) => s.toggleEink);
 
   function handleClearCache() {
     Alert.alert(

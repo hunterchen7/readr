@@ -75,7 +75,11 @@ function detectEinkDevice(): boolean {
 const DisplayContext = createContext<DisplaySettings>(DEFAULT_SETTINGS);
 
 export function DisplayProvider({ children }: { children: ReactNode }) {
-  const { settings, setIsEink } = useDisplayStore();
+  // Use explicit selectors — zustand v5 requires them, or
+  // useSyncExternalStore's snapshot churns on every render and React
+  // bails with "Maximum update depth exceeded".
+  const settings = useDisplayStore((s) => s.settings);
+  const setIsEink = useDisplayStore((s) => s.setIsEink);
 
   useEffect(() => {
     const isEink = detectEinkDevice();
