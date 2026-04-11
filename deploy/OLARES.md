@@ -251,6 +251,21 @@ infra file when you deliberately want to bump a version (e.g.
 `postgres:16` → `postgres:17`) or change a healthcheck. **Never
 bounce it during a normal app redeploy.**
 
+Wait for postgres (and, in Mode A, minio) to be healthy before
+bringing up the app stack — the api container assumes infra is
+already reachable and will return 500s on every request until it is.
+Quick check:
+
+```bash
+# Mode A:
+ssh olares-ebook "docker compose -f ~/readr/deploy/docker-compose.infra.yml --profile local-s3 ps --format 'table {{.Service}}\t{{.Status}}'"
+
+# Mode B:
+ssh olares-ebook "docker compose -f ~/readr/deploy/docker-compose.infra.yml ps --format 'table {{.Service}}\t{{.Status}}'"
+```
+
+Both `postgres` and (Mode A only) `minio` should show `Up X seconds (healthy)`.
+
 ### Every deploy: start / restart the app stack
 
 ```bash
@@ -264,11 +279,15 @@ This starts (or rebuilds + restarts):
 Caddy is behind a `public` profile and NOT started here — the host's k8s
 ingress already owns :80/:443, and we terminate TLS at Cloudflare anyway.
 
-Cross-stack `depends_on` is not enforceable, so on first start the api
-container may take an extra healthcheck cycle or two while it waits
-for `postgres:5432` and `minio:9000` to be reachable on the `readr`
-network. The container's healthcheck and the server's connect-retry
-handle this — no manual ordering required as long as infra is up.
+**App services assume infra is already up.** Cross-stack `depends_on`
+is not enforceable, so the api compose file does not list one. The
+api container's healthcheck (`fetch /health`) is **liveness only** —
+`/health` is a bare `{status: "ok"}` and the postgres/redis/S3
+clients are all lazy, so the container will report `healthy` even if
+infra is completely down. Until infra comes up, every `/api/*` request
+will return 500. The fix is operational, not technical: bring infra
+up first, wait for it to be healthy (see above), then bring up the
+app stack.
 
 Push the DB schema after the very first build:
 
