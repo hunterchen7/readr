@@ -2,5 +2,19 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "babel.config.js",
+    "metro.config.js",
+    "jest.config.js",
+    "android",
+    "ios",
+    "dist",
+    // Playwright specs have their own type dependencies (@playwright/test)
+    // that aren't installed workspace-wide. The tests directory has its
+    // own optional typecheck when we wire Playwright into CI (#13).
+    "tests",
+    "playwright.config.ts"
+  ]
 }
