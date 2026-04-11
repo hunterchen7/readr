@@ -714,17 +714,29 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
 
   async function init(bookUrl: string): Promise<void> {
     try {
+      // Check `destroyed` after every await below: React can tear
+      // the core down (user navigates away, format flips to pdf,
+      // remoteUrl changes) while we're mid-load. Without these
+      // guards, the init continues to run on a half-zombie core,
+      // eventually hitting `view.addEventListener(...)` with `view`
+      // null'd out by destroy() and throwing silently — harmless
+      // because post() is a no-op on destroyed cores, but it
+      // keeps pdfjs/foliate doing work for a dead screen and
+      // attaches event listeners that outlive their intended scope.
       const blob = await deps.fetchBookFile(bookUrl);
+      if (destroyed) return;
       const file = new File([blob], "book.epub", {
         type: blob.type || "application/epub+zip",
       });
       bookFile = file;
 
       book = await deps.makeBook(file);
+      if (destroyed) return;
 
       view = document.createElement("foliate-view") as FoliateView;
       deps.container.appendChild(view);
       await view.open(book);
+      if (destroyed) return;
       view.renderer?.setAttribute("flow", "paginated");
       view.renderer?.setAttribute("gap", "0%");
       view.renderer?.setAttribute("max-inline-size", "99999px");
@@ -930,6 +942,7 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
       try {
         await view.goTo(book.toc?.[0]?.href ?? book.sections?.[0]?.id ?? 0);
       } catch { /* ignore */ }
+      if (destroyed) return;
       ensureAllDocsAttached();
 
       post("ready", {});

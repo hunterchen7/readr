@@ -486,16 +486,22 @@ export function createPdfCore(deps: PdfCoreDeps): PdfCoreHandle {
       let src: string | { data: ArrayBuffer } = bookUrl;
       if (deps.fetchBookFile) {
         const blob = await deps.fetchBookFile(bookUrl);
+        if (destroyed) return;
         const buf = await blob.arrayBuffer();
+        if (destroyed) return;
         src = { data: buf };
       }
 
       const task = pdfjsLib.getDocument(src);
       pdfDoc = await task.promise;
+      if (destroyed) return;
       totalPages = pdfDoc.numPages;
 
       host.addEventListener("scroll", onScroll, { passive: true });
+      // renderAllPages has its own destroyed checks in the page
+      // loop; nothing extra to do here.
       await renderAllPages();
+      if (destroyed) return;
 
       post("ready", { totalPages });
       post("tocLoaded", {
@@ -506,6 +512,7 @@ export function createPdfCore(deps: PdfCoreDeps): PdfCoreHandle {
         })),
       });
     } catch (err) {
+      if (destroyed) return;
       post("error", { message: err instanceof Error ? err.message : String(err) });
       throw err;
     }

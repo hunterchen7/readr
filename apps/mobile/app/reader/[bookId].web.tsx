@@ -169,6 +169,12 @@ export default function WebReaderScreen() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [coreError, setCoreError] = useState<string | null>(null);
   const [coreReady, setCoreReady] = useState(false);
+  // Epoch bumped on retry to force the bootstrap useEffect to
+  // re-fire when nothing in the query data has changed. Without it,
+  // clicking "Retry" on a coreError would just toggle coreError
+  // without re-creating the core, and the user would be stuck on
+  // the loading spinner forever.
+  const [coreEpoch, setCoreEpoch] = useState(0);
   const [selectedText, setSelectedText] = useState("");
   const [selectionCfi, setSelectionCfi] = useState<string | null>(null);
   const [selectionRect, setSelectionRect] = useState<{
@@ -500,10 +506,11 @@ export default function WebReaderScreen() {
         try { URL.revokeObjectURL(blobUrlToRevoke); } catch { /* ignore */ }
       }
     };
-    // Retrigger bootstrap when the remote URL, format, or bookId
-    // changes. Theme/state updates flow through core.dispatch().
+    // Retrigger bootstrap when the remote URL, format, bookId, or
+    // coreEpoch (manual retry) changes. Theme/state updates flow
+    // through core.dispatch() without re-firing this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteUrl, bookId, format]);
+  }, [remoteUrl, bookId, format, coreEpoch]);
 
   // Replay theme whenever it changes and the core is live. Also
   // fires the first time the core reports ready, picking up the
@@ -662,13 +669,21 @@ export default function WebReaderScreen() {
   }
 
   function handleGoToBookmark(bm: Bookmark) {
+    // Prefer the most precise locator we have: cfi (exact range),
+    // then page (PDF bookmarks from the native app — matches
+    // native's handleGoToBookmark in f3e1cd8), then fraction as a
+    // last-resort approximation. Cross-device syncs from the
+    // native PDF reader set `page` but not `cfi`, so skipping the
+    // page branch would land the user on a fraction-approximated
+    // scroll position that's usually off by one.
+    const core = coreRef.current;
+    if (!core) return;
     if (bm.position.cfi) {
-      coreRef.current?.dispatch({
-        type: "goToLocation",
-        payload: { cfi: bm.position.cfi },
-      });
+      core.dispatch({ type: "goToLocation", payload: { cfi: bm.position.cfi } });
+    } else if (bm.position.page != null) {
+      core.dispatch({ type: "goToLocation", payload: { page: bm.position.page } });
     } else {
-      coreRef.current?.dispatch({
+      core.dispatch({
         type: "goToLocation",
         payload: { fraction: bm.position.percentage / 100 },
       });
@@ -839,6 +854,11 @@ export default function WebReaderScreen() {
             setCoreReady(false);
             hasRestoredRef.current = false;
             pendingReadyRestoreRef.current = false;
+            // Bump the epoch so the bootstrap effect actually
+            // re-runs. Clearing coreError + coreReady alone would
+            // only re-render into the loading branch without
+            // re-creating the core.
+            setCoreEpoch((e) => e + 1);
           }}
         />
       </View>
