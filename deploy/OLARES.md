@@ -50,60 +50,251 @@ you need to rotate a key or add a new var.
 
 ## Set up `.env` on the box
 
-The compose file reads `.env` from the repo root on the Olares side. Put
-values suitable for the box in there. Replace the placeholder hostnames /
-tokens below with real ones.
+Both compose stacks read a single `.env` from the repo root on the Olares
+side (i.e. `~/readr/.env`). This file is the **single source of truth**
+for every secret and endpoint — there are no `${VAR:-default}` fallbacks
+in the compose files anymore, so a missing var means the container
+refuses to boot loudly instead of silently running on a default
+password. (Compose's interpolation reads `.env` from the compose-file
+directory, not from `../.env`, so any interpolation against the
+operator's `.env` is a footgun. We removed it.)
+
+The fastest way to seed `~/readr/.env` is to copy the in-repo template:
 
 ```bash
-ssh olares-ebook "cat > ~/readr/.env <<'ENV'
-DATABASE_URL=postgresql://reader:password@localhost:5432/reader
-REDIS_URL=redis://localhost:6379
-
-S3_ENDPOINT=http://localhost:9000
-# Update this once your cloudflared tunnel hostname is live. It's the
-# origin clients (mobile app, web dashboard) will hit for presigned book
-# downloads, so it MUST match the hostname the tunnel terminates at.
-# For LAN-only testing: http://<olares-lan-ip>:9000
-S3_PUBLIC_ENDPOINT=https://books.example.com
-S3_BUCKET=reader-dev
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_REGION=auto
-S3_FORCE_PATH_STYLE=true
-
-PUBLIC_URL=https://reader.example.com
-PORT=3000
-NODE_ENV=production
-LOG_LEVEL=info
-MAX_UPLOAD_SIZE_MB=500
-DEFAULT_STORAGE_QUOTA_MB=4096
-
-TTS_ENABLED=false
-ENV"
+scp deploy/.env.example olares-ebook:~/readr/.env
+ssh olares-ebook "$EDITOR ~/readr/.env"
 ```
+
+Required keys (every one of these must be set):
+
+| Var                    | Notes                                                                 |
+| ---------------------- | --------------------------------------------------------------------- |
+| `POSTGRES_USER`        | Read by the postgres image at first-boot init (e.g. `reader`)         |
+| `POSTGRES_PASSWORD`    | Pick a strong secret. Used by both postgres init and `DATABASE_URL`   |
+| `POSTGRES_DB`          | Database name (e.g. `reader`)                                         |
+| `DATABASE_URL`         | `postgresql://<POSTGRES_USER>:<POSTGRES_PASSWORD>@postgres:5432/<POSTGRES_DB>` — host **must** be `postgres` (in-network DNS) |
+| `REDIS_URL`            | `redis://redis:6379` — host **must** be `redis`                       |
+| `S3_BUCKET`            | Bucket name                                                           |
+| `S3_ACCESS_KEY`        | S3 access key                                                         |
+| `S3_SECRET_KEY`        | S3 secret                                                             |
+| `S3_REGION`            | `auto` for R2/MinIO, real region (e.g. `us-east-1`) for AWS           |
+| `S3_FORCE_PATH_STYLE`  | `true` for MinIO/B2/some Linode, `false` for AWS S3 and R2            |
+| `S3_PUBLIC_ENDPOINT`   | Externally-reachable URL the api concatenates `/<bucket>/<key>` onto. **Must be path-style** (no bucket in the hostname) |
+| `PUBLIC_URL`           | The public origin of the api, e.g. `https://api.reader.example.com`   |
+| `PORT`                 | `3000`                                                                |
+| `NODE_ENV`             | `production`                                                          |
+| `LOG_LEVEL`            | `info`                                                                |
+| `MAX_UPLOAD_SIZE_MB`   | e.g. `500`                                                            |
+| `DEFAULT_STORAGE_QUOTA_MB` | e.g. `4096`                                                       |
+| `TTS_ENABLED`          | `false` unless you've started the GPU overlay                         |
+
+Mode A (bundled MinIO) additionally requires:
+
+| Var                    | Notes                                                                 |
+| ---------------------- | --------------------------------------------------------------------- |
+| `MINIO_ROOT_USER`      | Read by both `minio` and `minio-init` containers                      |
+| `MINIO_ROOT_PASSWORD`  | Pick a strong secret. Must equal `S3_SECRET_KEY` (same credential)    |
+| `S3_ENDPOINT`          | `http://minio:9000` — in-network DNS name of the bundled MinIO        |
+| `S3_FORCE_PATH_STYLE`  | `true` (MinIO requires path-style)                                    |
+
+Mode B (external S3) is described under
+[S3 backend modes](#s3-backend-modes) below — copy the matching block
+out of `deploy/.env.example` and delete the Mode A block.
+
+Optional keys (`RESEND_API_KEY`, `RESEND_FROM`, `TTS_*`, etc.) live in
+the same file — see `deploy/.env.example` for the full annotated list.
+
+## Two-stack layout
+
+The deploy is split into two compose files so we can redeploy the app
+without disturbing MinIO:
+
+- `deploy/docker-compose.infra.yml` — Postgres, Redis, and (under the
+  `local-s3` profile) MinIO plus the one-shot `minio-init` bucket
+  bootstrap. Long-lived; only touched when you intentionally bump
+  infra.
+- `deploy/docker-compose.app.yml` — the Hono `api` (and optional
+  `caddy` profile). This is what gets rebuilt and `up -d`'d on every
+  push.
+
+Both stacks attach to a shared external Docker network named `readr`,
+so the `api` container can still resolve `postgres`, `redis`, and
+`minio` by their service names across stacks.
+
+**Why split?** App redeploys no longer bounce MinIO, which means
+`books.hunterchen.ca` never goes 5xx during a deploy, which means
+Cloudflare never caches a poisoned 403/502 at the edge. That whole
+class of cache-poisoning bug is gone.
+
+## S3 backend modes
+
+readr stores uploaded books in an S3-compatible bucket. You have two
+ways to provide that bucket, and you pick between them by whether or
+not you include the `local-s3` compose profile when bringing up infra.
+
+### Mode A — Bundled MinIO (default for self-hosted)
+
+The infra stack includes MinIO and a bucket-bootstrap init container,
+gated behind the `local-s3` profile. Run infra with the profile:
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
+```
+
+This brings up postgres, redis, minio, and minio-init. In addition to
+the required keys table above, your `~/readr/.env` MUST contain the
+MinIO-specific block:
+
+- `MINIO_ROOT_USER` (used by both `minio` and `minio-init`)
+- `MINIO_ROOT_PASSWORD` (must equal `S3_SECRET_KEY` — same credential)
+- `S3_ENDPOINT=http://minio:9000` (the in-network DNS name; the api
+  container reaches it over the shared `readr` network)
+- `S3_FORCE_PATH_STYLE=true` (MinIO requires path-style addressing —
+  the server now defaults this to `false` so AWS/R2 work out of the
+  box, so MinIO operators must opt in explicitly)
+- `S3_PUBLIC_ENDPOINT` set to whatever hostname the external tunnel/LB
+  terminates books. traffic on (e.g. `https://books.example.com`)
+
+### Mode B — External S3 (R2, AWS S3, B2, DO Spaces, …)
+
+Skip the `local-s3` profile. Infra becomes just postgres + redis:
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+```
+
+In this mode you're responsible for creating the bucket and its
+credentials in your external provider's console **before** starting
+the app stack — the bundled `minio-init` is gated behind `local-s3`
+and will not run. Set the following in `~/readr/.env`:
+
+| Var                    | R2 example                                            | AWS S3 example        | MinIO-compat example (B2/Linode) |
+| ---------------------- | ----------------------------------------------------- | --------------------- | -------------------------------- |
+| `S3_ENDPOINT`          | `https://<account-id>.r2.cloudflarestorage.com`       | *(leave unset)*       | `https://s3.us-west-004.backblazeb2.com` |
+| `S3_REGION`            | `auto`                                                | `us-east-1`           | `us-west-004`                    |
+| `S3_BUCKET`            | `my-readr-books`                                      | `my-readr-books`      | `my-readr-books`                 |
+| `S3_ACCESS_KEY`        | R2 access key ID                                      | IAM access key ID     | B2 application key ID            |
+| `S3_SECRET_KEY`        | R2 secret                                             | IAM secret            | B2 application key               |
+| `S3_PUBLIC_ENDPOINT`   | `https://books.example.com` (R2 custom domain or dev.r2.dev) | `https://s3.us-east-1.amazonaws.com` (path-style) | `https://books.example.com` |
+| `S3_FORCE_PATH_STYLE`  | `false`                                               | `false`               | `true`                           |
+
+> `S3_PUBLIC_ENDPOINT` must be **path-style** (no bucket in the
+> hostname). The api concatenates `/${bucket}/${key}` at URL-generation
+> time in `apps/server/src/services/storage.ts`, so passing
+> `https://my-bucket.s3.amazonaws.com` would yield
+> `https://my-bucket.s3.amazonaws.com/my-bucket/<key>` and 404 on every
+> download. Use the regional path-style host
+> (`https://s3.<region>.amazonaws.com`) for AWS, your R2 custom domain
+> for R2, and the tunnel hostname for Mode A MinIO.
+
+Notes:
+
+- `S3_ENDPOINT` is now optional. The server schema accepts an unset
+  value, and the api only passes `endpoint:` to the AWS SDK when it's
+  set. For AWS S3, **leave `S3_ENDPOINT` unset entirely** in `.env`
+  and the SDK will resolve the regional endpoint from `S3_REGION`.
+  Setting any value (even the right one) pins the client to that host.
+- `S3_FORCE_PATH_STYLE` now defaults to `false`. AWS S3 and R2 use
+  virtual-hosted addressing and need `false`; MinIO and some
+  B2/Linode endpoints need `true`. Set it explicitly in `.env` for
+  the backend you use.
+- `S3_PUBLIC_ENDPOINT` is the origin your clients (mobile/web) will
+  hit directly for presigned downloads — it's signed into the URL.
+  For R2 this is typically your R2 custom domain or public `r2.dev`
+  URL. For AWS S3 see the path-style note below.
+- Cloudflared ingress for `books.example.com` is not needed in Mode
+  B — the public S3 host is reachable directly from the internet.
+  Drop the `books.reader.example.com` entry from
+  `~/.cloudflared/config.yml`.
 
 ## Bring up the stack
 
+### One-time: create the shared network
+
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml up -d --build"
+ssh olares-ebook "docker network create readr"
 ```
 
-This starts:
+(Idempotent — re-running just prints `network with name readr already exists` and exits non-zero, which is fine.)
+
+### One-time (or when infra changes): start the infra stack
+
+Pick the command for the S3 backend mode you chose above.
+
+**Mode A — Bundled MinIO:**
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
+```
+
+This starts (Compose project name resolves to `deploy` from the
+compose-file directory, which means containers and volumes pick up
+the existing `deploy_*` names from the pre-split deploy):
+
+- `deploy-postgres-1` — internal only, owns `deploy_pgdata` volume
+- `deploy-redis-1` — internal only, owns `deploy_redisdata` volume
+- `deploy-minio-1` — S3 on `:9000`, console on `:9001`, owns `deploy_miniodata` volume
+- `deploy-minio-init-1` — one-shot bucket bootstrap, exits 0
+
+**Mode B — External S3:**
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+```
+
+This starts only:
+
+- `deploy-postgres-1` — internal only, owns `deploy_pgdata` volume
+- `deploy-redis-1` — internal only, owns `deploy_redisdata` volume
+
+Leave whichever you chose running. Only re-run `up -d` against the
+infra file when you deliberately want to bump a version (e.g.
+`postgres:16` → `postgres:17`) or change a healthcheck. **Never
+bounce it during a normal app redeploy.**
+
+Wait for postgres (and, in Mode A, minio) to be healthy before
+bringing up the app stack — the api container assumes infra is
+already reachable and will return 500s on every request until it is.
+Quick check:
+
+```bash
+# Mode A:
+ssh olares-ebook "docker compose -f ~/readr/deploy/docker-compose.infra.yml --profile local-s3 ps --format 'table {{.Service}}\t{{.Status}}'"
+
+# Mode B:
+ssh olares-ebook "docker compose -f ~/readr/deploy/docker-compose.infra.yml ps --format 'table {{.Service}}\t{{.Status}}'"
+```
+
+Both `postgres` and (Mode A only) `minio` should show `Up X seconds (healthy)`.
+
+### Every deploy: start / restart the app stack
+
+```bash
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d --build"
+```
+
+This starts (or rebuilds + restarts):
 
 - `deploy-api-1` — Hono server on `:3000`
-- `deploy-web-1` — nginx serving the React dashboard on `:8080`
-- `deploy-postgres-1` — internal only
-- `deploy-redis-1` — internal only
-- `deploy-minio-1` — S3 on `:9000`, console on `:9001`
-- `deploy-minio-init-1` — one-shot bucket bootstrap, exits 0
 
 Caddy is behind a `public` profile and NOT started here — the host's k8s
 ingress already owns :80/:443, and we terminate TLS at Cloudflare anyway.
 
+**App services assume infra is already up.** Cross-stack `depends_on`
+is not enforceable, so the api compose file does not list one. The
+api container's healthcheck (`fetch /health`) is **liveness only** —
+`/health` is a bare `{status: "ok"}` and the postgres/redis/S3
+clients are all lazy, so the container will report `healthy` even if
+infra is completely down. Until infra comes up, every `/api/*` request
+will return 500. The fix is operational, not technical: bring infra
+up first, wait for it to be healthy (see above), then bring up the
+app stack.
+
 Push the DB schema after the very first build:
 
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml \
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml \
   exec -T api sh -c 'cd /app/apps/server && pnpm exec drizzle-kit push --force'"
 ```
 
@@ -127,26 +318,40 @@ opening ports on the Olares host. You'll need:
 
 ### Ingress rules
 
-The stack has three distinct HTTP origins that the client talks to directly.
-Pick subdomains for each in your Cloudflare zone and point them at the
-matching container port via `~/.cloudflared/config.yml` (or the dashboard):
+Pick subdomains in your Cloudflare zone and point them at the matching
+container port via `~/.cloudflared/config.yml` (or the dashboard).
+Mode A operators need both `api.*` and `books.*`; Mode B operators
+need only `api.*` because their external S3 provider serves the
+bucket directly from its own host.
+
+**Mode A — bundled MinIO:**
 
 ```yaml
 tunnel: <your-tunnel-id>
 credentials-file: /home/ebook-deploy/.cloudflared/<your-tunnel-id>.json
 
 ingress:
-  # React web dashboard
-  - hostname: reader.example.com
-    service: http://localhost:8080
-
-  # Hono API — the mobile app + web dashboard both hit this
+  # Hono API — the mobile app hits this
   - hostname: api.reader.example.com
     service: http://localhost:3000
 
   # MinIO S3 endpoint used by presigned book/cover downloads
   - hostname: books.reader.example.com
     service: http://localhost:9000
+
+  - service: http_status:404
+```
+
+**Mode B — external S3 (R2/AWS/B2/DO Spaces):** drop the `books.*`
+row entirely; your provider already serves the bucket directly.
+
+```yaml
+tunnel: <your-tunnel-id>
+credentials-file: /home/ebook-deploy/.cloudflared/<your-tunnel-id>.json
+
+ingress:
+  - hostname: api.reader.example.com
+    service: http://localhost:3000
 
   - service: http_status:404
 ```
@@ -170,10 +375,14 @@ And restart the api container so presigned URLs come back with the right
 origin:
 
 ```bash
-ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml restart api"
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d api"
 ```
 
-On the mobile and web clients, set the server URL to
+(Use `up -d` rather than `restart` so the container picks up the new
+`.env` values — `restart` reuses the existing env baked into the
+container at create time.)
+
+On the mobile client (and the Expo Web build), set the server URL to
 `https://api.reader.example.com` on the sign-in screen and paste or generate
 a new token.
 
@@ -181,7 +390,34 @@ a new token.
 
 1. From the laptop: `git push`
 2. Rsync again (see above)
-3. `ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.yml up -d --build api web"`
+3. `ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.app.yml up -d --build api"`
 
-Only rebuild the containers whose source changed. `docker compose` will
-reuse the cached layers for everything else.
+This only touches the app stack — `docker-compose.infra.yml` and the
+MinIO/Postgres/Redis containers it owns are left completely alone, so
+`books.hunterchen.ca` keeps serving uninterrupted through the deploy
+and Cloudflare's edge cache stays clean. `docker compose` will reuse
+cached image layers for everything that didn't change.
+
+To deliberately bump infra (e.g. a Postgres minor upgrade), re-run
+the infra stack with the same profile flag you originally used:
+
+```bash
+# Mode A (bundled MinIO):
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d"
+
+# Mode B (external S3):
+ssh olares-ebook "cd ~/readr && docker compose -f deploy/docker-compose.infra.yml up -d"
+```
+
+In Mode A this *will* briefly bounce MinIO and may cause the
+`books.*` host to flap, so schedule it like any other infra
+maintenance and purge the Cloudflare cache for the books hostname
+afterwards to make sure no transient failure response sticks around
+at the edge. Dashboard path:
+
+> Cloudflare → your zone → **Caching → Configuration → Purge Cache →
+> Purge By Hostname** → enter `books.hunterchen.ca` (or whatever your
+> books hostname is) → **Purge**.
+
+Mode B only touches postgres/redis, so the books origin is unaffected
+and no cache purge is needed.

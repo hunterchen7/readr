@@ -1,9 +1,32 @@
+# GPU overlay for the TTS worker.
+#
+# This is an overlay on deploy/docker-compose.app.yml. Bring it up
+# alongside the app stack with:
+#
+#   docker compose \
+#     -f deploy/docker-compose.app.yml \
+#     -f deploy/docker-compose.gpu.yml \
+#     up -d --build
+#
+# Prereq: the infra stack must already be running and the shared
+# `readr` Docker network must exist (the infra stack creates the
+# postgres / redis / minio service names that the worker resolves
+# over this network):
+#
+#   docker network create readr
+#   docker compose -f deploy/docker-compose.infra.yml --profile local-s3 up -d
+#
+# The worker reads REDIS_URL from ../.env (must point at the in-network
+# DNS name `redis://redis:6379`, same as the api container).
+
 services:
   tts-worker:
     build:
       context: ../services/tts-worker
       dockerfile: Dockerfile
     env_file: ../.env
+    networks:
+      - readr
     volumes:
       - tts-models:/models
     deploy:
@@ -13,8 +36,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    depends_on:
-      - redis
 
 volumes:
   tts-models:
+
+networks:
+  readr:
+    external: true
