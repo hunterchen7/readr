@@ -469,9 +469,19 @@ export default function ReaderScreen() {
           for (const [cfi, noteType] of seenNoteCfis) {
             sendToWebView("addNote", { cfi, noteType });
           }
-          // Restore saved position
-          if (currentPosition?.cfi) {
-            sendToWebView("goToLocation", { cfi: currentPosition.cfi });
+          // Restore saved position via fraction, not CFI. Each device
+          // lays the book out differently (font, margin, viewport), so
+          // percentage is the only anchor that survives a cross-device
+          // resume cleanly — a CFI from one layout can land on the
+          // wrong paragraph when the other device paginates
+          // differently.
+          if (currentPosition) {
+            const pct = currentPosition.percentage;
+            if (typeof pct === "number" && pct > 0) {
+              sendToWebView("goToLocation", { fraction: pct / 100 });
+            } else if (currentPosition.cfi) {
+              sendToWebView("goToLocation", { cfi: currentPosition.cfi });
+            }
           }
           break;
         case "progressUpdated": {

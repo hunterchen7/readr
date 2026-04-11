@@ -17,6 +17,7 @@ import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
 import { getProgress } from "../../lib/local-db";
 import { downloadFile } from "../../lib/download-file";
+import { useSyncStatus } from "../../lib/sync-status";
 import { colors, spacing, fontSize } from "../../lib/theme";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { ErrorFallback } from "../../components/ErrorFallback";
@@ -34,6 +35,7 @@ export default function BookDetailScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
+  const runSyncNow = useSyncStatus((s) => s.sync);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["book", bookId],
@@ -67,16 +69,24 @@ export default function BookDetailScreen() {
 
   // Refetch on focus so coming back from the reader (or from another
   // device's edit landing via sync) reflects fresh metadata + the
-  // current progress percentage.
+  // current progress percentage. Pulls remote changes first so any
+  // cross-device progress update lands in local SQLite before we
+  // re-read it; failures are non-fatal (offline still renders the
+  // cached value).
   useFocusEffect(
     useCallback(() => {
       if (!bookId) return;
-      queryClient.invalidateQueries({ queryKey: ["book", bookId] });
       (async () => {
+        try {
+          await runSyncNow();
+        } catch {
+          /* non-fatal */
+        }
+        queryClient.invalidateQueries({ queryKey: ["book", bookId] });
         const p = await getProgress(bookId);
         if (p) setProgressPct(Math.round(p.position.percentage ?? 0));
       })();
-    }, [bookId, queryClient]),
+    }, [bookId, queryClient, runSyncNow]),
   );
 
   async function handleDownload() {

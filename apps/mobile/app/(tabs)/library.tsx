@@ -155,12 +155,16 @@ export default function LibraryScreen() {
   useFocusEffect(
     useCallback(() => {
       setFocusCount((c) => c + 1);
-      // Refetch the server library on every focus so progress %, new
-      // books, and metadata edits picked up on another device show up
-      // when the user comes back to the library tab — including from
-      // the reader's "back to library" action.
-      queryClient.invalidateQueries({ queryKey: ["books"] });
-    }, [queryClient]),
+      // Pull remote changes before re-rendering so progress from
+      // other devices lands in local SQLite first, then invalidate
+      // the books query so the list reflects the new data. Failures
+      // are non-fatal — the local cache still renders offline.
+      runSyncNow()
+        .catch(() => {})
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: ["books"] });
+        });
+    }, [queryClient, runSyncNow]),
   );
 
   // Hydrate each book with its locally-stored progress percentage and

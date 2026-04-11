@@ -108,6 +108,13 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
   // without a full version-tracking table.
   await addColumnIfMissing(database, "highlights", "chapter_label", "TEXT");
   await addColumnIfMissing(database, "highlights", "percentage", "REAL");
+
+  // One-time migration for entities created before `generateId()` was
+  // switched to UUID v4. Legacy IDs look like `1775770007700-eia8fhb`
+  // and fail the server's `z.string().uuid()` sync validator, which
+  // means the entire push payload 400s and nothing drains. Reassign
+  // fresh UUIDs to any stragglers and re-enqueue their creates.
+  await migrateLegacyIds(database);
 }
 
 async function addColumnIfMissing(
@@ -121,6 +128,118 @@ async function addColumnIfMissing(
   } catch {
     // Column already exists — nothing to do.
   }
+}
+
+// Reassign UUIDs to legacy annotations and drain any stale sync_queue
+// entries that reference them. Idempotent — once every row has a
+// UUID, the SELECTs return nothing and this becomes a no-op.
+async function migrateLegacyIds(database: SQLite.SQLiteDatabase): Promise<void> {
+  // A proper UUID v4 is exactly 36 chars (including dashes). Anything
+  // shorter or longer is a legacy id — matches the old format
+  // `<timestamp>-<random>` which is ~23 chars.
+  const isLegacy = "length(id) <> 36 OR id NOT LIKE '%-%-%-%-%'";
+  const tables: Array<{ name: "bookmark" | "highlight" | "note"; sql: string }> = [
+    { name: "bookmark", sql: "bookmarks" },
+    { name: "highlight", sql: "highlights" },
+    { name: "note", sql: "notes" },
+  ];
+
+  for (const { name, sql } of tables) {
+    const rows = await database.getAllAsync<{ id: string }>(
+      `SELECT id FROM ${sql} WHERE ${isLegacy}`,
+    );
+    for (const { id: oldId } of rows) {
+      const newId = generateId();
+      await database.runAsync(`UPDATE ${sql} SET id = ? WHERE id = ?`, [newId, oldId]);
+      // Drop any pending queue entries that still reference the old id.
+      await database.runAsync(
+        "DELETE FROM sync_queue WHERE entity_type = ? AND entity_id = ?",
+        [name, oldId],
+      );
+      // Re-queue a fresh create so the server gets the annotation.
+      const payload = await buildAnnotationPayload(database, name, newId);
+      if (payload) {
+        await database.runAsync(
+          "INSERT INTO sync_queue (entity_type, entity_id, operation, payload, device_id, timestamp) VALUES (?, ?, 'create', ?, ?, ?)",
+          [name, newId, JSON.stringify(payload), getDeviceId(), new Date().toISOString()],
+        );
+      }
+    }
+  }
+
+  // Any remaining queue entries with legacy entity_ids are orphaned —
+  // the entity they reference either doesn't exist anymore or was
+  // just re-id'd above. Drop them so pushes stop 400-ing on the
+  // UUID validator. This also sweeps up the progress queue's legacy
+  // entity_ids, which are just local tracking — progress is keyed on
+  // (bookId, deviceId) server-side, not entity_id, so dropping them
+  // is safe. Any future page flip will re-queue a fresh entry.
+  await database.runAsync(
+    `DELETE FROM sync_queue WHERE length(entity_id) <> 36 OR entity_id NOT LIKE '%-%-%-%-%'`,
+  );
+}
+
+async function buildAnnotationPayload(
+  database: SQLite.SQLiteDatabase,
+  kind: "bookmark" | "highlight" | "note",
+  id: string,
+): Promise<Record<string, unknown> | null> {
+  if (kind === "bookmark") {
+    const row = await database.getFirstAsync<{
+      book_id: string;
+      position: string;
+      label: string | null;
+    }>("SELECT book_id, position, label FROM bookmarks WHERE id = ?", [id]);
+    if (!row) return null;
+    return {
+      bookId: row.book_id,
+      position: JSON.parse(row.position),
+      label: row.label,
+    };
+  }
+  if (kind === "highlight") {
+    const row = await database.getFirstAsync<{
+      book_id: string;
+      cfi_range: string;
+      text_content: string | null;
+      color: string;
+      chapter_label: string | null;
+      percentage: number | null;
+    }>(
+      "SELECT book_id, cfi_range, text_content, color, chapter_label, percentage FROM highlights WHERE id = ?",
+      [id],
+    );
+    if (!row) return null;
+    return {
+      bookId: row.book_id,
+      cfiRange: row.cfi_range,
+      textContent: row.text_content,
+      color: row.color,
+      chapterLabel: row.chapter_label,
+      percentage: row.percentage,
+    };
+  }
+  // note
+  const row = await database.getFirstAsync<{
+    book_id: string;
+    position: string;
+    note_type: string;
+    text_content: string | null;
+    strokes: string | null;
+    pen_config: string | null;
+  }>(
+    "SELECT book_id, position, note_type, text_content, strokes, pen_config FROM notes WHERE id = ?",
+    [id],
+  );
+  if (!row) return null;
+  return {
+    bookId: row.book_id,
+    position: JSON.parse(row.position),
+    noteType: row.note_type,
+    textContent: row.text_content,
+    strokes: row.strokes ? JSON.parse(row.strokes) : null,
+    penConfig: row.pen_config ? JSON.parse(row.pen_config) : null,
+  };
 }
 
 function generateId(): string {
@@ -159,7 +278,11 @@ export async function initDeviceId(): Promise<void> {
 
 export async function getProgress(bookId: string): Promise<ReadingProgress | null> {
   const database = await getDb();
-  const deviceId = getDeviceId();
+  // Return the most recently updated progress row for this book
+  // across ALL devices. Progress is stored per-device (LWW-safe,
+  // each device can overwrite its own row), but when we restore
+  // the reader we want the latest read-through from any device so
+  // you can pick up reading on a new device without losing place.
   const row = await database.getFirstAsync<{
     id: string;
     book_id: string;
@@ -167,8 +290,8 @@ export async function getProgress(bookId: string): Promise<ReadingProgress | nul
     position: string;
     updated_at: string;
   }>(
-    "SELECT * FROM reading_progress WHERE book_id = ? AND device_id = ?",
-    [bookId, deviceId],
+    "SELECT * FROM reading_progress WHERE book_id = ? ORDER BY updated_at DESC LIMIT 1",
+    [bookId],
   );
   if (!row) return null;
   return {
