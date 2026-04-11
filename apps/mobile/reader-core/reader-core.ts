@@ -789,6 +789,16 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
       }
 
       function handleTap(e: MouseEvent): void {
+        // When the tap came from outside the reader container
+        // (e.g. clicks on RN overlays rendered next to the container
+        // on the web reader screen), leave it alone. The host page's
+        // own buttons handle those clicks. Native WebView is a
+        // closed DOM so this filter is a no-op there.
+        const eventTarget = e.target as Node | null;
+        if (eventTarget && !deps.container.contains(eventTarget)) {
+          return;
+        }
+
         try {
           const d = ((e.view as Window | null) || window).document ?? document;
           const sel = d.getSelection?.() ?? window.getSelection?.();
