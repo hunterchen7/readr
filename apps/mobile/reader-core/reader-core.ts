@@ -251,6 +251,14 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
   let _measureRunning = false;
   let destroyed = false;
 
+  // Track the host-document click listener so destroy() can remove it.
+  // Native WebView has no leak — tearing down the WebView also kills
+  // `document` — but on web this listener attaches to the host page's
+  // document, which outlives the reader screen, so every reader open
+  // would accrue a captured handleTap closure otherwise.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let hostDocClickListener: ((e: any) => void) | null = null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function post(type: string, payload: any): void {
     if (destroyed) return;
@@ -826,7 +834,10 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
         post("tapCenter", {});
       }
       view.addEventListener("click", handleTap as EventListener);
-      document.addEventListener("click", handleTap as EventListener);
+      // Track the host-doc listener so destroy() can pull it off. See the
+      // `hostDocClickListener` declaration for why this matters on web.
+      hostDocClickListener = handleTap as EventListener;
+      document.addEventListener("click", hostDocClickListener);
       view.addEventListener("touchmove", blockSwipe as EventListener, {
         capture: true,
         passive: false,
@@ -933,6 +944,17 @@ export function createReaderCore(deps: ReaderCoreDeps): ReaderCoreHandle {
 
   function destroy(): void {
     destroyed = true;
+    // Pull the host-doc click listener we attached in init(). Other
+    // listeners (on the <foliate-view> element and on section docs
+    // inside its iframes) die with the view when we remove it from
+    // the DOM, but this one is on the outer document and would
+    // otherwise leak a handleTap closure per reader session.
+    if (hostDocClickListener) {
+      try {
+        document.removeEventListener("click", hostDocClickListener);
+      } catch { /* ignore */ }
+      hostDocClickListener = null;
+    }
     try {
       if (view && view.parentElement === deps.container) {
         deps.container.removeChild(view);

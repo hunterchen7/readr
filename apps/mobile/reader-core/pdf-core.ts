@@ -30,11 +30,16 @@ interface PdfViewport {
   height: number;
   transform: number[];
 }
+interface PdfRenderTask {
+  promise: Promise<void>;
+  cancel(): void;
+}
 interface PdfPage {
   getViewport(opts: { scale: number }): PdfViewport;
-  render(opts: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport }): {
-    promise: Promise<void>;
-  };
+  render(opts: {
+    canvasContext: CanvasRenderingContext2D;
+    viewport: PdfViewport;
+  }): PdfRenderTask;
   getTextContent(): Promise<{ items: PdfTextItem[] }>;
 }
 interface PdfDocument {
@@ -102,6 +107,11 @@ export function createPdfCore(deps: PdfCoreDeps): PdfCoreHandle {
   let currentPage = 1;
   let destroyed = false;
   const pageWraps = new Map<number, HTMLElement>();
+  // Track the in-flight pdfjs render task so destroy() can cancel
+  // it. pdfjs holds a reference to the canvas until the task
+  // resolves, so leaking this would keep the whole page-worth of
+  // pixel buffers alive until the next GC sweep.
+  let currentRenderTask: PdfRenderTask | null = null;
 
   // Build the scroll host. We own the container's children during
   // the reader's lifetime and clean them up on destroy().
@@ -259,7 +269,18 @@ export function createPdfCore(deps: PdfCoreDeps): PdfCoreHandle {
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.scale(dpr, dpr);
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      const task = page.render({ canvasContext: ctx, viewport });
+      currentRenderTask = task;
+      try {
+        await task.promise;
+      } catch (err) {
+        // Cancellation throws a RenderingCancelledException — swallow
+        // it, since destroy() is the only legitimate caller. Anything
+        // else re-throws.
+        if (!destroyed) throw err;
+      } finally {
+        if (currentRenderTask === task) currentRenderTask = null;
+      }
     }
 
     const textContent = await page.getTextContent();
@@ -289,9 +310,15 @@ export function createPdfCore(deps: PdfCoreDeps): PdfCoreHandle {
     // reading order and the first page appears quickly. A batched
     // render would be faster for huge PDFs but users reading from
     // page 1 would sit on a blank screen.
+    //
+    // Check `destroyed` both before AND after each `await renderPage`:
+    // the user might close the reader mid-render (each pdfjs render
+    // can take 100+ms), and without the post-await check we'd keep
+    // appending pages to a `host` that destroy() has already detached.
     for (let i = 1; i <= totalPages; i++) {
       if (destroyed) return;
       const wrap = await renderPage(i);
+      if (destroyed) return;
       host.appendChild(wrap);
       if (i === 1) {
         // Fire a "first page painted" beat so the UI can drop its
@@ -531,6 +558,16 @@ export function createPdfCore(deps: PdfCoreDeps): PdfCoreHandle {
 
   function destroy(): void {
     destroyed = true;
+    // Cancel the in-flight pdfjs render task if any — pdfjs pins the
+    // canvas + its pixel buffer until the task settles, so leaving
+    // it running would keep the whole page-worth of bitmap alive
+    // until the next GC cycle. The cancellation makes the awaited
+    // promise reject with RenderingCancelledException, which
+    // renderPage() swallows on the destroyed branch.
+    if (currentRenderTask) {
+      try { currentRenderTask.cancel(); } catch { /* ignore */ }
+      currentRenderTask = null;
+    }
     document.removeEventListener("selectionchange", onSelectionChange);
     host.removeEventListener("scroll", onScroll);
     container.innerHTML = "";

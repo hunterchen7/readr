@@ -472,15 +472,28 @@ export async function getSyncQueue(): Promise<SyncLogEntry[]> {
   return tx([STORE.syncQueue], "readonly", async ([store]) => {
     const idx = store.index("by_ts");
     const rows = await req<SyncQueueRecord[]>(idx.getAll());
-    return rows.map((row) => ({
-      id: row.id ?? 0,
-      entityType: row.entityType,
-      entityId: row.entityId,
-      operation: row.operation,
-      payload: row.payload,
-      deviceId: row.deviceId,
-      timestamp: row.timestamp,
-    }));
+    // IDB's autoIncrement assigns an integer id at put() time and
+    // returns it on every subsequent read, so `row.id` is always
+    // defined here even though the record type marks it optional
+    // (the optionality is for the insert path). A missing id means
+    // the schema was populated by something other than addToSyncQueue
+    // and we want to crash loudly, not silently delete key 0.
+    return rows.map((row) => {
+      if (row.id == null) {
+        throw new Error(
+          `Sync queue row missing id: ${row.entityType}:${row.entityId}`,
+        );
+      }
+      return {
+        id: row.id,
+        entityType: row.entityType,
+        entityId: row.entityId,
+        operation: row.operation,
+        payload: row.payload,
+        deviceId: row.deviceId,
+        timestamp: row.timestamp,
+      };
+    });
   });
 }
 
