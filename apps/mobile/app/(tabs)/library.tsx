@@ -28,6 +28,7 @@ import {
 import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { DragDropUpload } from "../../components/upload/DragDropUpload";
 import { useSyncStatus } from "../../lib/sync-status";
+import { useNetworkStatus } from "../../lib/network-status";
 import {
   useLibraryPrefs,
   SORT_SERVER_DEFAULT_DIR,
@@ -46,6 +47,7 @@ import {
   ArrowDown,
   ArrowUp,
   Download,
+  CloudOff,
 } from "lucide-react-native";
 import type { Book } from "@readr/shared";
 
@@ -186,6 +188,8 @@ export default function LibraryScreen() {
   const syncLastAt = useSyncStatus((s) => s.lastSyncAt);
   const syncLastError = useSyncStatus((s) => s.lastError);
   const runSyncNow = useSyncStatus((s) => s.sync);
+  const isOnline = useNetworkStatus((s) => s.isOnline);
+  const isNetHydrated = useNetworkStatus((s) => s.isHydrated);
 
   // Re-hydrate download/progress status when screen regains focus
   // (e.g. after downloading a book in the detail screen).
@@ -450,15 +454,32 @@ export default function LibraryScreen() {
             )}
           </Pressable>
           <Pressable
-            style={styles.syncChip}
+            style={[
+              styles.syncChip,
+              isNetHydrated && !isOnline && styles.syncChipOffline,
+            ]}
             onPress={async () => {
+              // Tap-to-retry is the path back online — runSyncNow() will
+              // either succeed (and then NetInfo flips us back to online
+              // through the next event) or no-op silently.
               await runSyncNow();
               queryClient.invalidateQueries({ queryKey: ["books"] });
             }}
-            accessibilityLabel="Sync library"
+            accessibilityLabel={
+              isNetHydrated && !isOnline ? "Offline — tap to retry" : "Sync library"
+            }
           >
             {syncPhase === "running" ? (
               <ActivityIndicator size="small" color={colors.primary} />
+            ) : isNetHydrated && !isOnline ? (
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <CloudOff size={14} color={colors.syncError} />
+                <Text style={[styles.syncChipText, styles.syncChipTextOffline]}>
+                  Offline
+                </Text>
+              </View>
             ) : (
               <View
                 style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
@@ -804,7 +825,16 @@ const styles = StyleSheet.create({
     minWidth: 80,
     alignItems: "center",
   },
+  // Visual treatment for the offline state — bordered chip with a
+  // muted background so the user can spot it at a glance without it
+  // looking like an error.
+  syncChipOffline: {
+    borderWidth: 1,
+    borderColor: colors.syncError,
+    backgroundColor: colors.background,
+  },
   syncChipText: { fontSize: fontSize.xs, color: colors.text },
+  syncChipTextOffline: { color: colors.syncError, fontWeight: "600" },
   uploadButton: {
     backgroundColor: colors.primary,
     width: 40,

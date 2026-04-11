@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "5.0.5",
+    "@react-native-community/netinfo": "11.4.1",
     "@readr/shared": "workspace:*",
     "@readr/sync-engine": "workspace:*",
     "@tanstack/react-query": "^5",
@@ -40,8 +41,8 @@
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5",
     "react-native-screens": "~4",
-    "react-native-web": "~0.21.0",
     "react-native-svg": "15.12.1",
+    "react-native-web": "~0.21.0",
     "react-native-webview": "^13",
     "zod": "^3",
     "zustand": "^5"

@@ -9,6 +9,7 @@ import { DisplayProvider, useDisplayStore } from "../contexts/DisplayContext";
 import { useSyncStatus } from "../lib/sync-status";
 import { useLibraryPrefs } from "../lib/library-prefs";
 import { initDeviceId } from "../lib/local-db";
+import { initNetworkStatus } from "../lib/network-status";
 
 // One-time reset to fix devices stuck past the annotation sync_log
 // cutoff. The legacy-id bug caused pushes to 400, but progress kept
@@ -51,6 +52,9 @@ export default function RootLayout() {
       // lastSyncTimestamp is still in place when runSync fires.
       await runOneShotResync();
       initDeviceId().catch(() => {});
+      // Subscribe to NetInfo so the offline indicator updates and
+      // the sync queue auto-drains on reconnect.
+      initNetworkStatus();
       checkSession();
       hydrateLibraryPrefs();
     })();
