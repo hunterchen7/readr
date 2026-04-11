@@ -1,7 +1,8 @@
-import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, StyleSheet } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getStatsSummary, getStatsDaily } from "../../lib/api";
+import { LoadingIndicator } from "../../components/LoadingIndicator";
 
 export default function StatsScreen() {
   const insets = useSafeAreaInsets();
@@ -31,7 +32,7 @@ export default function StatsScreen() {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator />
+          <LoadingIndicator />
         </View>
       ) : summary.data ? (
         <>

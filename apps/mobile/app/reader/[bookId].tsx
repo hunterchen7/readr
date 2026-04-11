@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { View, Text, ActivityIndicator, StyleSheet, Pressable, Alert } from "react-native";
+import { View, Text, StyleSheet, Pressable, Alert } from "react-native";
+import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { WebView } from "react-native-webview";
@@ -532,7 +533,7 @@ export default function ReaderScreen() {
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <LoadingIndicator size="large" />
       </View>
     );
   }
@@ -603,22 +604,47 @@ export default function ReaderScreen() {
               { backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) },
             ]}
           >
-            {/* Scrubber track */}
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${progress}%` }]} />
-              <View style={[styles.progressDot, { left: `${progress}%` }]} />
+            {/* Scrubber track — e-ink uses solid theme.fg/bg since
+                 translucent grays collapse into ghost smudges. */}
+            <View
+              style={[
+                styles.progressTrack,
+                display.isEink && { backgroundColor: theme.fg + "22", borderWidth: 1, borderColor: theme.fg },
+              ]}
+            >
+              <View
+                style={[
+                  styles.progressFill,
+                  { width: `${progress}%` },
+                  display.isEink && { backgroundColor: theme.fg },
+                ]}
+              />
+              <View
+                style={[
+                  styles.progressDot,
+                  { left: `${progress}%` },
+                  display.isEink && { backgroundColor: theme.fg },
+                ]}
+              />
             </View>
 
-            <Text style={[styles.progressLabel, { color: theme.fg }]} numberOfLines={1}>
+            <Text
+              style={[styles.progressLabel, { color: theme.fg }, display.isEink && styles.progressLabelEink]}
+              numberOfLines={1}
+            >
               {currentPosition?.chapter ?? ""}
             </Text>
             <View style={styles.progressInfoRow}>
-              <Text style={[styles.progressLabel, { color: theme.fg }]}>
+              <Text
+                style={[styles.progressLabel, { color: theme.fg }, display.isEink && styles.progressLabelEink]}
+              >
                 {pageInSection != null && pagesInSection != null && pagesInSection > 0
                   ? `${pageInSection}/${pagesInSection} in ch.`
                   : ""}
               </Text>
-              <Text style={[styles.progressLabel, { color: theme.fg }]}>
+              <Text
+                style={[styles.progressLabel, { color: theme.fg }, display.isEink && styles.progressLabelEink]}
+              >
                 {currentPage != null && totalPages != null && totalPages > 0
                   ? `p. ${currentPage}/${totalPages}  ·  ${progress}%`
                   : `${progress}%`}
@@ -627,9 +653,24 @@ export default function ReaderScreen() {
           </Pressable>
         </>
       ) : (
-        /* Minimal progress bar always visible at bottom */
-        <View style={[styles.miniProgress, { backgroundColor: theme.bg + "cc" }]}>
-          <View style={[styles.miniProgressFill, { width: `${progress}%`, backgroundColor: theme.fg + "33" }]} />
+        /* Minimal progress bar always visible at bottom.
+           E-ink uses solid fg/bg so the bar stays crisp — translucent
+           tints smudge into the ~16 gray levels of an e-ink panel. */
+        <View
+          style={[
+            styles.miniProgress,
+            { backgroundColor: display.isEink ? theme.bg : theme.bg + "cc" },
+          ]}
+        >
+          <View
+            style={[
+              styles.miniProgressFill,
+              {
+                width: `${progress}%`,
+                backgroundColor: display.isEink ? theme.fg : theme.fg + "33",
+              },
+            ]}
+          />
         </View>
       )}
 
@@ -807,6 +848,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   progressLabel: { fontSize: 11, opacity: 0.5 },
+  // E-ink can't render faint text legibly — bump to full contrast and a
+  // slightly larger size so the reading-progress line doesn't disappear
+  // against the page background on the ~16-gray Supernote panel.
+  progressLabelEink: { opacity: 1, fontSize: 12, fontWeight: "500" },
   miniProgress: {
     position: "absolute",
     bottom: 0,

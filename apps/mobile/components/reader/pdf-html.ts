@@ -63,6 +63,34 @@ export function getPdfReaderHtml(bookUrl: string): string {
     .highlight-rect[data-color="green"] { background: rgba(76, 175, 80, 0.35); }
     .highlight-rect[data-color="blue"] { background: rgba(33, 150, 243, 0.35); }
     .highlight-rect[data-color="pink"] { background: rgba(233, 30, 99, 0.35); }
+
+    /* E-ink overrides — kill momentum scroll, transparency, animations, and
+       shadows; render highlights as solid black outlines since semi-transparent
+       colors collapse into ghost-gray on the A5X's ~16 gray levels. */
+    body.eink #container {
+      -webkit-overflow-scrolling: auto;
+      scroll-behavior: auto;
+    }
+    body.eink * {
+      animation: none !important;
+      transition: none !important;
+      box-shadow: none !important;
+      text-shadow: none !important;
+    }
+    body.eink .page-wrap {
+      box-shadow: none;
+      border: 1px solid #000;
+    }
+    body.eink .highlight-rect,
+    body.eink .highlight-rect[data-color="green"],
+    body.eink .highlight-rect[data-color="blue"],
+    body.eink .highlight-rect[data-color="pink"] {
+      background: transparent;
+      mix-blend-mode: normal;
+      border: 1.5px solid #000;
+      border-radius: 0;
+    }
+    body.eink .text-layer > span::selection { background: #000; color: #fff; }
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
       height: 100%; font-family: system-ui, sans-serif; padding: 24px; text-align: center;
@@ -166,7 +194,11 @@ export function getPdfReaderHtml(bookUrl: string): string {
 
     function scrollToPage(pageNum) {
       const wrap = pageWraps.get(pageNum);
-      if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (wrap) {
+        // smooth scroll causes a chain of partial refreshes on e-ink; snap instead.
+        const behavior = document.body.classList.contains('eink') ? 'auto' : 'smooth';
+        wrap.scrollIntoView({ behavior, block: 'start' });
+      }
       currentPage = pageNum;
     }
 
