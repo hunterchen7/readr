@@ -536,6 +536,46 @@ export default function WebReaderScreen() {
     );
   }
 
+  // PDF runtime port is a follow-up task of #6 — the native PDF
+  // reader lives as a 500-line inline HTML template inside
+  // components/reader/pdf-html.ts and needs a ReaderCore-style
+  // extraction before web can use it. For now, detect the format
+  // and surface a placeholder so users at least get a clean
+  // message instead of a foliate-makeBook crash.
+  if (book.format === "pdf") {
+    return (
+      <View style={[styles.container, styles.center, { backgroundColor: theme.bg }]}>
+        <BookOpen size={48} color={theme.fg} />
+        <Text style={[styles.headerTitle, { color: theme.fg, marginTop: spacing.md }]}>
+          PDF reader coming soon on web
+        </Text>
+        <Text
+          style={{
+            color: theme.fg,
+            opacity: 0.6,
+            textAlign: "center",
+            maxWidth: 420,
+            marginTop: spacing.sm,
+            padding: spacing.lg,
+          }}
+        >
+          Use the "Download file" button on the book detail screen to grab the
+          original PDF, or open the book on mobile. Web PDF rendering is
+          tracked in #6.
+        </Text>
+        <Pressable
+          onPress={() => router.back()}
+          style={[
+            styles.headerButton,
+            { marginTop: spacing.lg, paddingHorizontal: spacing.lg },
+          ]}
+        >
+          <Text style={{ color: theme.fg, fontSize: fontSize.md }}>Back</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       {/* Reader surface — a plain host div that foliate mounts into.
