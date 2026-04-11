@@ -284,12 +284,12 @@ export default function LibraryScreen() {
       : filtered.toReversed();
   }, [booksWithProgress, filter, search, sort, sortDir]);
 
-  // Most recently read, partially-finished, locally-available book — shown
-  // in the "Jump back in" card at the top of the library so the user can
-  // resume with a single tap. Gated on filter/search being inactive so the
-  // card doesn't clutter an intentional exploration of a subset.
+  // Most recently read, partially-finished, locally-available book —
+  // shown in the "Jump back in" card at the top of the library so the
+  // user can resume with a single tap. Always visible when a candidate
+  // exists; the whole point is a compact, always-available shortcut
+  // back into the book regardless of filter or search state.
   const resumeBook = useMemo(() => {
-    if (filter !== "all" || search.trim()) return null;
     let best: BookWithProgress | null = null;
     for (const b of booksWithProgress) {
       if (!b.lastReadAt) continue;
@@ -300,7 +300,7 @@ export default function LibraryScreen() {
       if (!best || b.lastReadAt > (best.lastReadAt ?? "")) best = b;
     }
     return best;
-  }, [booksWithProgress, filter, search]);
+  }, [booksWithProgress]);
 
   function handleResume(book: BookWithProgress) {
     // Skip the detail screen — the whole point of the resume card is
@@ -718,9 +718,6 @@ function renderResumeCard(
         <Text style={styles.resumeTitle} numberOfLines={1}>
           {item.title ?? "Untitled"}
         </Text>
-        <Text style={styles.resumeAuthor} numberOfLines={1}>
-          {item.author ?? "Unknown"}
-        </Text>
         {item.lastReadChapter ? (
           <Text style={styles.resumeChapter} numberOfLines={1}>
             {item.lastReadChapter}
@@ -736,7 +733,7 @@ function renderResumeCard(
         </View>
       </View>
       <BookOpen
-        size={22}
+        size={20}
         color={colors.primary}
         style={styles.resumeIcon}
       />
@@ -1145,32 +1142,34 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
 
-  // "Jump back in" card — sits right under the header so a one-tap
-  // resume is the first thing the user sees on a library re-open.
+  // "Jump back in" shortcut card — compact row right under the header
+  // so one tap puts you back where you were. Always visible when a
+  // resume candidate exists.
   resumeCard: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
+    gap: spacing.sm,
     marginHorizontal: spacing.md,
-    marginTop: spacing.md,
-    padding: spacing.md,
-    borderRadius: 12,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
     backgroundColor: colors.backgroundSecondary,
     borderWidth: 1,
     borderColor: colors.borderLight,
   },
   resumeCover: {
-    width: 56,
+    width: 40,
     aspectRatio: 2 / 3,
     backgroundColor: colors.backgroundSecondary,
-    borderRadius: 6,
+    borderRadius: 4,
     overflow: "hidden",
     justifyContent: "center",
     alignItems: "center",
   },
   resumeCoverText: {
-    padding: 4,
-    fontSize: 9,
+    padding: 2,
+    fontSize: 8,
     color: colors.textMuted,
     textAlign: "center",
   },
@@ -1179,38 +1178,33 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   resumeLabel: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "700",
     color: colors.primary,
     letterSpacing: 0.6,
     textTransform: "uppercase",
-    marginBottom: 2,
   },
   resumeTitle: {
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
     fontWeight: "700",
     color: colors.text,
-  },
-  resumeAuthor: {
-    fontSize: fontSize.xs,
-    color: colors.textSecondary,
     marginTop: 1,
   },
   resumeChapter: {
-    fontSize: fontSize.xs,
+    fontSize: 11,
     color: colors.textMuted,
-    marginTop: 2,
+    marginTop: 1,
     fontStyle: "italic",
   },
   resumeProgressRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    marginTop: 6,
+    marginTop: 4,
   },
   resumeProgressTrack: {
     flex: 1,
-    height: 4,
+    height: 3,
     borderRadius: 2,
     backgroundColor: colors.borderLight,
     overflow: "hidden",
@@ -1228,5 +1222,6 @@ const styles = StyleSheet.create({
   },
   resumeIcon: {
     alignSelf: "center",
+    marginRight: 4,
   },
 });
