@@ -281,22 +281,30 @@ export default function WebReaderScreen() {
         loadReaderPrefs(),
       ]);
       if (cancelled) return;
+      // Anchor the session-start pct. The session-tracking effect
+      // at [bookId] already ran synchronously with the pre-DB-load
+      // `progress` state, which on a bookId change is still the
+      // PREVIOUS book's percentage (React doesn't clear it between
+      // books). Overwrite unconditionally here — to savedProgress
+      // if there is one, to 0 otherwise — so a new-book session
+      // never inherits the prior book's pct and generates a
+      // negative session delta.
+      const anchorPct = savedProgress?.position.percentage ?? 0;
+      sessionStartRef.current = {
+        at: sessionStartRef.current.at,
+        pct: anchorPct,
+      };
+      latestPctRef.current = anchorPct;
       if (savedProgress) {
         savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
-        // Anchor the session-start pct to the real saved position
-        // instead of 0. The session-tracking effect fires on bookId
-        // change and captures the current `progress` state, which is
-        // still 0 at that moment (the DB load hasn't run yet). Without
-        // this fixup, the reading-sessions log reports startPercentage
-        // as 0 for every resumed book, inflating the apparent session
-        // delta by whatever had already been read.
-        sessionStartRef.current = {
-          at: sessionStartRef.current.at,
-          pct: savedProgress.position.percentage,
-        };
-        latestPctRef.current = savedProgress.position.percentage;
+      } else {
+        // No saved progress — clear any leaked state from a
+        // previous book so the UI starts at 0% instead of showing
+        // the prior book's last-read position.
+        setProgress(0);
+        setCurrentPosition(null);
       }
       hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
@@ -652,24 +660,53 @@ export default function WebReaderScreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [showTocDrawer]);
 
-  // Drag-scrub handlers for the progress bar. The pointerdown /
-  // input / pointerup cycle mirrors how the native PanResponder
-  // drives the scrubber — update local display state on every
-  // input, only dispatch a goToLocation to the reader core on
-  // pointerup, and keep isDraggingRef true throughout so
-  // progressUpdated events get swallowed while the user is
-  // actively seeking.
-  function handleScrubStart() {
-    isDraggingRef.current = true;
-  }
-  function handleScrubInput(next: number) {
-    setScrubValue(next);
-  }
-  function handleScrubEnd(next: number) {
-    isDraggingRef.current = false;
+  // Progress scrubber handlers. Pointer drag and keyboard commits
+  // have different semantics:
+  //
+  // - Pointer drag: pointerdown starts a drag, the input event
+  //   fires continuously as the user drags, and pointerup commits.
+  //   While dragging we update local scrubValue to animate the
+  //   thumb, suppress incoming progressUpdated events (otherwise
+  //   the thumb flickers to the pre-drag position), and dispatch
+  //   exactly one goToLocation on release.
+  //
+  // - Keyboard: arrow/PageUp/PageDown/Home/End each produce one
+  //   discrete value change. Dispatch immediately on input; there
+  //   is no drag to accumulate. Handling keyboard through the
+  //   drag-state machine would make Tab (which fires key events
+  //   but doesn't change the value) leave isDraggingRef stuck on
+  //   if focus moved away before keyup.
+  function commitScrub(next: number) {
     setScrubValue(null);
     setProgress(next * 100);
     coreRef.current?.dispatch({ type: "goToLocation", payload: { fraction: next } });
+  }
+  function handleScrubPointerDown() {
+    isDraggingRef.current = true;
+  }
+  function handleScrubPointerUp(next: number) {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    commitScrub(next);
+  }
+  function handleScrubChange(next: number) {
+    if (isDraggingRef.current) {
+      // Pointer drag in progress — accumulate locally.
+      setScrubValue(next);
+    } else {
+      // Keyboard (or assistive-tech) commit — fire immediately.
+      commitScrub(next);
+    }
+  }
+  // Safety net: if the input loses focus mid-drag (e.g. user
+  // alt-tabbed away), clear the drag state so the next keyboard
+  // press doesn't accidentally fall through the "drag active"
+  // branch. Any in-progress scrubValue is committed.
+  function handleScrubBlur() {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      if (scrubValue != null) commitScrub(scrubValue);
+    }
   }
 
   // ── Bookmark handlers ───────────────────────────────────────────────
@@ -996,20 +1033,17 @@ export default function WebReaderScreen() {
               min={0}
               max={1000}
               value={Math.round((scrubValue ?? progress / 100) * 1000)}
-              onPointerDown={handleScrubStart}
+              onPointerDown={handleScrubPointerDown}
               onPointerUp={(e) =>
-                handleScrubEnd(Number((e.target as HTMLInputElement).value) / 1000)
+                handleScrubPointerUp(Number((e.target as HTMLInputElement).value) / 1000)
               }
               onPointerCancel={(e) =>
-                handleScrubEnd(Number((e.target as HTMLInputElement).value) / 1000)
-              }
-              onKeyDown={handleScrubStart}
-              onKeyUp={(e) =>
-                handleScrubEnd(Number((e.target as HTMLInputElement).value) / 1000)
+                handleScrubPointerUp(Number((e.target as HTMLInputElement).value) / 1000)
               }
               onChange={(e) =>
-                handleScrubInput(Number(e.target.value) / 1000)
+                handleScrubChange(Number(e.target.value) / 1000)
               }
+              onBlur={handleScrubBlur}
               style={{
                 flex: 1,
                 marginLeft: 12,
