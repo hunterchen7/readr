@@ -464,10 +464,19 @@ export default function WebReaderScreen() {
       try {
         // Check OPFS first. If we have the book cached, pass its
         // blob URL to the core and skip the network round trip.
+        // getDownloadedBook creates a blob URL via createObjectURL;
+        // we own it from here on and must revoke whether or not we
+        // end up using it, otherwise a cancellation race leaks it.
         let effectiveUrl = remoteUrl;
         try {
           const cached = await getDownloadedBook(bookId);
-          if (cached && !cancelled) {
+          if (cached) {
+            if (cancelled) {
+              // Core is being torn down before we got a chance to
+              // hand this URL off — revoke directly and bail.
+              try { URL.revokeObjectURL(cached.localPath); } catch { /* ignore */ }
+              return;
+            }
             effectiveUrl = cached.localPath;
             blobUrlToRevoke = cached.localPath;
           }

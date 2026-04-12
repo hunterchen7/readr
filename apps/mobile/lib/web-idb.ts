@@ -37,7 +37,7 @@ export function openDb(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") {
     return Promise.reject(new Error("IndexedDB is not available in this environment"));
   }
-  dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+  const pending = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (event) => {
       const db = req.result;
@@ -90,10 +90,33 @@ export function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(STORE.downloadedBooks, { keyPath: "bookId" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Another tab bumped DB_VERSION and is waiting for us to
+      // close the old connection. Close it so their upgrade can
+      // proceed and drop our cached promise so the next openDb()
+      // re-opens at the new version.
+      db.onversionchange = () => {
+        try { db.close(); } catch { /* ignore */ }
+        if (dbPromise === pending) dbPromise = null;
+      };
+      resolve(db);
+    };
     req.onerror = () => reject(req.error ?? new Error("failed to open IndexedDB"));
-    req.onblocked = () => reject(new Error("IndexedDB open blocked — another tab is holding an old version"));
+    req.onblocked = () =>
+      reject(
+        new Error(
+          "IndexedDB open blocked — another tab is holding an old version. Reload all Readr tabs to continue.",
+        ),
+      );
   });
+  // Uncache a rejected open attempt so callers can retry (e.g.
+  // transient `onblocked` from another tab that later closed). A
+  // cached rejection would wedge the whole app until reload.
+  pending.catch(() => {
+    if (dbPromise === pending) dbPromise = null;
+  });
+  dbPromise = pending;
   return dbPromise;
 }
 
