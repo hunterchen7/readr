@@ -142,6 +142,7 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
   await addColumnIfMissing(database, "books", "user_id", "TEXT");
   await addColumnIfMissing(database, "books", "metadata_json", "TEXT");
   await addColumnIfMissing(database, "books", "download_url", "TEXT");
+  await addColumnIfMissing(database, "notes", "canvas_image", "TEXT");
 
   // One-time migration for entities created before `generateId()` was
   // switched to UUID v4. Legacy IDs look like `1775770007700-eia8fhb`
@@ -584,6 +585,7 @@ export async function getNotes(bookId: string): Promise<Note[]> {
     textContent: row.text_content,
     strokes: row.strokes ? (JSON.parse(row.strokes) as Stroke[]) : null,
     penConfig: row.pen_config ? (JSON.parse(row.pen_config) as PenConfig) : null,
+    canvasImage: (row as Record<string, unknown>).canvas_image as string | null ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -597,14 +599,15 @@ export async function createNote(
   textContent?: string,
   strokes?: Stroke[],
   penConfig?: PenConfig,
+  canvasImage?: string | null,
 ): Promise<Note> {
   const database = await getDb();
   const id = generateId();
   const now = new Date().toISOString();
 
   await database.runAsync(
-    `INSERT INTO notes (id, book_id, position, note_type, text_content, strokes, pen_config, created_at, updated_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    `INSERT INTO notes (id, book_id, position, note_type, text_content, strokes, pen_config, canvas_image, created_at, updated_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       id,
       bookId,
@@ -613,6 +616,7 @@ export async function createNote(
       textContent ?? null,
       strokes ? JSON.stringify(strokes) : null,
       penConfig ? JSON.stringify(penConfig) : null,
+      canvasImage ?? null,
       now,
       now,
     ],
@@ -636,6 +640,7 @@ export async function createNote(
     textContent: textContent ?? null,
     strokes: strokes ?? null,
     penConfig: penConfig ?? null,
+    canvasImage: canvasImage ?? null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -648,6 +653,7 @@ export async function updateNote(
     textContent?: string;
     strokes?: Stroke[];
     penConfig?: PenConfig;
+    canvasImage?: string | null;
   },
 ): Promise<void> {
   const database = await getDb();
@@ -666,6 +672,10 @@ export async function updateNote(
   if (updates.penConfig !== undefined) {
     sets.push("pen_config = ?");
     params.push(JSON.stringify(updates.penConfig));
+  }
+  if (updates.canvasImage !== undefined) {
+    sets.push("canvas_image = ?");
+    params.push(updates.canvasImage ?? null);
   }
 
   params.push(id);

@@ -5,12 +5,13 @@ import {
   StyleSheet,
   Modal,
   ScrollView,
+  Image as RNImage,
   useWindowDimensions,
   type LayoutChangeEvent,
 } from "react-native";
 import { useState } from "react";
 import Svg, { Path } from "react-native-svg";
-import { X } from "lucide-react-native";
+import { X, Pencil, Trash2 } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Note, StrokePoint } from "@readr/shared";
 import { useDisplay } from "../../contexts/DisplayContext";
@@ -25,14 +26,39 @@ interface Rect {
 interface NoteViewerProps {
   note: Note | null;
   anchorRect: Rect | null;
+  passageText?: string;
   onClose: () => void;
-  onEdit: (note: Note) => void;
+  onEdit: (note: Note, passageText?: string) => void;
   onDelete: (id: string) => void;
 }
 
 const POPOVER_GAP = 8;
 const SCREEN_PADDING = 8;
 const POPOVER_MAX_WIDTH = 360;
+
+// Compact relative timestamp for the note footer. Drops to an absolute
+// date once we're past a week — "8d ago" / "47d ago" reads worse than
+// "Mar 14".
+function formatRelative(iso: string): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return "";
+  const ago = Math.max(0, Date.now() - ts);
+  const mins = Math.floor(ago / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const date = new Date(ts);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString(
+    undefined,
+    sameYear
+      ? { month: "short", day: "numeric" }
+      : { year: "numeric", month: "short", day: "numeric" },
+  );
+}
 
 function pointsToPath(points: StrokePoint[]): string {
   if (points.length === 0) return "";
@@ -76,7 +102,7 @@ function strokesBBox(
   };
 }
 
-export function NoteViewer({ note, anchorRect, onClose, onEdit, onDelete }: NoteViewerProps) {
+export function NoteViewer({ note, anchorRect, passageText, onClose, onEdit, onDelete }: NoteViewerProps) {
   const display = useDisplay();
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const { width: screenW, height: screenH } = useWindowDimensions();
@@ -153,10 +179,26 @@ export function NoteViewer({ note, anchorRect, onClose, onEdit, onDelete }: Note
           </Pressable>
         </View>
 
+        {passageText ? (
+          <View style={styles.passageBar}>
+            <Text style={styles.passageText} numberOfLines={2}>
+              &ldquo;{passageText}&rdquo;
+            </Text>
+          </View>
+        ) : null}
+
         {note.noteType === "typed" ? (
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
             <Text style={styles.bodyText}>{note.textContent ?? ""}</Text>
           </ScrollView>
+        ) : note.canvasImage ? (
+          <View style={styles.drawingBody}>
+            <RNImage
+              source={{ uri: note.canvasImage }}
+              style={StyleSheet.absoluteFill}
+              resizeMode="contain"
+            />
+          </View>
         ) : (
           <View style={styles.drawingBody}>
             {(() => {
@@ -185,13 +227,27 @@ export function NoteViewer({ note, anchorRect, onClose, onEdit, onDelete }: Note
         )}
 
         <View style={styles.footer}>
-          <Pressable style={styles.footerBtn} onPress={() => onEdit(note)}>
-            <Text style={[styles.footerBtnText, styles.footerBtnTextPrimary]}>Edit</Text>
-          </Pressable>
-          <View style={styles.footerDivider} />
-          <Pressable style={styles.footerBtn} onPress={() => onDelete(note.id)}>
-            <Text style={[styles.footerBtnText, { color: "#dc2626" }]}>Delete</Text>
-          </Pressable>
+          <Text style={styles.timestamp} numberOfLines={1}>
+            {formatRelative(note.updatedAt ?? note.createdAt ?? "")}
+          </Text>
+          <View style={styles.footerActions}>
+            <Pressable
+              style={styles.iconBtn}
+              onPress={() => onEdit(note, passageText)}
+              hitSlop={10}
+              accessibilityLabel="Edit"
+            >
+              <Pencil size={16} color="#111" />
+            </Pressable>
+            <Pressable
+              style={styles.iconBtn}
+              onPress={() => onDelete(note.id)}
+              hitSlop={10}
+              accessibilityLabel="Delete"
+            >
+              <Trash2 size={16} color="#dc2626" />
+            </Pressable>
+          </View>
         </View>
       </View>
     </Modal>
@@ -218,6 +274,19 @@ const styles = StyleSheet.create({
     borderColor: "#000",
     borderRadius: 0,
   },
+  passageBar: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#e0e0e0",
+    backgroundColor: "#f9f9f9",
+  },
+  passageText: {
+    fontSize: 12,
+    color: "#666",
+    fontStyle: "italic",
+    lineHeight: 16,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -241,19 +310,29 @@ const styles = StyleSheet.create({
   drawingBody: { height: 220, backgroundColor: "#fafafa" },
   footer: {
     flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    paddingLeft: 12,
+    paddingRight: 6,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#e0e0e0",
   },
-  footerBtn: {
-    flex: 1,
-    paddingVertical: 10,
+  timestamp: {
+    fontSize: 12,
+    color: "#888",
+    flexShrink: 1,
+  },
+  footerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  iconBtn: {
+    width: 32,
+    height: 32,
     alignItems: "center",
     justifyContent: "center",
-  },
-  footerBtnText: { fontSize: 14, color: "#111" },
-  footerBtnTextPrimary: { fontWeight: "600" },
-  footerDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: "#e0e0e0",
+    borderRadius: 6,
   },
 });

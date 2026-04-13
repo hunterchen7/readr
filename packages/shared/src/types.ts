@@ -134,6 +134,11 @@ export interface Note {
   textContent: string | null;
   strokes: Stroke[] | null;
   penConfig: PenConfig | null;
+  /** Base64 PNG data URI of the canvas as captured from the
+   *  display framebuffer (includes kernel-drawn strokes). Used
+   *  on Supernote as the authoritative visual instead of Skia
+   *  re-rendering from stroke data. */
+  canvasImage: string | null;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;

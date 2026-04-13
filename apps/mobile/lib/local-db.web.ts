@@ -148,6 +148,7 @@ export async function createNote(
     textContent: textContent ?? null,
     strokes: strokes ?? null,
     penConfig: penConfig ?? null,
+    canvasImage: null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
