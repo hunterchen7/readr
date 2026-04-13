@@ -1,12 +1,13 @@
 /**
- * Offline English dictionary. The wordset-dictionary data has been
- * compacted into apps/mobile/assets/dictionary/<letter>.json. Each file
- * is { word: { d: definition, p: partOfSpeech } }. Metro bundles the
- * require() calls directly into the JS bundle, so we just access the
- * JSON objects in memory — no filesystem reads needed.
+ * Dictionary lookup. Primary source is the self-hosted dictionary
+ * endpoint on the readr server (Wiktionary + WordNet, ~1M entries).
+ * Falls back to a bundled offline dictionary (~108k words) when the
+ * server is unreachable or not configured.
  *
- * Total bundled size: ~9 MB across 27 files, ~108,000 words.
+ * Bundled data lives in apps/mobile/assets/dictionary/<letter>.json.
+ * Metro bundles the require() calls directly into the JS bundle.
  */
+import { getServerUrl } from "./api";
 
 interface DictEntry {
   d: string;
@@ -59,6 +60,7 @@ async function loadLetter(letter: string): Promise<LetterMap | null> {
 export interface Definition {
   definition: string;
   partOfSpeech?: string;
+  pronunciation?: string;
 }
 
 export interface LookupResult {
@@ -190,31 +192,32 @@ function fuzzyMatch(
 }
 
 /**
- * Try the free dictionaryapi.dev API first — it has multiple
- * definitions per word, example sentences, and part-of-speech
- * groupings. Falls back to the offline dictionary on network
- * failure or 404.
+ * Hit the self-hosted dictionary endpoint on the readr server.
+ * Falls back to the bundled offline dictionary on network failure,
+ * 404, or when no server URL is configured (e.g. before login).
  */
-async function lookupOnline(word: string): Promise<LookupResult | null> {
+async function lookupServer(word: string): Promise<LookupResult | null> {
   try {
+    const serverUrl = await getServerUrl();
+    if (!serverUrl) return null;
     const resp = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.toLowerCase())}`,
+      `${serverUrl}/api/dictionary/${encodeURIComponent(word)}`,
       { signal: AbortSignal.timeout(3000) },
     );
     if (!resp.ok) return null;
     const data = await resp.json();
-    if (!Array.isArray(data) || data.length === 0) return null;
-    const entry = data[0];
+    if (!data || !data.word || !Array.isArray(data.entries)) return null;
     const defs: Definition[] = [];
-    for (const meaning of entry.meanings ?? []) {
-      const pos = meaning.partOfSpeech as string | undefined;
-      for (const d of meaning.definitions ?? []) {
-        defs.push({ definition: d.definition, partOfSpeech: pos });
+    for (const entry of data.entries) {
+      const pos = entry.pos as string | undefined;
+      const pron = entry.pronunciation as string | undefined;
+      for (const d of entry.definitions ?? []) {
+        defs.push({ definition: d.definition, partOfSpeech: pos, pronunciation: pron });
       }
     }
     if (defs.length === 0) return null;
     return {
-      word: entry.word ?? word,
+      word: data.word,
       definition: defs[0].definition,
       partOfSpeech: defs[0].partOfSpeech,
       definitions: defs,
@@ -225,17 +228,21 @@ async function lookupOnline(word: string): Promise<LookupResult | null> {
 }
 
 /**
- * Look up a word. Tries the online API first for rich multi-definition
- * results, falls back to the offline dictionary on failure. Handles
- * case, punctuation, hyphenation, apostrophes, and common inflections.
+ * Look up a word. Tries the self-hosted server first for rich
+ * multi-definition results (Wiktionary + WordNet), falls back to the
+ * bundled offline dictionary on failure. The server handles its own
+ * fuzzy matching, so we send the raw selection directly; the bundled
+ * fallback still does client-side candidate generation and stemming.
  */
 export async function lookupWord(raw: string): Promise<LookupResult | null> {
-  // Try online first.
+  // Try the self-hosted server first — it has ~1M entries, multiple
+  // definitions, pronunciations, and its own fuzzy matching.
+  const server = await lookupServer(raw.trim());
+  if (server) return server;
+
+  // Offline fallback: bundled wordset dictionary (~108k single-
+  // definition entries with client-side stemming and fuzzy matching).
   const candidates = candidateWords(raw);
-  if (candidates.length > 0) {
-    const online = await lookupOnline(candidates[0]);
-    if (online) return online;
-  }
   if (candidates.length === 0) return null;
 
   for (const cand of candidates) {

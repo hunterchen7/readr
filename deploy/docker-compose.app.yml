@@ -43,6 +43,13 @@ services:
       - readr
     ports:
       - "3000:3000"
+    volumes:
+      # Dictionary DB is built separately (see scripts/build-dictionary.mjs)
+      # and persists across container rebuilds. The API server reads it
+      # at /app/apps/server/data/dictionary.db. If missing, the dictionary
+      # endpoint returns 503 and the mobile app falls back to its bundled
+      # offline dictionary.
+      - ../apps/server/data:/app/apps/server/data
     # Liveness only — this verifies the api process is up and serving
     # /health, NOT that postgres / redis / minio are reachable. The
     # /health endpoint is a bare {status:"ok"} with no upstream pings,

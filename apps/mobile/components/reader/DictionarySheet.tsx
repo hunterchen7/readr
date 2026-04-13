@@ -87,6 +87,11 @@ export function DictionarySheet({
         ) : state.kind === "found" ? (
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
             <Text style={styles.word}>{state.result.word}</Text>
+            {state.result.definitions[0]?.pronunciation ? (
+              <Text style={styles.pronunciation}>
+                {state.result.definitions[0].pronunciation}
+              </Text>
+            ) : null}
             {groupByPos(state.result.definitions).map(([pos, defs], gi) => (
               <View key={gi} style={styles.posGroup}>
                 {pos ? <Text style={styles.pos}>{pos}</Text> : null}
@@ -102,7 +107,7 @@ export function DictionarySheet({
           <View style={styles.body}>
             <Text style={styles.notFoundTitle}>Word not found</Text>
             <Text style={styles.notFoundSubtitle} numberOfLines={2}>
-              “{query.trim()}” isn’t in the offline dictionary.
+              “{query.trim()}” isn’t in the dictionary.
             </Text>
           </View>
         )}
@@ -153,6 +158,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   word: { fontSize: 20, fontWeight: "700", color: "#111" },
+  pronunciation: { fontSize: 14, color: "#888", fontStyle: "italic", marginTop: 2 },
   posGroup: { marginTop: 8 },
   pos: { fontSize: 12, color: "#888", fontStyle: "italic", marginBottom: 2 },
   definition: {

@@ -11,7 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "dict:build": "node scripts/build-dictionary.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3",
@@ -19,6 +20,7 @@
     "@hono/node-server": "^1",
     "@readr/shared": "workspace:*",
     "@readr/sync-engine": "workspace:*",
+    "better-sqlite3": "^12.9.0",
     "bullmq": "^5",
     "drizzle-orm": "^0.41",
     "fast-xml-parser": "^5.5.11",
@@ -29,9 +31,11 @@
     "postgres": "^3",
     "resend": "^6.10.0",
     "sharp": "^0.33",
+    "wordnet-db": "^3.1.14",
     "zod": "^3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22",
     "@types/pdf-parse": "^1.1.5",
     "drizzle-kit": "^0.31",
