@@ -5,10 +5,11 @@ import {
   Pressable,
   StyleSheet,
   Modal,
+  ScrollView,
   ActivityIndicator,
 } from "react-native";
 import { X } from "lucide-react-native";
-import { lookupWord, type LookupResult } from "../../lib/dictionary";
+import { lookupWord, type LookupResult, type Definition } from "../../lib/dictionary";
 
 interface DictionarySheetProps {
   visible: boolean;
@@ -20,6 +21,24 @@ type State =
   | { kind: "loading" }
   | { kind: "found"; result: LookupResult }
   | { kind: "notFound" };
+
+/** Group definitions by part of speech, preserving order. */
+function groupByPos(defs: Definition[]): [string | undefined, Definition[]][] {
+  const groups: [string | undefined, Definition[]][] = [];
+  let currentPos: string | undefined;
+  let currentGroup: Definition[] = [];
+  for (const d of defs) {
+    if (d.partOfSpeech !== currentPos) {
+      if (currentGroup.length > 0) groups.push([currentPos, currentGroup]);
+      currentPos = d.partOfSpeech;
+      currentGroup = [d];
+    } else {
+      currentGroup.push(d);
+    }
+  }
+  if (currentGroup.length > 0) groups.push([currentPos, currentGroup]);
+  return groups;
+}
 
 export function DictionarySheet({
   visible,
@@ -66,15 +85,19 @@ export function DictionarySheet({
             <ActivityIndicator size="small" color="#666" />
           </View>
         ) : state.kind === "found" ? (
-          <View style={styles.body}>
-            <View style={styles.wordRow}>
-              <Text style={styles.word}>{state.result.word}</Text>
-              {state.result.partOfSpeech ? (
-                <Text style={styles.pos}>{state.result.partOfSpeech}</Text>
-              ) : null}
-            </View>
-            <Text style={styles.definition}>{state.result.definition}</Text>
-          </View>
+          <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+            <Text style={styles.word}>{state.result.word}</Text>
+            {groupByPos(state.result.definitions).map(([pos, defs], gi) => (
+              <View key={gi} style={styles.posGroup}>
+                {pos ? <Text style={styles.pos}>{pos}</Text> : null}
+                {defs.map((d, di) => (
+                  <Text key={di} style={styles.definition}>
+                    {defs.length > 1 ? `${di + 1}. ` : ""}{d.definition}
+                  </Text>
+                ))}
+              </View>
+            ))}
+          </ScrollView>
         ) : (
           <View style={styles.body}>
             <Text style={styles.notFoundTitle}>Word not found</Text>
@@ -124,17 +147,18 @@ const styles = StyleSheet.create({
   closeButton: { padding: 2 },
   body: {
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    minHeight: 60,
-    justifyContent: "center",
+    maxHeight: 300,
   },
-  wordRow: { flexDirection: "row", alignItems: "baseline", gap: 8 },
+  bodyContent: {
+    paddingVertical: 12,
+  },
   word: { fontSize: 20, fontWeight: "700", color: "#111" },
-  pos: { fontSize: 12, color: "#888", fontStyle: "italic" },
+  posGroup: { marginTop: 8 },
+  pos: { fontSize: 12, color: "#888", fontStyle: "italic", marginBottom: 2 },
   definition: {
     fontSize: 14,
     color: "#333",
-    marginTop: 6,
+    marginTop: 3,
     lineHeight: 20,
   },
   notFoundTitle: { fontSize: 15, fontWeight: "600", color: "#111" },

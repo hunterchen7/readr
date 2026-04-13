@@ -1,12 +1,9 @@
-import { Asset } from "expo-asset";
-import * as FileSystem from "expo-file-system";
-
 /**
  * Offline English dictionary. The wordset-dictionary data has been
  * compacted into apps/mobile/assets/dictionary/<letter>.json. Each file
- * is { word: { d: definition, p: partOfSpeech } }. We lazy-load the
- * letter file for the first character of the looked-up word and cache
- * it in memory so subsequent lookups in the same letter are instant.
+ * is { word: { d: definition, p: partOfSpeech } }. Metro bundles the
+ * require() calls directly into the JS bundle, so we just access the
+ * JSON objects in memory — no filesystem reads needed.
  *
  * Total bundled size: ~9 MB across 27 files, ~108,000 words.
  */
@@ -17,15 +14,15 @@ interface DictEntry {
 }
 type LetterMap = Record<string, DictEntry>;
 
-const cache = new Map<string, LetterMap>();
-const loading = new Map<string, Promise<LetterMap | null>>();
-
 /**
- * Metro bundles require() static JSONs into the JS bundle, which is
- * exactly what we want — but imports can only resolve literal paths.
- * Map each letter to its module ref up front.
+ * Metro inlines these require() calls as static JSON into the JS
+ * bundle. Each resolves to the parsed object directly — no async
+ * loading needed. We use a function so they're only evaluated on
+ * first access (Metro resolves them eagerly but the object is
+ * already in memory).
  */
-const LETTER_ASSETS: Record<string, number> = {
+/* eslint-disable @typescript-eslint/no-require-imports */
+const LETTER_DATA: Record<string, LetterMap> = {
   a: require("../assets/dictionary/a.json"),
   b: require("../assets/dictionary/b.json"),
   c: require("../assets/dictionary/c.json"),
@@ -53,39 +50,24 @@ const LETTER_ASSETS: Record<string, number> = {
   y: require("../assets/dictionary/y.json"),
   z: require("../assets/dictionary/z.json"),
 };
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 async function loadLetter(letter: string): Promise<LetterMap | null> {
-  if (cache.has(letter)) return cache.get(letter)!;
-  const existing = loading.get(letter);
-  if (existing) return existing;
+  return LETTER_DATA[letter] ?? null;
+}
 
-  const module = LETTER_ASSETS[letter];
-  if (module == null) return null;
-
-  const promise = (async () => {
-    try {
-      const asset = Asset.fromModule(module);
-      await asset.downloadAsync();
-      const uri = asset.localUri ?? asset.uri;
-      const raw = await FileSystem.readAsStringAsync(uri);
-      const parsed = JSON.parse(raw) as LetterMap;
-      cache.set(letter, parsed);
-      return parsed;
-    } catch (err) {
-      console.warn(`dictionary letter ${letter} failed to load:`, err);
-      return null;
-    } finally {
-      loading.delete(letter);
-    }
-  })();
-  loading.set(letter, promise);
-  return promise;
+export interface Definition {
+  definition: string;
+  partOfSpeech?: string;
 }
 
 export interface LookupResult {
   word: string;
+  /** Primary definition (first one). */
   definition: string;
   partOfSpeech?: string;
+  /** All definitions grouped by part of speech. */
+  definitions: Definition[];
 }
 
 /**
@@ -208,14 +190,52 @@ function fuzzyMatch(
 }
 
 /**
- * Look up a word in the offline dictionary. Handles case, punctuation,
- * hyphenation, apostrophes, and common inflections. Falls back to a
- * bounded fuzzy search on the first-letter file if no exact/stem match
- * is found — useful for typos and OCR artifacts. Returns null if no
- * reasonable match exists.
+ * Try the free dictionaryapi.dev API first — it has multiple
+ * definitions per word, example sentences, and part-of-speech
+ * groupings. Falls back to the offline dictionary on network
+ * failure or 404.
+ */
+async function lookupOnline(word: string): Promise<LookupResult | null> {
+  try {
+    const resp = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.toLowerCase())}`,
+      { signal: AbortSignal.timeout(3000) },
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const entry = data[0];
+    const defs: Definition[] = [];
+    for (const meaning of entry.meanings ?? []) {
+      const pos = meaning.partOfSpeech as string | undefined;
+      for (const d of meaning.definitions ?? []) {
+        defs.push({ definition: d.definition, partOfSpeech: pos });
+      }
+    }
+    if (defs.length === 0) return null;
+    return {
+      word: entry.word ?? word,
+      definition: defs[0].definition,
+      partOfSpeech: defs[0].partOfSpeech,
+      definitions: defs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Look up a word. Tries the online API first for rich multi-definition
+ * results, falls back to the offline dictionary on failure. Handles
+ * case, punctuation, hyphenation, apostrophes, and common inflections.
  */
 export async function lookupWord(raw: string): Promise<LookupResult | null> {
+  // Try online first.
   const candidates = candidateWords(raw);
+  if (candidates.length > 0) {
+    const online = await lookupOnline(candidates[0]);
+    if (online) return online;
+  }
   if (candidates.length === 0) return null;
 
   for (const cand of candidates) {
@@ -227,7 +247,7 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
 
     const direct = dict[cand];
     if (direct) {
-      return { word: cand, definition: direct.d, partOfSpeech: direct.p };
+      return { word: cand, definition: direct.d, partOfSpeech: direct.p, definitions: [{ definition: direct.d, partOfSpeech: direct.p }] };
     }
 
     // Strip common suffixes to catch simple inflections.
@@ -244,7 +264,7 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
     for (const stem of stems) {
       if (stem === cand) continue;
       const hit = dict[stem];
-      if (hit) return { word: stem, definition: hit.d, partOfSpeech: hit.p };
+      if (hit) return { word: stem, definition: hit.d, partOfSpeech: hit.p, definitions: [{ definition: hit.d, partOfSpeech: hit.p }] };
     }
   }
 
@@ -260,7 +280,7 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
       const key = fuzzyMatch(dict, primary, maxDist);
       if (key) {
         const hit = dict[key];
-        return { word: key, definition: hit.d, partOfSpeech: hit.p };
+        return { word: key, definition: hit.d, partOfSpeech: hit.p, definitions: [{ definition: hit.d, partOfSpeech: hit.p }] };
       }
     }
   }
