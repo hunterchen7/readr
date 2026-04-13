@@ -434,6 +434,12 @@ export function HandwritingCanvas({
       EpdMode.reset();
       if (NATIVE_DRAW) HandwriteService.stop();
     }
+    // Cleanup: always stop kernel writing when this effect
+    // re-runs or the component unmounts — covers edge cases
+    // where the modal closes without visible flipping to false.
+    return () => {
+      if (NATIVE_DRAW) HandwriteService.stop();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
