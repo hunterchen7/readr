@@ -96,9 +96,10 @@ export function ContextMenu({
   const iconColor = display.isEink ? "#000" : "#444";
   const linkColor = display.isEink ? "#000" : "#2563eb";
 
-  // Compute menu position. We show the menu below the selection by default,
-  // flip above if it would overflow the bottom, and fall back to pinning near
-  // the bottom of the screen if neither fits (e.g. user selected all text).
+  // Compute menu position. Prefer above the selection — the top edge of the
+  // selection rect is stable while the user drags the bottom handle, so the
+  // menu doesn't jump around mid-selection. Fall back to below if above
+  // would clip the notch/status bar, then pin to bottom as a last resort.
   const safeTop = insets.top + SCREEN_PADDING;
   const safeBottom = screenH - insets.bottom - SCREEN_PADDING;
   const safeLeft = SCREEN_PADDING;
@@ -109,23 +110,21 @@ export function ContextMenu({
   let top: number;
   let left: number;
   if (anchorRect) {
-    const below = anchorRect.y + anchorRect.h + MENU_GAP;
     const above = anchorRect.y - MENU_GAP - menuH;
-    if (below + menuH <= safeBottom) {
-      top = below;
-    } else if (above >= safeTop) {
+    if (above >= safeTop) {
       top = above;
     } else {
-      // Neither fits (selection too tall) — pin near the bottom of the screen.
-      top = safeBottom - menuH;
+      // Selection is near the top — tuck the menu just below the
+      // selection with a ~1.5 line gap so the highlighted text stays
+      // readable without the menu feeling disconnected.
+      top = Math.min(anchorRect.y + anchorRect.h + 30, safeBottom - menuH);
     }
     const centerX = anchorRect.x + anchorRect.w / 2;
     left = centerX - menuW / 2;
     if (left < safeLeft) left = safeLeft;
     if (left + menuW > safeRight) left = safeRight - menuW;
   } else {
-    // Fallback when no rect is available — centered near the bottom.
-    top = safeBottom - menuH;
+    top = safeTop;
     left = (screenW - menuW) / 2;
   }
 

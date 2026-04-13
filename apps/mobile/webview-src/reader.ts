@@ -115,6 +115,14 @@ let currentTheme: Theme = {};
 // classifications here and consult it when routing a tap.
 const noteCfis = new Map<string, 'typed' | 'handwritten'>();
 
+// Monotonic timestamp of the most recent show-annotation event.
+// Foliate fires show-annotation BEFORE the DOM click bubbles, so
+// when handleTap runs we can check whether an annotation was just
+// tapped and bail out instead of turning the page. 500ms is
+// comfortably larger than the click-after-mousedown gap without
+// interfering with a legitimate subsequent tap.
+let lastAnnotationTapAt = 0;
+
 // Full set of highlights we've added, keyed by cfi → color. Foliate
 // discards its overlayer every time a section iframe is unloaded, so
 // when the user navigates away and back we have to replay everything
@@ -927,8 +935,39 @@ async function init(): Promise<void> {
 
     // Tap zones for page turns (honors the tapToTurn theme flag).
     function handleTap(e: MouseEvent): void {
+      // Annotation hit test. Foliate's Overlayer SVG has
+      // pointer-events:none, so the click goes straight through to
+      // the underlying text, and foliate does its own hitTest()
+      // against stored rects to decide whether the click hit an
+      // annotation. We do the SAME hitTest here before running
+      // page-turn logic, so tapping a note marker opens the note
+      // viewer WITHOUT also flipping pages or toggling the chrome.
+      //
+      // This is deterministic — no race on event ordering, no
+      // timing hack. If the tap coordinates overlap an annotation
+      // rect, we swallow the tap. If not, we proceed normally.
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const contents = (view as any)?.renderer?.getContents?.() ?? [];
+        for (const c of contents) {
+          const overlayer = c?.overlayer;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const hit = overlayer?.hitTest?.({ x: e.clientX, y: e.clientY });
+          if (hit && hit[0]) {
+            // Foliate's own click handler will dispatch
+            // 'show-annotation' on the same event, which is what
+            // opens the note viewer. We just have to NOT turn the
+            // page.
+            e.stopPropagation?.();
+            return;
+          }
+        }
+      } catch { /* ignore and fall through */ }
+
       // If there's an active text selection, clear it on tap instead
-      // of navigating. The next tap will navigate normally.
+      // of navigating. The next tap will navigate normally. Done
+      // synchronously because the selection may be wiped by foliate's
+      // own bubble-phase listener if we wait.
       try {
         const d = ((e.view as Window | null) || window).document ?? document;
         const sel = d.getSelection?.() ?? window.getSelection?.();
@@ -942,13 +981,28 @@ async function init(): Promise<void> {
       // Use the parent window's innerWidth and screenX for zone
       // detection. screenX is screen-absolute so it's stable across
       // iframe boundaries; innerWidth is the visible viewport.
+      // Captured here so the deferred callback below stays valid even
+      // after the event object is recycled.
       const w = window.innerWidth || screen.width;
       const x = e.screenX ?? e.clientX;
-      if (tapToTurn && view) {
-        if (x < w * 0.2) { view.prev(); return; }
-        if (x > w * 0.8) { view.next(); return; }
-      }
-      post('tapCenter', {});
+
+      // Defer the page-turn decision to the next macrotask so foliate's
+      // own click listener — registered on the same iframe doc AFTER
+      // ours via the lazy Lc(overlayer) setup — has finished its bubble
+      // pass and dispatched 'show-annotation'. By the time this runs,
+      // our show-annotation listener will have stamped
+      // lastAnnotationTapAt for any note/highlight tap, so the recency
+      // check below catches taps that the synchronous hit test above
+      // missed (which it does for notes, since their hit rects are
+      // just the underline strip rather than the full text span).
+      setTimeout(() => {
+        if (Date.now() - lastAnnotationTapAt < 500) return;
+        if (tapToTurn && view) {
+          if (x < w * 0.2) { view.prev(); return; }
+          if (x > w * 0.8) { view.next(); return; }
+        }
+        post('tapCenter', {});
+      }, 0);
     }
     view.addEventListener('click', handleTap as EventListener);
     document.addEventListener('click', handleTap as EventListener);
@@ -1015,6 +1069,12 @@ async function init(): Promise<void> {
           rect = { x: r.left + ox, y: r.top + oy, w: r.width, h: r.height };
         }
       } catch { /* ignore */ }
+
+      // Mark the tap time so the page-turn tap handler (which runs
+      // a few ms later when the click event bubbles) knows to skip
+      // navigation — otherwise tapping a note marker both opens the
+      // note viewer and flips the page.
+      lastAnnotationTapAt = Date.now();
 
       // Foliate strips custom annotation fields before dispatch, so
       // fall back to the noteCfis map to tell a note apart from a

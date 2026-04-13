@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as SecureStore from "expo-secure-store";
 import { useAuthStore } from "../lib/auth-store";
 import { DisplayProvider, useDisplayStore } from "../contexts/DisplayContext";
@@ -74,29 +75,31 @@ export default function RootLayout() {
   const isEink = useDisplayStore((s) => s.settings.isEink);
 
   return (
-    <SafeAreaProvider>
-      <QueryClientProvider client={queryClient}>
-        <DisplayProvider>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="(auth)" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen
-              name="reader/[bookId]"
-              options={{
-                headerShown: false,
-                animation: isEink ? "none" : "slide_from_right",
-              }}
-            />
-          </Stack>
-          {/* On e-ink, force dark glyphs so status-bar icons stay readable
-              against the reader/library page. We deliberately don't touch
-              translucent or backgroundColor: the app runs edge-to-edge and
-              every screen already pads by `insets.top`, so a solid bar
-              would double-count the top inset and also cover sepia/dark
-              reader themes with a white strip. */}
-          <StatusBar style={isEink ? "dark" : "auto"} />
-        </DisplayProvider>
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <DisplayProvider>
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="(auth)" />
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen
+                name="reader/[bookId]"
+                options={{
+                  headerShown: false,
+                  animation: isEink ? "none" : "slide_from_right",
+                }}
+              />
+            </Stack>
+            {/* On e-ink, force dark glyphs so status-bar icons stay readable
+                against the reader/library page. We deliberately don't touch
+                translucent or backgroundColor: the app runs edge-to-edge and
+                every screen already pads by `insets.top`, so a solid bar
+                would double-count the top inset and also cover sepia/dark
+                reader themes with a white strip. */}
+            <StatusBar style={isEink ? "dark" : "auto"} />
+          </DisplayProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

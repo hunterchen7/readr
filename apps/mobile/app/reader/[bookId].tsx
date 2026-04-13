@@ -812,15 +812,17 @@ export default function ReaderScreen() {
   async function handleSaveDrawing(
     strokes: import("@readr/shared").Stroke[],
     penConfig: import("@readr/shared").PenConfig,
+    canvasImage: string | null,
   ) {
     if (!bookId) return;
     try {
       if (editingNote) {
-        await updateNote(editingNote.id, { strokes, penConfig });
+        await updateNote(editingNote.id, { strokes, penConfig, canvasImage });
         const updated: Note = {
           ...editingNote,
           strokes,
           penConfig,
+          canvasImage,
           updatedAt: new Date().toISOString(),
         };
         setNotes((prev) =>
@@ -834,9 +836,10 @@ export default function ReaderScreen() {
           bookId,
           pos,
           "handwritten",
-          undefined,
+          selectedText || undefined,
           strokes,
           penConfig,
+          canvasImage,
         );
         const next = [n, ...notes];
         setNotes(next);
@@ -893,10 +896,17 @@ export default function ReaderScreen() {
     }
   }
 
-  function openNoteForEdit(n: Note) {
+  const [editingPassageText, setEditingPassageText] = useState("");
+  function openNoteForEdit(n: Note, passage?: string) {
     setViewingNote(null);
     setChooserNotes(null);
     setEditingNote(n);
+    setEditingPassageText(
+      passage ||
+      n.textContent ||
+      highlights.find((h) => h.cfiRange === n.position.cfi)?.textContent ||
+      "",
+    );
     if (n.noteType === "typed") {
       setShowTypedNote(true);
     } else {
@@ -1337,6 +1347,8 @@ export default function ReaderScreen() {
             ? (editingNote.strokes ?? [])
             : []
         }
+        initialCanvasImage={editingNote?.canvasImage}
+        passageText={editingNote ? editingPassageText : selectedText}
         onSave={handleSaveDrawing}
         onCancel={() => {
           setShowDrawing(false);
@@ -1347,11 +1359,18 @@ export default function ReaderScreen() {
       <NoteViewer
         note={viewingNote}
         anchorRect={viewingNoteRect}
+        passageText={
+          viewingNote
+            ? (viewingNote.textContent ||
+               highlights.find((h) => h.cfiRange === viewingNote.position.cfi)?.textContent ||
+               "")
+            : selectedText
+        }
         onClose={() => {
           setViewingNote(null);
           setViewingNoteRect(null);
         }}
-        onEdit={openNoteForEdit}
+        onEdit={(n, passage) => openNoteForEdit(n, passage)}
         onDelete={async (id) => {
           setViewingNote(null);
           setViewingNoteRect(null);
