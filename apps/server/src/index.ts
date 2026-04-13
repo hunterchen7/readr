@@ -16,6 +16,7 @@ import exportRouter from "./routes/export.js";
 import collectionsRouter from "./routes/collections.js";
 import statsRouter from "./routes/stats.js";
 import emailRouter, { emailPublicRouter } from "./routes/email.js";
+import dictionaryRouter from "./routes/dictionary.js";
 
 const app = new Hono();
 
@@ -59,6 +60,11 @@ app.route("/api", registerRouter);
 // These must be BEFORE authMiddleware so unauthenticated users can
 // recover their device token via email.
 app.route("/api", emailPublicRouter);
+
+// Public dictionary endpoint — no auth required so it works before
+// login and keeps overhead low. Backed by a SQLite database built from
+// Wiktionary + WordNet data (see scripts/build-dictionary.mjs).
+app.route("/api", dictionaryRouter);
 
 // Protected API routes
 app.use("/api/*", authMiddleware);

@@ -1,0 +1,4 @@
+# Built by scripts/build-dictionary.mjs — too large to commit (~200 MB).
+# Run the build script to generate locally or in Docker.
+dictionary.db
+wiktionary-en.jsonl.gz

@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { X } from "lucide-react-native";
-import { lookupWord, type LookupResult, type Definition } from "../../lib/dictionary";
+import { lookupWord, type LookupResult } from "../../lib/dictionary";
 
 interface DictionarySheetProps {
   visible: boolean;
@@ -22,23 +22,7 @@ type State =
   | { kind: "found"; result: LookupResult }
   | { kind: "notFound" };
 
-/** Group definitions by part of speech, preserving order. */
-function groupByPos(defs: Definition[]): [string | undefined, Definition[]][] {
-  const groups: [string | undefined, Definition[]][] = [];
-  let currentPos: string | undefined;
-  let currentGroup: Definition[] = [];
-  for (const d of defs) {
-    if (d.partOfSpeech !== currentPos) {
-      if (currentGroup.length > 0) groups.push([currentPos, currentGroup]);
-      currentPos = d.partOfSpeech;
-      currentGroup = [d];
-    } else {
-      currentGroup.push(d);
-    }
-  }
-  if (currentGroup.length > 0) groups.push([currentPos, currentGroup]);
-  return groups;
-}
+const MAX_DEFS_PER_POS = 3;
 
 export function DictionarySheet({
   visible,
@@ -86,23 +70,43 @@ export function DictionarySheet({
           </View>
         ) : state.kind === "found" ? (
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
-            <Text style={styles.word}>{state.result.word}</Text>
-            {groupByPos(state.result.definitions).map(([pos, defs], gi) => (
-              <View key={gi} style={styles.posGroup}>
-                {pos ? <Text style={styles.pos}>{pos}</Text> : null}
-                {defs.map((d, di) => (
-                  <Text key={di} style={styles.definition}>
-                    {defs.length > 1 ? `${di + 1}. ` : ""}{d.definition}
-                  </Text>
-                ))}
-              </View>
-            ))}
+            <View style={styles.wordRow}>
+              <Text style={styles.word}>{state.result.word}</Text>
+              {state.result.pronunciation ? (
+                <Text style={styles.pronunciation}>
+                  {state.result.pronunciation}
+                </Text>
+              ) : null}
+            </View>
+            {state.result.groups.map((group, gi) => {
+              const defs = group.definitions.slice(0, MAX_DEFS_PER_POS);
+              return (
+                <View key={gi} style={styles.posGroup}>
+                  {group.pos ? (
+                    <Text style={styles.pos}>{group.pos}</Text>
+                  ) : null}
+                  {defs.map((d, di) => (
+                    <View key={di} style={styles.defRow}>
+                      {defs.length > 1 ? (
+                        <Text style={styles.defNum}>{di + 1}.</Text>
+                      ) : null}
+                      <View style={styles.defBody}>
+                        <Text style={styles.definition}>{d.definition}</Text>
+                        {d.example ? (
+                          <Text style={styles.example}>"{d.example}"</Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              );
+            })}
           </ScrollView>
         ) : (
           <View style={styles.body}>
             <Text style={styles.notFoundTitle}>Word not found</Text>
             <Text style={styles.notFoundSubtitle} numberOfLines={2}>
-              “{query.trim()}” isn’t in the offline dictionary.
+              "{query.trim()}" isn't in the dictionary.
             </Text>
           </View>
         )}
@@ -152,14 +156,44 @@ const styles = StyleSheet.create({
   bodyContent: {
     paddingVertical: 12,
   },
+  wordRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 8,
+    flexWrap: "wrap",
+  },
   word: { fontSize: 20, fontWeight: "700", color: "#111" },
-  posGroup: { marginTop: 8 },
-  pos: { fontSize: 12, color: "#888", fontStyle: "italic", marginBottom: 2 },
+  pronunciation: { fontSize: 14, color: "#888" },
+  posGroup: { marginTop: 10 },
+  pos: {
+    fontSize: 12,
+    color: "#888",
+    fontStyle: "italic",
+    marginBottom: 4,
+  },
+  defRow: {
+    flexDirection: "row",
+    gap: 4,
+    marginTop: 2,
+  },
+  defNum: {
+    fontSize: 13,
+    color: "#999",
+    fontWeight: "600",
+    minWidth: 16,
+  },
+  defBody: { flex: 1 },
   definition: {
     fontSize: 14,
-    color: "#333",
-    marginTop: 3,
+    color: "#222",
     lineHeight: 20,
+  },
+  example: {
+    fontSize: 13,
+    color: "#777",
+    fontStyle: "italic",
+    lineHeight: 18,
+    marginTop: 2,
   },
   notFoundTitle: { fontSize: 15, fontWeight: "600", color: "#111" },
   notFoundSubtitle: { fontSize: 13, color: "#666", marginTop: 4 },

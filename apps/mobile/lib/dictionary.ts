@@ -1,12 +1,13 @@
 /**
- * Offline English dictionary. The wordset-dictionary data has been
- * compacted into apps/mobile/assets/dictionary/<letter>.json. Each file
- * is { word: { d: definition, p: partOfSpeech } }. Metro bundles the
- * require() calls directly into the JS bundle, so we just access the
- * JSON objects in memory — no filesystem reads needed.
+ * Dictionary lookup. Primary source is the self-hosted dictionary
+ * endpoint on the readr server (Wiktionary + WordNet, ~1M entries).
+ * Falls back to a bundled offline dictionary (~108k words) when the
+ * server is unreachable or not configured.
  *
- * Total bundled size: ~9 MB across 27 files, ~108,000 words.
+ * Bundled data lives in apps/mobile/assets/dictionary/<letter>.json.
+ * Metro bundles the require() calls directly into the JS bundle.
  */
+import { getServerUrl } from "./api";
 
 interface DictEntry {
   d: string;
@@ -58,16 +59,19 @@ async function loadLetter(letter: string): Promise<LetterMap | null> {
 
 export interface Definition {
   definition: string;
-  partOfSpeech?: string;
+  example?: string;
+}
+
+export interface PosGroup {
+  pos: string | null;
+  pronunciation: string | null;
+  definitions: Definition[];
 }
 
 export interface LookupResult {
   word: string;
-  /** Primary definition (first one). */
-  definition: string;
-  partOfSpeech?: string;
-  /** All definitions grouped by part of speech. */
-  definitions: Definition[];
+  pronunciation: string | null;
+  groups: PosGroup[];
 }
 
 /**
@@ -190,67 +194,84 @@ function fuzzyMatch(
 }
 
 /**
- * Try the free dictionaryapi.dev API first — it has multiple
- * definitions per word, example sentences, and part-of-speech
- * groupings. Falls back to the offline dictionary on network
- * failure or 404.
+ * Hit the self-hosted dictionary endpoint on the readr server.
+ * Falls back to the bundled offline dictionary on network failure,
+ * 404, or when no server URL is configured (e.g. before login).
  */
-async function lookupOnline(word: string): Promise<LookupResult | null> {
+async function lookupServer(word: string): Promise<LookupResult | null> {
   try {
+    const serverUrl = await getServerUrl();
+    if (!serverUrl) return null;
     const resp = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.toLowerCase())}`,
+      `${serverUrl}/api/dictionary/${encodeURIComponent(word)}`,
       { signal: AbortSignal.timeout(3000) },
     );
     if (!resp.ok) return null;
     const data = await resp.json();
-    if (!Array.isArray(data) || data.length === 0) return null;
-    const entry = data[0];
-    const defs: Definition[] = [];
-    for (const meaning of entry.meanings ?? []) {
-      const pos = meaning.partOfSpeech as string | undefined;
-      for (const d of meaning.definitions ?? []) {
-        defs.push({ definition: d.definition, partOfSpeech: pos });
+    if (!data || !data.word || !Array.isArray(data.entries)) return null;
+
+    // Merge entries that share the same POS into a single group, and
+    // pick the first non-null pronunciation for the top-level display.
+    const groupMap = new Map<string, PosGroup>();
+    let pronunciation: string | null = null;
+    for (const entry of data.entries) {
+      const pos = (entry.pos as string | null) ?? null;
+      if (!pronunciation && entry.pronunciation) pronunciation = entry.pronunciation;
+      const key = pos ?? "";
+      let group = groupMap.get(key);
+      if (!group) {
+        group = { pos, pronunciation: entry.pronunciation ?? null, definitions: [] };
+        groupMap.set(key, group);
+      }
+      for (const d of entry.definitions ?? []) {
+        group.definitions.push({
+          definition: d.definition,
+          ...(d.example ? { example: d.example } : {}),
+        });
       }
     }
-    if (defs.length === 0) return null;
-    return {
-      word: entry.word ?? word,
-      definition: defs[0].definition,
-      partOfSpeech: defs[0].partOfSpeech,
-      definitions: defs,
-    };
+    const groups = Array.from(groupMap.values());
+    if (groups.length === 0) return null;
+    return { word: data.word, pronunciation, groups };
   } catch {
     return null;
   }
 }
 
 /**
- * Look up a word. Tries the online API first for rich multi-definition
- * results, falls back to the offline dictionary on failure. Handles
- * case, punctuation, hyphenation, apostrophes, and common inflections.
+ * Look up a word. Tries the self-hosted server first for rich
+ * multi-definition results (Wiktionary + WordNet), falls back to the
+ * bundled offline dictionary on failure. The server handles its own
+ * fuzzy matching, so we send the raw selection directly; the bundled
+ * fallback still does client-side candidate generation and stemming.
  */
 export async function lookupWord(raw: string): Promise<LookupResult | null> {
-  // Try online first.
+  // Try the self-hosted server first — it has ~1M entries, multiple
+  // definitions, pronunciations, and its own fuzzy matching.
+  const server = await lookupServer(raw.trim());
+  if (server) return server;
+
+  // Offline fallback: bundled wordset dictionary (~108k single-
+  // definition entries with client-side stemming and fuzzy matching).
   const candidates = candidateWords(raw);
-  if (candidates.length > 0) {
-    const online = await lookupOnline(candidates[0]);
-    if (online) return online;
-  }
   if (candidates.length === 0) return null;
 
+  function fromBundled(word: string, entry: DictEntry): LookupResult {
+    return {
+      word,
+      pronunciation: null,
+      groups: [{ pos: entry.p ?? null, pronunciation: null, definitions: [{ definition: entry.d }] }],
+    };
+  }
+
   for (const cand of candidates) {
-    // Dict files are keyed a-z on the lowercased first char, but keys
-    // within a file preserve the entry's canonical case.
     const letter = cand[0].toLowerCase();
     const dict = await loadLetter(letter);
     if (!dict) continue;
 
     const direct = dict[cand];
-    if (direct) {
-      return { word: cand, definition: direct.d, partOfSpeech: direct.p, definitions: [{ definition: direct.d, partOfSpeech: direct.p }] };
-    }
+    if (direct) return fromBundled(cand, direct);
 
-    // Strip common suffixes to catch simple inflections.
     const stems = [
       cand.replace(/ies$/, "y"),
       cand.replace(/es$/, ""),
@@ -264,13 +285,10 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
     for (const stem of stems) {
       if (stem === cand) continue;
       const hit = dict[stem];
-      if (hit) return { word: stem, definition: hit.d, partOfSpeech: hit.p, definitions: [{ definition: hit.d, partOfSpeech: hit.p }] };
+      if (hit) return fromBundled(stem, hit);
     }
   }
 
-  // Fuzzy fallback. Use the first candidate (usually the full
-  // selection or first word) as the query. Threshold scales with
-  // length so we don't match garbage for short words.
   const primary = candidates[0];
   if (primary.length >= 3) {
     const letter = primary[0].toLowerCase();
@@ -278,10 +296,7 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
     if (dict) {
       const maxDist = primary.length <= 5 ? 1 : primary.length <= 10 ? 2 : 3;
       const key = fuzzyMatch(dict, primary, maxDist);
-      if (key) {
-        const hit = dict[key];
-        return { word: key, definition: hit.d, partOfSpeech: hit.p, definitions: [{ definition: hit.d, partOfSpeech: hit.p }] };
-      }
+      if (key) return fromBundled(key, dict[key]);
     }
   }
 
