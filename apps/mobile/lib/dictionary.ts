@@ -59,17 +59,19 @@ async function loadLetter(letter: string): Promise<LetterMap | null> {
 
 export interface Definition {
   definition: string;
-  partOfSpeech?: string;
-  pronunciation?: string;
+  example?: string;
+}
+
+export interface PosGroup {
+  pos: string | null;
+  pronunciation: string | null;
+  definitions: Definition[];
 }
 
 export interface LookupResult {
   word: string;
-  /** Primary definition (first one). */
-  definition: string;
-  partOfSpeech?: string;
-  /** All definitions grouped by part of speech. */
-  definitions: Definition[];
+  pronunciation: string | null;
+  groups: PosGroup[];
 }
 
 /**
@@ -207,21 +209,30 @@ async function lookupServer(word: string): Promise<LookupResult | null> {
     if (!resp.ok) return null;
     const data = await resp.json();
     if (!data || !data.word || !Array.isArray(data.entries)) return null;
-    const defs: Definition[] = [];
+
+    // Merge entries that share the same POS into a single group, and
+    // pick the first non-null pronunciation for the top-level display.
+    const groupMap = new Map<string, PosGroup>();
+    let pronunciation: string | null = null;
     for (const entry of data.entries) {
-      const pos = entry.pos as string | undefined;
-      const pron = entry.pronunciation as string | undefined;
+      const pos = (entry.pos as string | null) ?? null;
+      if (!pronunciation && entry.pronunciation) pronunciation = entry.pronunciation;
+      const key = pos ?? "";
+      let group = groupMap.get(key);
+      if (!group) {
+        group = { pos, pronunciation: entry.pronunciation ?? null, definitions: [] };
+        groupMap.set(key, group);
+      }
       for (const d of entry.definitions ?? []) {
-        defs.push({ definition: d.definition, partOfSpeech: pos, pronunciation: pron });
+        group.definitions.push({
+          definition: d.definition,
+          ...(d.example ? { example: d.example } : {}),
+        });
       }
     }
-    if (defs.length === 0) return null;
-    return {
-      word: data.word,
-      definition: defs[0].definition,
-      partOfSpeech: defs[0].partOfSpeech,
-      definitions: defs,
-    };
+    const groups = Array.from(groupMap.values());
+    if (groups.length === 0) return null;
+    return { word: data.word, pronunciation, groups };
   } catch {
     return null;
   }
@@ -245,19 +256,22 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
   const candidates = candidateWords(raw);
   if (candidates.length === 0) return null;
 
+  function fromBundled(word: string, entry: DictEntry): LookupResult {
+    return {
+      word,
+      pronunciation: null,
+      groups: [{ pos: entry.p ?? null, pronunciation: null, definitions: [{ definition: entry.d }] }],
+    };
+  }
+
   for (const cand of candidates) {
-    // Dict files are keyed a-z on the lowercased first char, but keys
-    // within a file preserve the entry's canonical case.
     const letter = cand[0].toLowerCase();
     const dict = await loadLetter(letter);
     if (!dict) continue;
 
     const direct = dict[cand];
-    if (direct) {
-      return { word: cand, definition: direct.d, partOfSpeech: direct.p, definitions: [{ definition: direct.d, partOfSpeech: direct.p }] };
-    }
+    if (direct) return fromBundled(cand, direct);
 
-    // Strip common suffixes to catch simple inflections.
     const stems = [
       cand.replace(/ies$/, "y"),
       cand.replace(/es$/, ""),
@@ -271,13 +285,10 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
     for (const stem of stems) {
       if (stem === cand) continue;
       const hit = dict[stem];
-      if (hit) return { word: stem, definition: hit.d, partOfSpeech: hit.p, definitions: [{ definition: hit.d, partOfSpeech: hit.p }] };
+      if (hit) return fromBundled(stem, hit);
     }
   }
 
-  // Fuzzy fallback. Use the first candidate (usually the full
-  // selection or first word) as the query. Threshold scales with
-  // length so we don't match garbage for short words.
   const primary = candidates[0];
   if (primary.length >= 3) {
     const letter = primary[0].toLowerCase();
@@ -285,10 +296,7 @@ export async function lookupWord(raw: string): Promise<LookupResult | null> {
     if (dict) {
       const maxDist = primary.length <= 5 ? 1 : primary.length <= 10 ? 2 : 3;
       const key = fuzzyMatch(dict, primary, maxDist);
-      if (key) {
-        const hit = dict[key];
-        return { word: key, definition: hit.d, partOfSpeech: hit.p, definitions: [{ definition: hit.d, partOfSpeech: hit.p }] };
-      }
+      if (key) return fromBundled(key, dict[key]);
     }
   }
 
