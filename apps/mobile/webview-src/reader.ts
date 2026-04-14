@@ -812,11 +812,11 @@ async function mountScrollStack(): Promise<void> {
   }
 
   scrollStackMounting = false;
-  post('debug', { msg: `scroll stack mount done: ${total} sections` });
 
   // Run periodic re-measurement passes for the first 10 seconds.
-  // Views whose iframe body was empty at initial measurement time
-  // get their size corrected as content finishes rendering.
+  // Views whose iframe body was still empty or rendering during the
+  // mount-loop measurement get their sizes corrected here as content
+  // finishes settling (fonts, images, late reflows).
   const passAll = (): void => {
     for (const v of scrollStackViews) {
       try {
@@ -843,39 +843,6 @@ async function mountScrollStack(): Promise<void> {
 
   try { overlay.remove(); } catch { /* ignore */ }
 
-  // Persistent on-screen debug overlay updating every second. Shows
-  // outer container scrollable height and first 4 view heights.
-  try {
-    let dbg = document.getElementById('readr-stack-dbg') as HTMLDivElement | null;
-    if (!dbg) {
-      dbg = document.createElement('div');
-      dbg.id = 'readr-stack-dbg';
-      dbg.style.cssText =
-        'position:fixed;top:160px;right:8px;z-index:99999;' +
-        'background:rgba(0,0,0,0.8);color:#fff;font:10px monospace;' +
-        'padding:4px 6px;border-radius:4px;pointer-events:none;' +
-        'max-width:260px;white-space:pre;';
-      document.body.appendChild(dbg);
-    }
-    const update = (): void => {
-      if (!scrollStackContainer || !dbg) return;
-      const info = [
-        `H=${scrollStackContainer.scrollHeight}`,
-        `top=${Math.round(scrollStackContainer.scrollTop)}`,
-        ...scrollStackViews.map((v, i) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const rr = v.renderer as any;
-          const body = rr?.getContents?.()?.[0]?.doc?.body;
-          const iH = body?.scrollHeight ?? '?';
-          const sty = v.style.height || 'n';
-          return `v${i.toString().padStart(2, ' ')} s=${sty.replace('px','')} o=${v.offsetHeight} iH=${iH}`;
-        }),
-      ];
-      dbg.textContent = info.join('\n');
-    };
-    update();
-    setInterval(update, 500);
-  } catch { /* ignore */ }
 
   // If we were asked to restore a CFI after mount (paginated→scroll
   // mode switch), do it now.
@@ -957,58 +924,11 @@ function onOuterScroll(): void {
 async function scrollStackGoToCfi(cfi: string): Promise<void> {
   if (!scrollStackContainer || scrollStackViews.length === 0) return;
   const anyView = scrollStackViews[0];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let idx = 0;
+  let anchorFn: ((doc: Document) => { getBoundingClientRect?(): DOMRect; offsetTop?: number } | Range | null) | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const resolved = (anyView as any).resolveCFI?.(cfi);
-    if (resolved && typeof resolved.index === 'number') idx = resolved.index;
-  } catch { /* ignore */ }
-  idx = Math.max(0, Math.min(scrollStackViews.length - 1, idx));
-  const targetView = scrollStackViews[idx];
-  if (!targetView) return;
-
-  // Get the anchor's in-iframe offset relative to the view, then
-  // translate into outer scroll coordinates.
-  let anchorOffsetInView = 0;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resolved = (anyView as any).resolveCFI?.(cfi);
-    const anchorFn = resolved?.anchor;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contents = (targetView as any).renderer?.getContents?.() ?? [];
-    const content = contents.find((c: { index: number }) => c.index === idx);
-    if (content && typeof anchorFn === 'function') {
-      const node = anchorFn(content.doc);
-      if (node && node.getBoundingClientRect) {
-        const r = node.getBoundingClientRect();
-        const iframe = content.doc.defaultView?.frameElement as HTMLElement | null;
-        const ir = iframe?.getBoundingClientRect();
-        const vr = targetView.getBoundingClientRect();
-        // Anchor top in outer-container coords
-        anchorOffsetInView = (ir?.top ?? vr.top) + r.top - vr.top;
-      }
-    }
-  } catch { /* ignore */ }
-
-  const vr = targetView.getBoundingClientRect();
-  const crect = scrollStackContainer.getBoundingClientRect();
-  const current = scrollStackContainer.scrollTop;
-  const target = current + (vr.top - crect.top) + anchorOffsetInView;
-  scrollStackContainer.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
-}
-
-// Navigate to a TOC href. Each stacked view knows how to resolve
-// hrefs (via foliate-view.resolveNavTarget). We use any view's
-// resolver — they share the book.
-async function scrollStackGoToHref(href: string): Promise<void> {
-  if (!scrollStackContainer || scrollStackViews.length === 0) return;
-  const anyView = scrollStackViews[0];
-  let idx = 0;
-  let anchorFn: ((doc: Document) => Element | null) | null = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resolved = await (anyView as any).resolveNavTarget?.(href);
     if (resolved && typeof resolved.index === 'number') idx = resolved.index;
     if (resolved && typeof resolved.anchor === 'function') anchorFn = resolved.anchor;
   } catch { /* ignore */ }
@@ -1020,23 +940,85 @@ async function scrollStackGoToHref(href: string): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contents = (targetView as any).renderer?.getContents?.() ?? [];
-    const content = contents.find((c: { index: number }) => c.index === idx);
+    const content = contents[0];
     if (content && anchorFn) {
       const node = anchorFn(content.doc);
-      if (node && (node as HTMLElement).getBoundingClientRect) {
-        const r = (node as HTMLElement).getBoundingClientRect();
+      // Range: use getBoundingClientRect + iframe offset math.
+      // Element: offsetTop is simpler and reliable.
+      if (node instanceof Range) {
+        const r = node.getBoundingClientRect();
         const iframe = content.doc.defaultView?.frameElement as HTMLElement | null;
         const ir = iframe?.getBoundingClientRect();
         const vr = targetView.getBoundingClientRect();
-        anchorOffset = (ir?.top ?? vr.top) + r.top - vr.top;
+        const current = scrollStackContainer.scrollTop;
+        anchorOffset = current + (vr.top - scrollStackContainer.getBoundingClientRect().top)
+          + (ir?.top ?? vr.top) + r.top - vr.top - targetView.offsetTop;
+      } else if (node && typeof (node as HTMLElement).offsetTop === 'number') {
+        anchorOffset = (node as HTMLElement).offsetTop;
       }
     }
   } catch { /* ignore */ }
 
-  const vr = targetView.getBoundingClientRect();
-  const crect = scrollStackContainer.getBoundingClientRect();
-  const current = scrollStackContainer.scrollTop;
-  const target = current + (vr.top - crect.top) + anchorOffset;
+  const target = targetView.offsetTop + anchorOffset;
+  scrollStackContainer.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
+}
+
+// Navigate to a TOC href. Each stacked view knows how to resolve
+// hrefs (via foliate-view.resolveNavigation). We use any view's
+// resolver — they share the book.
+async function scrollStackGoToHref(href: string): Promise<void> {
+  if (!scrollStackContainer || scrollStackViews.length === 0) return;
+  const anyView = scrollStackViews[0];
+
+  // Resolve the href to { index, anchor } via foliate-view.
+  let idx = -1;
+  let anchorFn: ((doc: Document) => Element | null) | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resolved = await (anyView as any).resolveNavigation?.(href);
+    if (resolved && typeof resolved.index === 'number') idx = resolved.index;
+    if (resolved && typeof resolved.anchor === 'function') anchorFn = resolved.anchor;
+  } catch { /* ignore */ }
+
+  // Fallback 1: look up in the flattened TOC we built at book load.
+  if (idx < 0) {
+    const entry = tocFlat.find((t) => t.href === href);
+    if (entry) idx = entry.sectionIndex;
+  }
+
+  // Fallback 2: scan book sections for matching href/id.
+  if (idx < 0 && book?.sections) {
+    const base = href.split('#')[0];
+    for (let i = 0; i < book.sections.length; i++) {
+      const sid = book.sections[i]?.id;
+      if (sid && (sid === base || sid.endsWith(base) || base.endsWith(sid))) {
+        idx = i;
+        break;
+      }
+    }
+  }
+
+  idx = Math.max(0, Math.min(scrollStackViews.length - 1, idx < 0 ? 0 : idx));
+  const targetView = scrollStackViews[idx];
+  if (!targetView) return;
+
+  // Anchor-within-section offset. offsetTop of the anchor element
+  // inside the iframe's document gives us exactly how far into the
+  // section it is, regardless of iframe/view chrome.
+  let anchorOffset = 0;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contents = (targetView as any).renderer?.getContents?.() ?? [];
+    const content = contents[0] ?? contents.find((c: { index: number }) => c.index === idx);
+    if (content && anchorFn) {
+      const node = anchorFn(content.doc) as HTMLElement | null;
+      if (node && typeof node.offsetTop === 'number') anchorOffset = node.offsetTop;
+    }
+  } catch { /* ignore */ }
+
+  // Target in outer-container scroll coordinates: the view's offsetTop
+  // relative to container + anchor's offset inside the section.
+  const target = targetView.offsetTop + anchorOffset;
   scrollStackContainer.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
 }
 
