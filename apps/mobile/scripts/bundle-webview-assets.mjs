@@ -23,6 +23,8 @@ mkdirSync(outDir, { recursive: true });
 const entryCode = `
   export { makeBook } from 'foliate-js/view.js';
   export { Overlayer } from 'foliate-js/overlayer.js';
+  export * as CFI from 'foliate-js/epubcfi.js';
+  export { SectionProgress, TOCProgress } from 'foliate-js/progress.js';
 `;
 const entryPath = join(root, ".foliate-entry.js");
 writeFileSync(entryPath, entryCode);
@@ -63,13 +65,16 @@ try { unlinkSync(entryPath); } catch {}
 {
   const bundlePath = join(outDir, "foliate-bundle.js");
   const src = readFileSync(bundlePath, "utf8");
-  const needle = /(qr=async function\(t,n\)\{if\(l\(this,un\)\)return;I\(this,un,!0\);)(let s=t===-1,r=await\(s\?k\(this,F,uc\)\.call\(this,n\):k\(this,F,dc\)\.call\(this,n\)\);r&&await k\(this,F,_s\)\.call\(this,\{index:k\(this,F,ln\)\.call\(this,t\),anchor:s\?\(\)=>1:\(\)=>0\}\),\(r\|\|!this\.hasAttribute\("animated"\)\)&&await qh\(100\))(,I\(this,un,!1\)\})/;
+  // Match the turnPage function with flexible variable names.
+  // The lock variable (un/fn/etc) varies with minification; capture it.
+  const needle = /(=async function\(t,n\)\{if\(l\(this,(\w+)\)\)return;I\(this,\2,!0\);)(let s=t===-1,r=await\(s\?k\(this,\w+,\w+\)\.call\(this,n\):k\(this,\w+,\w+\)\.call\(this,n\)\);r&&await k\(this,\w+,\w+\)\.call\(this,\{index:k\(this,\w+,\w+\)\.call\(this,t\),anchor:s\?\(\)=>1:\(\)=>0\}\),\(r\|\|!this\.hasAttribute\("animated"\)\)&&await \w+\(100\))(,I\(this,\2,!1\)\})/;
   if (!needle.test(src)) {
     throw new Error("foliate qr() patch failed: pattern not found. Did foliate-js update?");
   }
   const patched = src.replace(
     needle,
-    "$1let __readrUnlock=setTimeout(()=>I(this,un,!1),300);try{$2}finally{clearTimeout(__readrUnlock);I(this,un,!1)}}"
+    (_, pre, lockVar, body, post) =>
+      `${pre}let __readrUnlock=setTimeout(()=>I(this,${lockVar},!1),300);try{${body}}finally{clearTimeout(__readrUnlock);I(this,${lockVar},!1)}}`
   );
   writeFileSync(bundlePath, patched);
   console.log("✓ patched foliate qr() navigation lock");
