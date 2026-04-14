@@ -724,12 +724,20 @@ async function mountScrollStack(): Promise<void> {
   // `exportparts` forwards the paginator's `container` part through
   // foliate-view's shadow root so our outer ::part CSS can disable
   // the paginator's internal scroll.
+  //
+  // Initial placeholder height is intentionally large (8000px). The
+  // paginator's View.expand() in scrolled mode reads
+  // `documentElement.getBoundingClientRect().height` to size its
+  // iframe — if we start with a small host, the iframe's viewport is
+  // small, the internal layout can compress, and the measurement comes
+  // back undersized. Starting large lets the content flow to its
+  // natural height; measureAndApply then shrinks the host to match.
   for (let i = 0; i < total; i++) {
     const v = document.createElement('foliate-view') as FoliateView;
     v.dataset.secIdx = String(i);
     v.setAttribute('exportparts', 'container,head,foot,filter');
     v.style.cssText =
-      'display:block;width:100%;height:400px;' +
+      'display:block;width:100%;height:8000px;' +
       `background:${currentTheme.bg || '#fff'};`;
     container.appendChild(v);
     scrollStackViews.push(v);
@@ -771,12 +779,21 @@ async function mountScrollStack(): Promise<void> {
     // viewSize getter measures the View's #element div which may report
     // a stale value immediately after render(). documentElement.scrollHeight
     // is always the true content height.
-    // measureAndApply: always use the iframe body's current
-    // scrollHeight. Body is constrained by paginator's columnWidth
-    // max-width setting so its scrollHeight is a faithful measure of
-    // text content height. documentElement.scrollHeight sometimes
-    // reports huge transient values during paginator layout that
-    // cause the host to balloon; skip it entirely.
+    // measureAndApply: never shrink below the largest content height
+    // we've ever seen. Take the MAX of body.scrollHeight and the
+    // iframe element's offsetHeight — foliate's View.expand() sets the
+    // iframe height to the measured content size, which is the
+    // authoritative "rendered" height. body.scrollHeight alone can
+    // undershoot while the column layout is still settling (e.g.,
+    // before font-ready events), causing text to be clipped at the
+    // bottom of the host.
+    // measureAndApply: take max across several sources, always apply.
+    // Because we start with a large placeholder (8000px), the iframe's
+    // internal layout isn't constrained, so body.scrollHeight reflects
+    // true content height. Each retry re-measures — if content grows
+    // (fonts load, images decode) we grow; if initial reading was
+    // large due to the placeholder, the next pass reports real
+    // content size and we shrink to match.
     const measureAndApply = (): void => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -785,9 +802,11 @@ async function mountScrollStack(): Promise<void> {
         let h = 0;
         for (const c of contents) {
           const body = c?.doc?.body;
+          const de = c?.doc?.documentElement;
           if (body) h = Math.max(h, body.scrollHeight);
+          if (de) h = Math.max(h, de.scrollHeight);
         }
-        if (h <= 0) h = rr?.viewSize ?? 0;
+        h = Math.max(h, rr?.viewSize ?? 0);
         if (h > 0) v.style.height = h + 'px';
       } catch { /* ignore */ }
     };
@@ -806,6 +825,7 @@ async function mountScrollStack(): Promise<void> {
         if (c?.doc?.body) {
           const ro = new ResizeObserver(measureAndApply);
           ro.observe(c.doc.body);
+          ro.observe(c.doc.documentElement);
         }
       }
     } catch { /* ignore */ }
@@ -816,7 +836,9 @@ async function mountScrollStack(): Promise<void> {
   // Run periodic re-measurement passes for the first 10 seconds.
   // Views whose iframe body was still empty or rendering during the
   // mount-loop measurement get their sizes corrected here as content
-  // finishes settling (fonts, images, late reflows).
+  // finishes settling (fonts, images, late reflows). Never shrink
+  // below the max-ever height we've recorded for each view, so
+  // transient small readings during layout reflow can't clip content.
   const passAll = (): void => {
     for (const v of scrollStackViews) {
       try {
@@ -826,9 +848,11 @@ async function mountScrollStack(): Promise<void> {
         let h = 0;
         for (const c of contents) {
           const body = c?.doc?.body;
+          const de = c?.doc?.documentElement;
           if (body) h = Math.max(h, body.scrollHeight);
+          if (de) h = Math.max(h, de.scrollHeight);
         }
-        if (h <= 0) h = rr?.viewSize ?? 0;
+        h = Math.max(h, rr?.viewSize ?? 0);
         if (h > 0) v.style.height = h + 'px';
       } catch { /* ignore */ }
     }
@@ -860,11 +884,22 @@ function unmountScrollStack(): void {
   if (!scrollStackContainer) return;
   scrollStackContainer.removeEventListener('scroll', onOuterScroll);
   for (const v of scrollStackViews) {
+    try {
+      // Give each stacked foliate-view a chance to destroy its
+      // paginator + release observers. Silently ignore if it doesn't
+      // expose a close() — remove() will still clean the DOM.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (v as any).close?.();
+    } catch { /* ignore */ }
     try { v.remove(); } catch { /* ignore */ }
   }
   scrollStackContainer.remove();
   scrollStackContainer = null;
   scrollStackViews = [];
+  scrollStackCurIdx = 0;
+  // Clean the stacked-doc attach registry so remount attaches anew.
+  // (WeakSet auto-cleans docs that no longer exist, but the stack's
+  // fresh iframes create fresh docs anyway.)
   if (view) view.style.display = '';
 }
 
