@@ -480,26 +480,11 @@ function installScrollProgressLoop(enabled: boolean): void {
 // register a per-view relocate listener that sizes the host element to
 // content height once the section renders.
 function wireStackedView(v: FoliateView, secIdx: number): void {
-  // Size host to content height after first paint. Re-measure on
-  // resize (font load, image decode, etc).
-  const sizeHost = (): void => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r = v.renderer as any;
-    const h = r?.viewSize;
-    if (typeof h === 'number' && h > 0) {
-      v.style.height = h + 'px';
-    }
-  };
-
   v.addEventListener('relocate', (e) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const d = (e as CustomEvent).detail as any;
-    // Relocate in a stacked view means its internal scroll changed.
-    // We don't care about that for progress (outer scroll owns it),
-    // but we do want the host sized on first relocate.
-    sizeHost();
     // Cache last detail for this stacked view (used by CFI capture
-    // on mode switch).
+    // on mode switch). Sizing happens in mountScrollStack after goTo.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (v as any).__lastRelocateDetail = d;
   });
@@ -567,20 +552,9 @@ function wireStackedView(v: FoliateView, secIdx: number): void {
     if (!doc) return;
     injectThemeIntoDoc(doc);
     attachStackedDocHandlers(doc, v, secIdx);
-    // Re-measure after load, fonts, and a couple frames so images
-    // that lazy-decode get captured.
-    const remeasure = (): void => sizeHost();
-    remeasure();
-    requestAnimationFrame(remeasure);
-    requestAnimationFrame(() => requestAnimationFrame(remeasure));
-    try {
-      doc.fonts?.ready?.then(() => remeasure());
-    } catch { /* ignore */ }
-    try {
-      const ro = new ResizeObserver(remeasure);
-      ro.observe(doc.documentElement);
-      ro.observe(doc.body);
-    } catch { /* ignore */ }
+    // Sizing is handled by mountScrollStack's measureAndApply after
+    // each view's goTo resolves — putting it here too caused races
+    // that shrank host heights mid-scroll.
   });
 
   v.addEventListener('external-link', (e) => {
@@ -675,21 +649,27 @@ function attachStackedDocHandlers(doc: Document, v: FoliateView, secIdx: number)
 // container, and instantiate a foliate-view per section inside. Book
 // is shared across all stacked views — makeBook returns a structure
 // safe to open multiple times.
-// Install CSS that disables per-view inner scroll on stacked foliate-views.
-// Called once before mounting the stack; idempotent.
+// Install CSS for stacked foliate-views. Global rules in
+// epub-html.ts set `foliate-view { height: 100% }`, which would force
+// every stacked view to one viewport height. Override with `height:
+// auto` so our inline `height: <content>px` from sizeHost can shrink
+// the host to content height. Also disable the paginator's internal
+// #container scroll via ::part(container) — we forward the part via
+// `exportparts` on each stacked view so this selector reaches
+// through both shadow boundaries (foliate-view + paginator).
 function ensureScrollStackStyles(): void {
   if (document.getElementById('readr-scroll-stack-style')) return;
   const s = document.createElement('style');
   s.id = 'readr-scroll-stack-style';
   s.textContent = `
-    foliate-view[data-sec-idx]::part(container) {
-      overflow: visible !important;
-      grid-row: 1 / -1 !important;
-      grid-column: 1 / -1 !important;
-    }
     foliate-view[data-sec-idx] {
       display: block;
       width: 100%;
+      height: auto;
+      min-height: 100px;
+    }
+    foliate-view[data-sec-idx]::part(container) {
+      overflow: visible !important;
     }
   `;
   document.head.appendChild(s);
@@ -723,13 +703,31 @@ async function mountScrollStack(): Promise<void> {
 
   container.addEventListener('scroll', onOuterScroll, { passive: true });
 
+  // Loading overlay covers the stack while mount is in progress.
+  // Removed once the mount loop completes so users can't scroll into
+  // un-mounted placeholder territory (which appears blank).
+  const overlay = document.createElement('div');
+  overlay.id = 'scroll-stack-loading';
+  overlay.style.cssText =
+    'position:absolute;inset:0;z-index:10;display:flex;' +
+    'align-items:center;justify-content:center;' +
+    `background:${currentTheme.bg || '#fff'};` +
+    `color:${currentTheme.fg || '#666'};` +
+    'font:14px system-ui,sans-serif;';
+  overlay.textContent = 'Loading…';
+  container.appendChild(overlay);
+
   const total = book.sections.length;
   scrollStackViews = [];
 
   // Create all host elements up front so layout is stable during load.
+  // `exportparts` forwards the paginator's `container` part through
+  // foliate-view's shadow root so our outer ::part CSS can disable
+  // the paginator's internal scroll.
   for (let i = 0; i < total; i++) {
     const v = document.createElement('foliate-view') as FoliateView;
     v.dataset.secIdx = String(i);
+    v.setAttribute('exportparts', 'container,head,foot,filter');
     v.style.cssText =
       'display:block;width:100%;height:400px;' +
       `background:${currentTheme.bg || '#fff'};`;
@@ -773,6 +771,12 @@ async function mountScrollStack(): Promise<void> {
     // viewSize getter measures the View's #element div which may report
     // a stale value immediately after render(). documentElement.scrollHeight
     // is always the true content height.
+    // measureAndApply: always use the iframe body's current
+    // scrollHeight. Body is constrained by paginator's columnWidth
+    // max-width setting so its scrollHeight is a faithful measure of
+    // text content height. documentElement.scrollHeight sometimes
+    // reports huge transient values during paginator layout that
+    // cause the host to balloon; skip it entirely.
     const measureAndApply = (): void => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -780,21 +784,98 @@ async function mountScrollStack(): Promise<void> {
         const contents = rr?.getContents?.() ?? [];
         let h = 0;
         for (const c of contents) {
-          const de = c?.doc?.documentElement;
-          if (de) h = Math.max(h, de.scrollHeight, de.getBoundingClientRect?.()?.height ?? 0);
+          const body = c?.doc?.body;
+          if (body) h = Math.max(h, body.scrollHeight);
         }
         if (h <= 0) h = rr?.viewSize ?? 0;
         if (h > 0) v.style.height = h + 'px';
       } catch { /* ignore */ }
     };
     measureAndApply();
-    // Retry on next frames — paginator layout can settle late.
     requestAnimationFrame(measureAndApply);
     requestAnimationFrame(() => requestAnimationFrame(measureAndApply));
+    setTimeout(measureAndApply, 50);
+    setTimeout(measureAndApply, 250);
+    setTimeout(measureAndApply, 1000);
+    // ResizeObserver: re-measure on any content resize (fonts, images).
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rr = v.renderer as any;
+      const contents = rr?.getContents?.() ?? [];
+      for (const c of contents) {
+        if (c?.doc?.body) {
+          const ro = new ResizeObserver(measureAndApply);
+          ro.observe(c.doc.body);
+        }
+      }
+    } catch { /* ignore */ }
   }
 
   scrollStackMounting = false;
   post('debug', { msg: `scroll stack mount done: ${total} sections` });
+
+  // Run periodic re-measurement passes for the first 10 seconds.
+  // Views whose iframe body was empty at initial measurement time
+  // get their size corrected as content finishes rendering.
+  const passAll = (): void => {
+    for (const v of scrollStackViews) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rr = v.renderer as any;
+        const contents = rr?.getContents?.() ?? [];
+        let h = 0;
+        for (const c of contents) {
+          const body = c?.doc?.body;
+          if (body) h = Math.max(h, body.scrollHeight);
+        }
+        if (h <= 0) h = rr?.viewSize ?? 0;
+        if (h > 0) v.style.height = h + 'px';
+      } catch { /* ignore */ }
+    }
+  };
+  passAll();
+  let passCount = 0;
+  const passInterval = setInterval(() => {
+    passAll();
+    passCount++;
+    if (passCount >= 20) clearInterval(passInterval);
+  }, 500);
+
+  try { overlay.remove(); } catch { /* ignore */ }
+
+  // Persistent on-screen debug overlay updating every second. Shows
+  // outer container scrollable height and first 4 view heights.
+  try {
+    let dbg = document.getElementById('readr-stack-dbg') as HTMLDivElement | null;
+    if (!dbg) {
+      dbg = document.createElement('div');
+      dbg.id = 'readr-stack-dbg';
+      dbg.style.cssText =
+        'position:fixed;top:160px;right:8px;z-index:99999;' +
+        'background:rgba(0,0,0,0.8);color:#fff;font:10px monospace;' +
+        'padding:4px 6px;border-radius:4px;pointer-events:none;' +
+        'max-width:260px;white-space:pre;';
+      document.body.appendChild(dbg);
+    }
+    const update = (): void => {
+      if (!scrollStackContainer || !dbg) return;
+      const info = [
+        `H=${scrollStackContainer.scrollHeight}`,
+        `top=${Math.round(scrollStackContainer.scrollTop)}`,
+        ...scrollStackViews.map((v, i) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rr = v.renderer as any;
+          const body = rr?.getContents?.()?.[0]?.doc?.body;
+          const iH = body?.scrollHeight ?? '?';
+          const sty = v.style.height || 'n';
+          return `v${i.toString().padStart(2, ' ')} s=${sty.replace('px','')} o=${v.offsetHeight} iH=${iH}`;
+        }),
+      ];
+      dbg.textContent = info.join('\n');
+    };
+    update();
+    setInterval(update, 500);
+  } catch { /* ignore */ }
 
   // If we were asked to restore a CFI after mount (paginated→scroll
   // mode switch), do it now.
