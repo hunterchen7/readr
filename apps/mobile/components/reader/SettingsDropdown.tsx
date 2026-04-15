@@ -282,6 +282,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
                 { label: "Tap", mode: "tap" as const },
                 { label: "Swipe", mode: "swipe" as const },
                 { label: "Both", mode: "both" as const },
+                { label: "Scroll", mode: "scroll" as const },
               ]).map((opt) => {
                 const active = (theme.pageTurnMode ?? "both") === opt.mode;
                 return (
@@ -296,6 +297,31 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
                         tapToTurn: opt.mode !== "swipe",
                       })
                     }
+                  >
+                    <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Progress bar mode */}
+            <Text style={[styles.label, { color: muted }]}>Progress bar</Text>
+            <View style={styles.row}>
+              {([
+                { label: "Off", value: "off" as const },
+                { label: "Bar", value: "bar" as const },
+                { label: "Always", value: "always" as const },
+                { label: "Verbose", value: "verbose" as const },
+              ]).map((opt) => {
+                const cur = typeof theme.progressBar === "boolean"
+                  ? (theme.progressBar ? "always" : "off")
+                  : (theme.progressBar ?? "always");
+                const active = cur === opt.value;
+                return (
+                  <Pressable
+                    key={opt.label}
+                    style={[styles.chipBtn, { backgroundColor: active ? chipActiveBg : chipBg }]}
+                    onPress={() => update({ progressBar: opt.value })}
                   >
                     <Text style={{ fontSize: 12, color: active ? chipActiveFg : fg }}>{opt.label}</Text>
                   </Pressable>

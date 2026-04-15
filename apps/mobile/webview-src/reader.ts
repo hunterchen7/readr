@@ -76,7 +76,7 @@ interface Theme {
   margin?: number;
   marginV?: number;
   tapToTurn?: boolean;
-  pageTurnMode?: 'tap' | 'swipe' | 'both';
+  pageTurnMode?: 'tap' | 'swipe' | 'both' | 'scroll';
   isEink?: boolean;
 }
 
@@ -110,6 +110,11 @@ let sectionPageCountsLocked = false;
 // Theme CSS that gets injected into every new section document.
 let currentThemeCSS = '';
 let currentTheme: Theme = {};
+// Cached most recent relocate detail. Scroll-mode rAF updates reuse
+// it so they don't have to recompute fields foliate already produced
+// (cfi, tocItem, byte-based location).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let lastRelocateDetail: any = null;
 // Map of note CFI → noteType ('typed' | 'handwritten'). Foliate's
 // show-annotation event drops custom annotation fields, so we mirror
 // classifications here and consult it when routing a tap.
@@ -150,9 +155,18 @@ function computeAndPostProgress(d: any): void {
 
   const rPages = view.renderer?.pages;
   const rPage = view.renderer?.page;
-  const pagesInSection = typeof rPages === 'number' && rPages > 2 ? rPages - 2 : 1;
-  const pageInSection = typeof rPage === 'number' && typeof rPages === 'number' && rPages > 2
-    ? Math.max(1, Math.min(pagesInSection, rPage))
+  // Paginated mode has 2 padding columns (start/end), so the visible
+  // page count is rPages - 2. Scrolled flow (including our forked
+  // stacked-scrolled mode where rPages now reports focal-section page
+  // count) has no padding, so use rPages directly.
+  const isScrolled = view.renderer?.getAttribute?.('flow') === 'scrolled';
+  const pagesInSection = typeof rPages === 'number'
+    ? (isScrolled ? Math.max(1, rPages) : (rPages > 2 ? rPages - 2 : 1))
+    : 1;
+  const pageInSection = typeof rPage === 'number' && typeof rPages === 'number'
+    ? (isScrolled
+        ? Math.max(1, Math.min(pagesInSection, rPage))
+        : (rPages > 2 ? Math.max(1, Math.min(pagesInSection, rPage)) : 1))
     : 1;
 
   let currentPage: number;
@@ -164,7 +178,10 @@ function computeAndPostProgress(d: any): void {
     // source of truth for the section we're actually rendering. If
     // measurement drifted, update sectionPageCounts in place so the
     // mapping below is exact and total converges toward truth.
-    if (typeof rPages === 'number' && rPages > 2) {
+    // Don't refine in scroll mode — pages there are derived from
+    // viewport-fit math, not foliate's columnized page count, so the
+    // runtime number wouldn't match what paginated measurement saw.
+    if (!isScrolled && typeof rPages === 'number' && rPages > 2) {
       const runtimeCount = rPages - 2;
       if (sectionPageCounts[secIdx] !== runtimeCount) {
         sectionPageCounts[secIdx] = runtimeCount;
@@ -199,10 +216,13 @@ function computeAndPostProgress(d: any): void {
   } else {
     // Stub: foliate's byte-based location.total. Note this is
     // invariant to font/margin (it's a byte-based estimate), so the
-    // user won't see a number change until measurement locks.
+    // user won't see a TOTAL change until measurement locks. But
+    // currentPage interpolated from the live fraction lets it scrub
+    // smoothly during scroll instead of being frozen at the cached
+    // location.current from the last debounced relocate.
     const loc = d.location;
     totalPages = loc?.total ?? 1;
-    currentPage = loc?.current != null ? loc.current + 1 : 1;
+    currentPage = Math.max(1, Math.min(totalPages, Math.round(totalPages * frac) || 1));
     totalIsEstimate = true;
   }
 
@@ -513,11 +533,25 @@ function applyTheme(theme: Theme): void {
     forceShadowBackground(view, bgColor);
   }
 
-  // Page-turn mode (not layout-affecting)
-  const mode: 'tap' | 'swipe' | 'both' =
+  // Page-turn mode. "scroll" switches foliate into continuous scrolled
+  // flow (our forked paginator mounts adjacent sections in-place, so a
+  // single drag carries the reader across section boundaries without
+  // remounting anything). The other three are gesture modes within
+  // paginated layout.
+  const mode: 'tap' | 'swipe' | 'both' | 'scroll' =
     theme.pageTurnMode ?? (theme.tapToTurn === false ? 'swipe' : 'both');
-  tapToTurn = mode !== 'swipe';
-  swipeEnabled = mode !== 'tap';
+  if (mode === 'scroll') {
+    // Tap-to-turn is meaningless in scroll mode and swipeEnabled must
+    // be TRUE so blockSwipe doesn't preventDefault — native scroll
+    // has to reach the paginator.
+    tapToTurn = false;
+    swipeEnabled = true;
+  } else {
+    tapToTurn = mode !== 'swipe';
+    swipeEnabled = mode !== 'tap';
+  }
+  // Tell RN (for UI affordances like hiding page-indicator in scroll).
+  post('scrollModeChanged', { scrollMode: mode === 'scroll' });
 
   // Keep the section-iframe CSS string current so new sections pick
   // up the latest theme. Also push it into the current section doc —
@@ -532,23 +566,29 @@ function applyTheme(theme: Theme): void {
   // ── Layout work (only when something layout-affecting changed) ───
   if (!layoutChanged) return;
 
-  // Apply layout attributes to foliate's actual paginator, not the
-  // outer foliate-view wrapper. The paginator keeps its own anchor
-  // across render() calls, so we can let it reflow in place instead of
-  // blanking the screen and manually restoring by CFI.
-  // Foliate expects `gap` as a percentage, while the max-* caps and
-  // margin use px lengths. Keep those units aligned with the paginator
-  // contract or its grid math falls back to the defaults.
-  renderer.setAttribute('flow', 'paginated');
+  // Apply layout attributes to the paginator (renderer), not the outer
+  // foliate-view wrapper — the paginator keeps its anchor across
+  // render() calls so it can reflow in place. `gap` is a percentage,
+  // `margin`/max-* caps are px lengths; mismatched units fall back to
+  // the paginator's defaults.
+  // The flow attribute drives our forked paginator's mode switch:
+  // toggling to/from 'scrolled' builds or tears down the section stack
+  // in place, with foliate's #index/#anchor carrying position across.
+  renderer.setAttribute('flow', mode === 'scroll' ? 'scrolled' : 'paginated');
   renderer.setAttribute('gap', '0%');
   renderer.setAttribute('max-inline-size', '99999px');
   renderer.setAttribute('max-block-size', '99999px');
   renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
+  // Page-count measurement is paginated-only. When entering scroll
+  // mode, KEEP the previous run's counts so total pages still display
+  // — they're correct as long as the layout (margin/font) hasn't
+  // changed, which is exactly what the layoutChanged guard ensures.
+  if (mode === 'scroll') return;
   sectionPageCounts = {};
   sectionPageCountsLocked = false;
   _measureSeq++;
   post('debug', {
-    msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily}`,
+    msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily} mode=${mode}`,
   });
   requestAnimationFrame(() => {
     void runMeasurement();
@@ -1020,8 +1060,60 @@ async function init(): Promise<void> {
     view.addEventListener('relocate', (e) => {
       ensureAllDocsAttached();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      computeAndPostProgress((e as CustomEvent).detail as any);
+      const detail = (e as CustomEvent).detail as any;
+      lastRelocateDetail = detail;
+      computeAndPostProgress(detail);
     });
+
+    // Live scroll-mode progress: foliate's debounced relocate only
+    // fires 250ms after scroll stops, so percentage and page numbers
+    // freeze during a long drag. The paginator (renderer) dispatches
+    // a non-debounced 'scroll' Event on every native scroll — we
+    // throttle that via rAF and emit a transient progressUpdated
+    // built from the last authoritative relocate detail with the
+    // live fraction patched in. RN ignores transient updates for DB
+    // persistence (avoids 60fps writes) but still reflects them in
+    // the progress bar / page numbers.
+    if (view.renderer) {
+      let scrollRaf = 0;
+      view.renderer.addEventListener('scroll', () => {
+        const r = view!.renderer!;
+        if (r.getAttribute('flow') !== 'scrolled') return;
+        if (scrollRaf) return;
+        scrollRaf = requestAnimationFrame(() => {
+          scrollRaf = 0;
+          // Compute BOOK-LEVEL fraction using foliate's byte-weighted
+          // section breakpoints — same math view.js's sectionProgress
+          // wrap does for the debounced relocate, so live and post-stop
+          // values agree instead of jumping when the user lifts off.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ar = r as any;
+          // focalIndex is -1 before the first section mounts; clamp.
+          const focal: number = Math.max(0, ar.focalIndex ?? 0);
+          const localFrac: number = ar.focalLocalFraction ?? 0;
+          const fractions = view!.getSectionFractions?.() ?? [];
+          const secStart = fractions[focal] ?? (focal / Math.max(1, fractions.length - 1));
+          const secEnd = fractions[focal + 1] ?? Math.min(1, ((focal + 1) / Math.max(1, fractions.length - 1)));
+          const frac = secStart + (secEnd - secStart) * localFrac;
+          post('scrollProgress', { percentage: Math.round(frac * 1000) / 10 });
+          if (lastRelocateDetail) {
+            computeAndPostProgress({
+              ...lastRelocateDetail,
+              fraction: frac,
+              // Patch section.current too so secIdx-derived computations
+              // (currentPage from sectionPageCounts) follow the focal
+              // section live, not the last debounced one.
+              section: {
+                current: focal,
+                total: lastRelocateDetail.section?.total
+                  ?? book?.sections?.length ?? 1,
+              },
+              transient: true,
+            });
+          }
+        });
+      });
+    }
 
     // Annotation rendering — pick highlight vs note styling.
     view.addEventListener('draw-annotation', (e) => {
