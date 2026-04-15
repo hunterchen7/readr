@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { Platform, NativeModules } from "react-native";
 import { create } from "zustand";
+import { getItem, setItem } from "../lib/storage";
 
 export interface DisplaySettings {
   isEink: boolean;
@@ -29,18 +30,64 @@ const EINK_SETTINGS: DisplaySettings = {
   refreshMode: "a2",
 };
 
-export const useDisplayStore = create<{
+// Persistence: stored as the literal string "1" / "0" under this key.
+// `null` (key absent) means "no user override yet — defer to detection".
+const STORAGE_KEY = "readr.display.einkOverride";
+
+interface DisplayStore {
   settings: DisplaySettings;
+  // null = user has never picked, defer to auto-detect.
+  // boolean = explicit user choice, wins over detection forever.
+  userOverride: boolean | null;
+  // False until storage has been read on launch. Detection effect waits
+  // for this so it doesn't clobber a stored override during the gap
+  // between mount and async storage resolving.
+  hydrated: boolean;
   setIsEink: (isEink: boolean) => void;
   toggleEink: () => void;
-}>((set) => ({
+  hydrate: (override: boolean | null) => void;
+  applyDetection: (detectedEink: boolean) => void;
+}
+
+export const useDisplayStore = create<DisplayStore>((set) => ({
   settings: DEFAULT_SETTINGS,
-  setIsEink: (isEink: boolean) =>
-    set({ settings: isEink ? EINK_SETTINGS : DEFAULT_SETTINGS }),
+  userOverride: null,
+  hydrated: false,
+  setIsEink: (isEink: boolean) => {
+    set({
+      settings: isEink ? EINK_SETTINGS : DEFAULT_SETTINGS,
+      userOverride: isEink,
+    });
+    void setItem(STORAGE_KEY, isEink ? "1" : "0");
+  },
   toggleEink: () =>
-    set((state) => ({
-      settings: state.settings.isEink ? DEFAULT_SETTINGS : EINK_SETTINGS,
-    })),
+    set((state) => {
+      const next = !state.settings.isEink;
+      void setItem(STORAGE_KEY, next ? "1" : "0");
+      return {
+        settings: next ? EINK_SETTINGS : DEFAULT_SETTINGS,
+        userOverride: next,
+      };
+    }),
+  // Hydrate from storage; only applies override if one was stored.
+  // The auto-detection effect then runs only when override is null.
+  hydrate: (override) =>
+    set({
+      hydrated: true,
+      userOverride: override,
+      settings: override === true
+        ? EINK_SETTINGS
+        : override === false
+          ? DEFAULT_SETTINGS
+          : DEFAULT_SETTINGS,
+    }),
+  // Auto-detection result. Skipped when a user override exists.
+  applyDetection: (detectedEink) =>
+    set((state) =>
+      state.userOverride !== null
+        ? state
+        : { settings: detectedEink ? EINK_SETTINGS : DEFAULT_SETTINGS },
+    ),
 }));
 
 /** Detect if running on a Supernote e-ink device */
@@ -79,12 +126,35 @@ export function DisplayProvider({ children }: { children: ReactNode }) {
   // useSyncExternalStore's snapshot churns on every render and React
   // bails with "Maximum update depth exceeded".
   const settings = useDisplayStore((s) => s.settings);
-  const setIsEink = useDisplayStore((s) => s.setIsEink);
+  const hydrated = useDisplayStore((s) => s.hydrated);
+  const hydrate = useDisplayStore((s) => s.hydrate);
+  const applyDetection = useDisplayStore((s) => s.applyDetection);
 
+  // 1. Read stored override (async).
   useEffect(() => {
-    const isEink = detectEinkDevice();
-    if (isEink) setIsEink(true);
-  }, [setIsEink]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await getItem(STORAGE_KEY);
+        if (cancelled) return;
+        hydrate(raw === "1" ? true : raw === "0" ? false : null);
+      } catch {
+        if (!cancelled) hydrate(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrate]);
+
+  // 2. After hydration, apply detection only if no override exists.
+  // applyDetection itself is a no-op when userOverride !== null, but
+  // we still gate on `hydrated` so we don't read userOverride while
+  // it's still its initial null pre-hydration value.
+  useEffect(() => {
+    if (!hydrated) return;
+    applyDetection(detectEinkDevice());
+  }, [hydrated, applyDetection]);
 
   return (
     <DisplayContext.Provider value={settings}>
