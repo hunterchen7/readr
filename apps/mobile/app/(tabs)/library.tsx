@@ -190,7 +190,7 @@ export default function LibraryScreen() {
     },
   });
 
-  const rawBooks = data?.books ?? [];
+  const rawBooks = useMemo(() => data?.books ?? [], [data?.books]);
   const [booksWithProgress, setBooksWithProgress] = useState<
     BookWithProgress[]
   >([]);

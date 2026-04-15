@@ -86,10 +86,6 @@ type RNMessage = { type: string; payload?: any };
 // ─── Module state ─────────────────────────────────────────────────────
 
 let view: FoliateView | null = null;
-// Cached at init() so stacked scroll-mode views can get the same
-// listener wiring without re-threading Overlayer through init scope.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let OverlayerRef: any = null;
 let book: FoliateBook | null = null;
 // Kept so measurement can re-parse the book into a separate instance
 // for a hidden measurement view without touching the main view's state.
@@ -114,18 +110,6 @@ let sectionPageCountsLocked = false;
 // Theme CSS that gets injected into every new section document.
 let currentThemeCSS = '';
 let currentTheme: Theme = {};
-// Cleanup for the rAF-driven scroll progress loop. Null when not active.
-let scrollProgressCleanup: (() => void) | null = null;
-// Tracks whether foliate's first relocate event has fired since scroll
-// mode was enabled. We gate our rAF-driven updates on this so we don't
-// overwrite foliate's authoritative initial position (from goTo/restore)
-// with our zero-initialized state during the first frames.
-let firstRelocateFiredInScrollMode = false;
-// Cached "authoritative" state from foliate's last relocate event. Our
-// rAF-driven updates reuse these fields so that we don't clobber page
-// counts / chapter labels / CFIs with zero-initialized stubs each frame.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let lastRelocateDetail: any = null;
 // Map of note CFI → noteType ('typed' | 'handwritten'). Foliate's
 // show-annotation event drops custom annotation fields, so we mirror
 // classifications here and consult it when routing a tap.
@@ -144,36 +128,6 @@ let lastAnnotationTapAt = 0;
 // when the user navigates away and back we have to replay everything
 // on the `create-overlay` event. Same for notes (stored in noteCfis).
 const highlightRegistry = new Map<string, string>();
-
-// ─── Scroll-mode stack ───────────────────────────────────────────────
-//
-// Foliate's scrolled flow only shows one section at a time. To get
-// true continuous scrolling across the whole book, we mount one
-// <foliate-view flow="scrolled"> per section, stacked inside an outer
-// scroll container. Each view renders its own section and auto-sizes
-// the host element to content height so its internal paginator never
-// scrolls — the outer container owns all scroll. All the per-view
-// machinery (CFI, Overlayer, annotations, selection, search) keeps
-// working unchanged because each stacked view is a real foliate-view
-// with its own paginator.
-//
-// When in scroll mode, `view` (the paginated-mode single view) is
-// hidden via display:none, and scrollStackContainer holds the stack.
-// When toggling back to paginated mode, the stack is torn down and
-// `view` is shown again. CFI capture/restore carries position across.
-let scrollStackContainer: HTMLDivElement | null = null;
-let scrollStackViews: FoliateView[] = [];
-// Set while mountScrollStack is running, to guard against concurrent
-// applyTheme calls during the multi-section open loop.
-let scrollStackMounting = false;
-// The section index the user is currently "on" in scroll mode, set by
-// the outer scroll handler. Used for message routing (addAnnotation,
-// getPageText, etc).
-let scrollStackCurIdx = 0;
-// Deferred CFI to scroll to after the stack finishes mounting. Set by
-// applyTheme when switching paginated→scroll; consumed once mount
-// completes. null when no pending restore.
-let scrollStackPendingCfi: string | null = null;
 
 // ─── postMessage helpers ─────────────────────────────────────────────
 
@@ -263,892 +217,28 @@ function computeAndPostProgress(d: any): void {
     pageInSection,
     pagesInSection,
     totalIsEstimate,
-    transient: d.transient ?? false,
   });
-}
-
-// Flattened TOC for live chapter label lookup in scroll mode.
-// Each entry is { sectionIndex, fragment, label, href }.
-// Built once from book.toc after the book loads.
-interface TocFlatItem {
-  sectionIndex: number;
-  fragment: string | null;
-  label: string;
-  href: string;
-}
-let tocFlat: TocFlatItem[] = [];
-
-function buildTocFlat(): void {
-  tocFlat = [];
-  if (!book?.toc || !book.sections) return;
-  const sectionIdByHref = new Map<string, number>();
-  book.sections.forEach((s, i) => {
-    if (s.id) sectionIdByHref.set(s.id, i);
-  });
-  const walk = (items: FoliateTocItem[]): void => {
-    for (const item of items) {
-      const [path, fragment] = (item.href || '').split('#');
-      // Find the section index by matching the href against book.sections[].id
-      let secIdx = sectionIdByHref.get(path) ?? -1;
-      if (secIdx < 0) {
-        // Try suffix match
-        for (const [id, idx] of sectionIdByHref) {
-          if (id.endsWith(path) || path.endsWith(id)) { secIdx = idx; break; }
-        }
-      }
-      if (secIdx >= 0) {
-        tocFlat.push({
-          sectionIndex: secIdx,
-          fragment: fragment ?? null,
-          label: item.label,
-          href: item.href,
-        });
-      }
-      if (item.subitems) walk(item.subitems);
-    }
-  };
-  walk(book.toc);
-}
-
-// Find the TOC item currently visible given section index and scroll offset.
-// `sectionTop` is the scroll offset (in px) relative to the section container.
-function findCurrentTocItem(secIdx: number, scrollTop: number): TocFlatItem | null {
-  // Find all TOC items within this section
-  const inSection = tocFlat.filter(t => t.sectionIndex === secIdx);
-  if (inSection.length === 0) {
-    // No item for this section — return the last item before this section
-    let last: TocFlatItem | null = null;
-    for (const t of tocFlat) {
-      if (t.sectionIndex > secIdx) break;
-      last = t;
-    }
-    return last;
-  }
-  // Items without fragment match at the top; those with fragment use Y-offset
-  // (but we don't have doc access here — fall back to first item)
-  // For accurate fragment-based lookup, would need to look up element positions
-  // in the current section doc. For now, return the first item in section.
-  void scrollTop;
-  return inSection[0];
-}
-
-// Install a rAF-driven progress loop while in scroll mode.
-// Foliate's built-in relocate event is debounced at 250ms so progress
-// doesn't update while the user is actively scrolling. We poll the
-// renderer's public getters every frame to provide a live feel.
-function installScrollProgressLoop(enabled: boolean): void {
-  // Tear down any existing loop first.
-  if (scrollProgressCleanup) {
-    scrollProgressCleanup();
-    scrollProgressCleanup = null;
-  }
-  if (!enabled) return;
-
-  // Reset the relocate gate — don't start firing updates until foliate
-  // has issued at least one authoritative relocate event.
-  firstRelocateFiredInScrollMode = false;
-  // Don't carry over stale paginated-mode detail into scroll mode.
-  lastRelocateDetail = null;
-
-  let rafId = 0;
-  let lastPct = -1;
-  let lastSecIdx = -1;
-  let currentTocItem: TocFlatItem | null = null;
-  let framesSinceFullUpdate = 0;
-  // Guard against re-entering next() while one is in flight. Also
-  // record the section index we advanced from, so we don't ping-pong
-  // if foliate returns to the same index briefly during a transition.
-  let advancing = false;
-  let lastAdvancedFromSecIdx = -1;
-
-  const tick = (): void => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r = view?.renderer as any;
-    if (!r || !r.scrolled) {
-      rafId = requestAnimationFrame(tick);
-      return;
-    }
-
-    // Wait for foliate to issue the first authoritative relocate. This
-    // prevents our loop from clobbering the restored CFI position
-    // with a zero-initialized state during the first post-mount frames.
-    if (!firstRelocateFiredInScrollMode) {
-      rafId = requestAnimationFrame(tick);
-      return;
-    }
-
-    const start: number = r.start ?? 0;
-    const viewSize: number = r.viewSize ?? 1;
-    // Skip frames where the renderer is mid-transition (viewSize reports
-    // stale 0 while the new section is measuring).
-    if (viewSize <= 0) {
-      rafId = requestAnimationFrame(tick);
-      return;
-    }
-    const sectionFrac = viewSize > 0 ? Math.min(1, Math.max(0, start / viewSize)) : 0;
-
-    // Auto-advance to the next section when the user scrolls to the
-    // very bottom of the current one. Foliate's scrolled mode doesn't
-    // do this automatically on native scroll — only on programmatic
-    // next() or gesture. We want the reading experience to feel
-    // continuous across section boundaries.
-    const containerSize: number = r.size ?? 0;
-    const atBottom = viewSize > 0 && containerSize > 0 &&
-      (start + containerSize >= viewSize - 2);
-    const curSecIdx: number = lastRelocateDetail?.index ?? lastRelocateDetail?.section?.current ?? 0;
-    if (atBottom && !advancing && curSecIdx !== lastAdvancedFromSecIdx) {
-      const totalSections = book?.sections?.length ?? 0;
-      if (curSecIdx < totalSections - 1) {
-        advancing = true;
-        lastAdvancedFromSecIdx = curSecIdx;
-        Promise.resolve(view!.next()).finally(() => { advancing = false; });
-      }
-    }
-
-    const fractions = view?.getSectionFractions?.() ?? [];
-    // `renderer.index` is private (#index). We can only read it from
-    // the last relocate detail that foliate exposes. That still gives
-    // the correct section for our purposes because in scrolled mode
-    // one iframe == one section, and index only flips when foliate
-    // loads a new section.
-    const secIdx: number = lastRelocateDetail?.index ?? lastRelocateDetail?.section?.current ?? 0;
-    const secStart = fractions[secIdx] ?? 0;
-    const secEnd = fractions[secIdx + 1] ?? 1;
-    const bookFrac = secStart + (secEnd - secStart) * sectionFrac;
-    const pct = Math.round(Math.min(100, Math.max(0, bookFrac * 100)) * 10) / 10;
-
-    // Refresh TOC item on section change
-    if (secIdx !== lastSecIdx) {
-      lastSecIdx = secIdx;
-      currentTocItem = findCurrentTocItem(secIdx, start);
-    }
-
-    framesSinceFullUpdate++;
-    // Fire a full progressUpdated when the percentage actually changes,
-    // OR periodically (every ~250ms @ 60fps) to ensure page numbers
-    // stay fresh even if pct is rounding-stable.
-    if (pct !== lastPct || framesSinceFullUpdate > 15) {
-      lastPct = pct;
-      framesSinceFullUpdate = 0;
-
-      // Lightweight first — the bottom bar relies on scrollProgress
-      // for the percentage text to track smoothly.
-      post('scrollProgress', { percentage: pct });
-
-      // Full progressUpdated with chapter/page using computeAndPostProgress
-      // so everything updates live, not just at scroll end. Mark as
-      // transient so RN doesn't persist every frame to the DB.
-      // Reuse the last authoritative detail from foliate for fields we
-      // can't compute cheaply (cfi, location byte stats) — we only
-      // override the live values: fraction and optionally tocItem.
-      const base = lastRelocateDetail ?? {};
-      const fakeDetail = {
-        ...base,
-        fraction: bookFrac,
-        section: {
-          current: secIdx,
-          total: book?.sections?.length ?? base.section?.total ?? 1,
-        },
-        tocItem: currentTocItem
-          ? { label: currentTocItem.label, href: currentTocItem.href }
-          : base.tocItem,
-        // Nudge location.current proportionally so page numbers update
-        // live. Keep the same total so we don't change scale mid-scroll.
-        location: base.location
-          ? {
-              current: Math.round((base.location.total ?? 0) * bookFrac),
-              total: base.location.total,
-              next: base.location.next,
-            }
-          : undefined,
-        transient: true,
-      };
-      computeAndPostProgress(fakeDetail);
-    }
-
-    rafId = requestAnimationFrame(tick);
-  };
-  rafId = requestAnimationFrame(tick);
-  scrollProgressCleanup = () => cancelAnimationFrame(rafId);
-}
-
-// ─── Scroll-mode stack implementation ────────────────────────────────
-
-// Attach annotation + load + external-link listeners to a foliate-view.
-// Same logic as init()'s handlers, but parameterised so it can be
-// applied to every stacked view in scroll mode. For scroll mode we also
-// register a per-view relocate listener that sizes the host element to
-// content height once the section renders.
-function wireStackedView(v: FoliateView, secIdx: number): void {
-  v.addEventListener('relocate', (e) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const d = (e as CustomEvent).detail as any;
-    // Cache last detail for this stacked view (used by CFI capture
-    // on mode switch). Sizing happens in mountScrollStack after goTo.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (v as any).__lastRelocateDetail = d;
-  });
-
-  v.addEventListener('draw-annotation', (e) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { draw, annotation } = (e as CustomEvent).detail ?? ({} as any);
-    if (!draw || !annotation || !OverlayerRef) return;
-    if (annotation.kind === 'note') {
-      const eink = !!currentTheme?.isEink;
-      if (annotation.noteType === 'handwritten') {
-        draw((OverlayerRef as { underline: unknown }).underline, { color: eink ? '#000' : '#6366f1' });
-      } else {
-        draw((OverlayerRef as { squiggly: unknown }).squiggly, { color: eink ? '#000' : '#d97706' });
-      }
-    } else {
-      const color = annotation.color || 'yellow';
-      draw((OverlayerRef as { highlight: unknown }).highlight, { color });
-    }
-  });
-
-  v.addEventListener('show-annotation', (e) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ann = (e as CustomEvent).detail ?? ({} as any);
-    let rect: { x: number; y: number; w: number; h: number } | null = null;
-    try {
-      const range: Range | undefined = ann.range;
-      if (range) {
-        const r = range.getBoundingClientRect();
-        const doc = range.startContainer?.ownerDocument ?? null;
-        let ox = 0, oy = 0;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let win: any = doc?.defaultView;
-        while (win && win !== window && win.frameElement) {
-          const fr = win.frameElement.getBoundingClientRect();
-          ox += fr.left;
-          oy += fr.top;
-          win = win.parent;
-        }
-        rect = { x: r.left + ox, y: r.top + oy, w: r.width, h: r.height };
-      }
-    } catch { /* ignore */ }
-    lastAnnotationTapAt = Date.now();
-    if (ann.value && noteCfis.has(ann.value)) {
-      post('noteTapped', { cfi: ann.value, noteType: noteCfis.get(ann.value), rect });
-    } else {
-      post('showAnnotation', { value: ann.value, index: ann.index, rect });
-    }
-  });
-
-  v.addEventListener('create-overlay', () => {
-    if (!v.addAnnotation) return;
-    for (const [cfi, color] of highlightRegistry) {
-      try { v.addAnnotation({ value: cfi, color, kind: 'highlight' }); } catch { /* ignore */ }
-    }
-    for (const [cfi, noteType] of noteCfis) {
-      try { v.addAnnotation({ value: cfi, kind: 'note', noteType }); } catch { /* ignore */ }
-    }
-  });
-
-  v.addEventListener('load', (e) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const detail = (e as CustomEvent).detail as any;
-    const doc = detail?.doc as Document | undefined;
-    if (!doc) return;
-    injectThemeIntoDoc(doc);
-    attachStackedDocHandlers(doc, v, secIdx);
-    // Sizing is handled by mountScrollStack's measureAndApply after
-    // each view's goTo resolves — putting it here too caused races
-    // that shrank host heights mid-scroll.
-  });
-
-  v.addEventListener('external-link', (e) => {
-    e.preventDefault();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const detail = (e as CustomEvent).detail as any;
-    post('externalLink', { href: detail.href });
-  });
-}
-
-// Section docs in stacked scroll mode need click (tap-to-toggle) and
-// selection-change handlers. No tap-to-turn zones — scrolling is the
-// navigation gesture. `secIdx` lets us build CFIs via v.getCFI.
-const stackedAttachedDocs = new WeakSet<Document>();
-function attachStackedDocHandlers(doc: Document, v: FoliateView, secIdx: number): void {
-  if (stackedAttachedDocs.has(doc)) return;
-  stackedAttachedDocs.add(doc);
-
-  // Tap anywhere (outside annotations + selections) → toggle chrome.
-  doc.addEventListener('click', (e) => {
-    // Annotation hit test — bail so the tap opens the note.
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const contents = (v as any).renderer?.getContents?.() ?? [];
-      for (const c of contents) {
-        const overlayer = c?.overlayer;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const hit = overlayer?.hitTest?.({ x: e.clientX, y: e.clientY });
-        if (hit && hit[0]) { e.stopPropagation?.(); return; }
-      }
-    } catch { /* ignore */ }
-
-    // Clear selection if any.
-    try {
-      const sel = doc.getSelection?.() ?? window.getSelection?.();
-      if (sel && !sel.isCollapsed && sel.toString().trim()) {
-        sel.removeAllRanges();
-        post('selectionCleared', {});
-        return;
-      }
-    } catch { /* ignore */ }
-
-    setTimeout(() => {
-      if (Date.now() - lastAnnotationTapAt < 500) return;
-      post('tapCenter', {});
-    }, 0);
-  });
-
-  doc.addEventListener('contextmenu', (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    return false;
-  });
-
-  // Text selection → CFI via THIS view (knows its section index).
-  let selDebounce: ReturnType<typeof setTimeout> | null = null;
-  const checkSelection = (): void => {
-    const sel = doc.getSelection?.();
-    if (sel && sel.toString().trim() && sel.rangeCount > 0 && !sel.isCollapsed) {
-      let cfi = '';
-      let rect: { x: number; y: number; w: number; h: number } | null = null;
-      try {
-        const range = sel.getRangeAt(0);
-        if (v.getCFI) cfi = v.getCFI(secIdx, range) ?? '';
-        const r = range.getBoundingClientRect();
-        let ox = 0, oy = 0;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let win: any = doc.defaultView;
-        while (win && win !== window && win.frameElement) {
-          const fr = win.frameElement.getBoundingClientRect();
-          ox += fr.left;
-          oy += fr.top;
-          win = win.parent;
-        }
-        rect = { x: r.left + ox, y: r.top + oy, w: r.width, h: r.height };
-      } catch { /* ignore */ }
-      post('selectionChanged', { text: sel.toString(), cfi, rect });
-    } else {
-      post('selectionCleared', {});
-    }
-  };
-  doc.addEventListener('selectionchange', () => {
-    if (selDebounce) clearTimeout(selDebounce);
-    selDebounce = setTimeout(checkSelection, 200);
-  });
-  doc.addEventListener('pointerup', () => {
-    setTimeout(checkSelection, 80);
-  });
-}
-
-// Mount the stack: hide the paginated view, build an outer scroll
-// container, and instantiate a foliate-view per section inside. Book
-// is shared across all stacked views — makeBook returns a structure
-// safe to open multiple times.
-// Install CSS for stacked foliate-views. Global rules in
-// epub-html.ts set `foliate-view { height: 100% }`, which would force
-// every stacked view to one viewport height. Override with `height:
-// auto` so our inline `height: <content>px` from sizeHost can shrink
-// the host to content height. Also disable the paginator's internal
-// #container scroll via ::part(container) — we forward the part via
-// `exportparts` on each stacked view so this selector reaches
-// through both shadow boundaries (foliate-view + paginator).
-function ensureScrollStackStyles(): void {
-  if (document.getElementById('readr-scroll-stack-style')) return;
-  const s = document.createElement('style');
-  s.id = 'readr-scroll-stack-style';
-  s.textContent = `
-    foliate-view[data-sec-idx] {
-      display: block;
-      width: 100%;
-      height: auto;
-      min-height: 100px;
-    }
-    foliate-view[data-sec-idx]::part(container) {
-      overflow: visible !important;
-    }
-  `;
-  document.head.appendChild(s);
-}
-
-async function mountScrollStack(): Promise<void> {
-  if (scrollStackContainer || scrollStackMounting) return;
-  if (!book?.sections || !window.__foliate) return;
-  scrollStackMounting = true;
-
-  const viewer = document.getElementById('viewer');
-  if (!viewer) { scrollStackMounting = false; return; }
-
-  if (view) view.style.display = 'none';
-
-  // Override foliate-paginator's internal scroll in the stack — we
-  // want the outer container to own scroll entirely. foliate-view
-  // exports the paginator's `container` part so we can reach into its
-  // shadow DOM via `::part(container)`. Scope to stacked views only
-  // so paginated mode's single view keeps its default behavior.
-  ensureScrollStackStyles();
-
-  const container = document.createElement('div');
-  container.id = 'scroll-stack';
-  container.style.cssText =
-    'position:absolute;inset:0;' +
-    'overflow-y:auto;overflow-x:hidden;' +
-    `background:${currentTheme.bg || '#fff'};`;
-  viewer.appendChild(container);
-  scrollStackContainer = container;
-
-  container.addEventListener('scroll', onOuterScroll, { passive: true });
-
-  // Loading overlay covers the stack while mount is in progress.
-  // Removed once the mount loop completes so users can't scroll into
-  // un-mounted placeholder territory (which appears blank).
-  const overlay = document.createElement('div');
-  overlay.id = 'scroll-stack-loading';
-  overlay.style.cssText =
-    'position:absolute;inset:0;z-index:10;display:flex;' +
-    'align-items:center;justify-content:center;' +
-    `background:${currentTheme.bg || '#fff'};` +
-    `color:${currentTheme.fg || '#666'};` +
-    'font:14px system-ui,sans-serif;';
-  overlay.textContent = 'Loading…';
-  container.appendChild(overlay);
-
-  const total = book.sections.length;
-  scrollStackViews = [];
-
-  // Create all host elements up front so layout is stable during load.
-  // `exportparts` forwards the paginator's `container` part through
-  // foliate-view's shadow root so our outer ::part CSS can disable
-  // the paginator's internal scroll.
-  //
-  // Initial placeholder height is intentionally large (8000px). The
-  // paginator's View.expand() in scrolled mode reads
-  // `documentElement.getBoundingClientRect().height` to size its
-  // iframe — if we start with a small host, the iframe's viewport is
-  // small, the internal layout can compress, and the measurement comes
-  // back undersized. Starting large lets the content flow to its
-  // natural height; measureAndApply then shrinks the host to match.
-  for (let i = 0; i < total; i++) {
-    const v = document.createElement('foliate-view') as FoliateView;
-    v.dataset.secIdx = String(i);
-    v.setAttribute('exportparts', 'container,head,foot,filter');
-    v.style.cssText =
-      'display:block;width:100%;height:8000px;' +
-      `background:${currentTheme.bg || '#fff'};`;
-    container.appendChild(v);
-    scrollStackViews.push(v);
-    wireStackedView(v, i);
-  }
-
-  // Open + goTo each section sequentially. Parallel opens overwhelm
-  // the WebView on large books. After each goTo resolves, the
-  // paginator has finished rendering its scrolled layout, so we can
-  // read renderer.viewSize (content height) and lock the host to it —
-  // that prevents the paginator's internal #container from scrolling
-  // and forces outer-container scroll across all stacked views.
-  for (let i = 0; i < total; i++) {
-    const v = scrollStackViews[i];
-    try {
-      await v.open(book);
-    } catch (e) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      post('debug', { msg: `stack[${i}] open failed: ${(e as any)?.message ?? e}` });
-      continue;
-    }
-    const r = v.renderer;
-    if (r) {
-      r.setAttribute('flow', 'scrolled');
-      r.setAttribute('gap', '0%');
-      r.setAttribute('max-inline-size', '99999px');
-      r.setAttribute('max-block-size', '99999px');
-      r.setAttribute('margin', '0px');
-      if (currentThemeCSS) r.setStyles?.(currentThemeCSS);
-    }
-    try {
-      await v.goTo(i);
-    } catch (e) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      post('debug', { msg: `stack[${i}] goTo failed: ${(e as any)?.message ?? e}` });
-    }
-    // Size host to actual content height now that render is complete.
-    // Read from the iframe's own documentElement since the paginator's
-    // viewSize getter measures the View's #element div which may report
-    // a stale value immediately after render(). documentElement.scrollHeight
-    // is always the true content height.
-    // measureAndApply: never shrink below the largest content height
-    // we've ever seen. Take the MAX of body.scrollHeight and the
-    // iframe element's offsetHeight — foliate's View.expand() sets the
-    // iframe height to the measured content size, which is the
-    // authoritative "rendered" height. body.scrollHeight alone can
-    // undershoot while the column layout is still settling (e.g.,
-    // before font-ready events), causing text to be clipped at the
-    // bottom of the host.
-    // measureAndApply: take max across several sources, always apply.
-    // Because we start with a large placeholder (8000px), the iframe's
-    // internal layout isn't constrained, so body.scrollHeight reflects
-    // true content height. Each retry re-measures — if content grows
-    // (fonts load, images decode) we grow; if initial reading was
-    // large due to the placeholder, the next pass reports real
-    // content size and we shrink to match.
-    const measureAndApply = (): void => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rr = v.renderer as any;
-        const contents = rr?.getContents?.() ?? [];
-        let h = 0;
-        for (const c of contents) {
-          const body = c?.doc?.body;
-          const de = c?.doc?.documentElement;
-          if (body) h = Math.max(h, body.scrollHeight);
-          if (de) h = Math.max(h, de.scrollHeight);
-        }
-        h = Math.max(h, rr?.viewSize ?? 0);
-        if (h > 0) v.style.height = h + 'px';
-      } catch { /* ignore */ }
-    };
-    measureAndApply();
-    requestAnimationFrame(measureAndApply);
-    requestAnimationFrame(() => requestAnimationFrame(measureAndApply));
-    setTimeout(measureAndApply, 50);
-    setTimeout(measureAndApply, 250);
-    setTimeout(measureAndApply, 1000);
-    // ResizeObserver: re-measure on any content resize (fonts, images).
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rr = v.renderer as any;
-      const contents = rr?.getContents?.() ?? [];
-      for (const c of contents) {
-        if (c?.doc?.body) {
-          const ro = new ResizeObserver(measureAndApply);
-          ro.observe(c.doc.body);
-          ro.observe(c.doc.documentElement);
-        }
-      }
-    } catch { /* ignore */ }
-  }
-
-  scrollStackMounting = false;
-
-  // Run periodic re-measurement passes for the first 10 seconds.
-  // Views whose iframe body was still empty or rendering during the
-  // mount-loop measurement get their sizes corrected here as content
-  // finishes settling (fonts, images, late reflows). Never shrink
-  // below the max-ever height we've recorded for each view, so
-  // transient small readings during layout reflow can't clip content.
-  const passAll = (): void => {
-    for (const v of scrollStackViews) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rr = v.renderer as any;
-        const contents = rr?.getContents?.() ?? [];
-        let h = 0;
-        for (const c of contents) {
-          const body = c?.doc?.body;
-          const de = c?.doc?.documentElement;
-          if (body) h = Math.max(h, body.scrollHeight);
-          if (de) h = Math.max(h, de.scrollHeight);
-        }
-        h = Math.max(h, rr?.viewSize ?? 0);
-        if (h > 0) v.style.height = h + 'px';
-      } catch { /* ignore */ }
-    }
-  };
-  passAll();
-  let passCount = 0;
-  const passInterval = setInterval(() => {
-    passAll();
-    passCount++;
-    if (passCount >= 20) clearInterval(passInterval);
-  }, 500);
-
-  try { overlay.remove(); } catch { /* ignore */ }
-
-
-  // If we were asked to restore a CFI after mount (paginated→scroll
-  // mode switch), do it now.
-  if (scrollStackPendingCfi) {
-    const cfi = scrollStackPendingCfi;
-    scrollStackPendingCfi = null;
-    void scrollStackGoToCfi(cfi);
-  }
-
-  // Kick the scroll handler once so RN gets an initial progress tick.
-  onOuterScroll();
-}
-
-function unmountScrollStack(): void {
-  if (!scrollStackContainer) return;
-  scrollStackContainer.removeEventListener('scroll', onOuterScroll);
-  for (const v of scrollStackViews) {
-    try {
-      // Give each stacked foliate-view a chance to destroy its
-      // paginator + release observers. Silently ignore if it doesn't
-      // expose a close() — remove() will still clean the DOM.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (v as any).close?.();
-    } catch { /* ignore */ }
-    try { v.remove(); } catch { /* ignore */ }
-  }
-  scrollStackContainer.remove();
-  scrollStackContainer = null;
-  scrollStackViews = [];
-  scrollStackCurIdx = 0;
-  // Clean the stacked-doc attach registry so remount attaches anew.
-  // (WeakSet auto-cleans docs that no longer exist, but the stack's
-  // fresh iframes create fresh docs anyway.)
-  if (view) view.style.display = '';
-}
-
-// Outer container scroll → derive current section + fraction and
-// post live progress. Same payload shape as paginated mode so the RN
-// side has one code path.
-function onOuterScroll(): void {
-  if (!scrollStackContainer || scrollStackViews.length === 0) return;
-
-  const crect = scrollStackContainer.getBoundingClientRect();
-  const viewportMid = crect.top + crect.height / 2;
-
-  // Linear scan is fine — a few hundred sections at most. Could
-  // binary-search on offsetTop if it becomes a hot path.
-  let curIdx = 0;
-  for (let i = 0; i < scrollStackViews.length; i++) {
-    const v = scrollStackViews[i];
-    const vr = v.getBoundingClientRect();
-    if (vr.bottom < viewportMid) { curIdx = i; continue; }
-    if (vr.top <= viewportMid && vr.bottom >= viewportMid) { curIdx = i; break; }
-    if (vr.top > viewportMid) { curIdx = Math.max(0, i - 1); break; }
-  }
-  scrollStackCurIdx = curIdx;
-
-  const curView = scrollStackViews[curIdx];
-  if (!curView) return;
-  const vr = curView.getBoundingClientRect();
-  const fracInSection = vr.height > 0
-    ? Math.max(0, Math.min(1, (viewportMid - vr.top) / vr.height))
-    : 0;
-
-  const fractions = curView.getSectionFractions?.() ?? [];
-  const secStart = fractions[curIdx] ?? 0;
-  const secEnd = fractions[curIdx + 1] ?? 1;
-  const bookFrac = secStart + (secEnd - secStart) * fracInSection;
-  const pct = Math.round(Math.min(100, Math.max(0, bookFrac * 100)) * 10) / 10;
-
-  post('scrollProgress', { percentage: pct });
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const base = ((curView as any).__lastRelocateDetail as any) ?? lastRelocateDetail ?? {};
-  const toc = findCurrentTocItem(curIdx, 0);
-  const fakeDetail = {
-    ...base,
-    fraction: bookFrac,
-    section: { current: curIdx, total: scrollStackViews.length },
-    tocItem: toc ? { label: toc.label, href: toc.href } : base.tocItem,
-    location: base.location,
-    transient: true,
-  };
-  computeAndPostProgress(fakeDetail);
-}
-
-// Navigate the outer scroll container to a given CFI. Locates the
-// target section's stacked view, then scrolls to the anchor's on-screen
-// position within that view.
-async function scrollStackGoToCfi(cfi: string): Promise<void> {
-  if (!scrollStackContainer || scrollStackViews.length === 0) return;
-  const anyView = scrollStackViews[0];
-  let idx = 0;
-  let anchorFn: ((doc: Document) => { getBoundingClientRect?(): DOMRect; offsetTop?: number } | Range | null) | null = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resolved = (anyView as any).resolveCFI?.(cfi);
-    if (resolved && typeof resolved.index === 'number') idx = resolved.index;
-    if (resolved && typeof resolved.anchor === 'function') anchorFn = resolved.anchor;
-  } catch { /* ignore */ }
-  idx = Math.max(0, Math.min(scrollStackViews.length - 1, idx));
-  const targetView = scrollStackViews[idx];
-  if (!targetView) return;
-
-  let anchorOffset = 0;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contents = (targetView as any).renderer?.getContents?.() ?? [];
-    const content = contents[0];
-    if (content && anchorFn) {
-      const node = anchorFn(content.doc);
-      // Range: use getBoundingClientRect + iframe offset math.
-      // Element: offsetTop is simpler and reliable.
-      if (node instanceof Range) {
-        const r = node.getBoundingClientRect();
-        const iframe = content.doc.defaultView?.frameElement as HTMLElement | null;
-        const ir = iframe?.getBoundingClientRect();
-        const vr = targetView.getBoundingClientRect();
-        const current = scrollStackContainer.scrollTop;
-        anchorOffset = current + (vr.top - scrollStackContainer.getBoundingClientRect().top)
-          + (ir?.top ?? vr.top) + r.top - vr.top - targetView.offsetTop;
-      } else if (node && typeof (node as HTMLElement).offsetTop === 'number') {
-        anchorOffset = (node as HTMLElement).offsetTop;
-      }
-    }
-  } catch { /* ignore */ }
-
-  const target = targetView.offsetTop + anchorOffset;
-  scrollStackContainer.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
-}
-
-// Navigate to a TOC href. Each stacked view knows how to resolve
-// hrefs (via foliate-view.resolveNavigation). We use any view's
-// resolver — they share the book.
-async function scrollStackGoToHref(href: string): Promise<void> {
-  if (!scrollStackContainer || scrollStackViews.length === 0) return;
-  const anyView = scrollStackViews[0];
-
-  // Resolve the href to { index, anchor } via foliate-view.
-  let idx = -1;
-  let anchorFn: ((doc: Document) => Element | null) | null = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resolved = await (anyView as any).resolveNavigation?.(href);
-    if (resolved && typeof resolved.index === 'number') idx = resolved.index;
-    if (resolved && typeof resolved.anchor === 'function') anchorFn = resolved.anchor;
-  } catch { /* ignore */ }
-
-  // Fallback 1: look up in the flattened TOC we built at book load.
-  if (idx < 0) {
-    const entry = tocFlat.find((t) => t.href === href);
-    if (entry) idx = entry.sectionIndex;
-  }
-
-  // Fallback 2: scan book sections for matching href/id.
-  if (idx < 0 && book?.sections) {
-    const base = href.split('#')[0];
-    for (let i = 0; i < book.sections.length; i++) {
-      const sid = book.sections[i]?.id;
-      if (sid && (sid === base || sid.endsWith(base) || base.endsWith(sid))) {
-        idx = i;
-        break;
-      }
-    }
-  }
-
-  idx = Math.max(0, Math.min(scrollStackViews.length - 1, idx < 0 ? 0 : idx));
-  const targetView = scrollStackViews[idx];
-  if (!targetView) return;
-
-  // Anchor-within-section offset. offsetTop of the anchor element
-  // inside the iframe's document gives us exactly how far into the
-  // section it is, regardless of iframe/view chrome.
-  let anchorOffset = 0;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contents = (targetView as any).renderer?.getContents?.() ?? [];
-    const content = contents[0] ?? contents.find((c: { index: number }) => c.index === idx);
-    if (content && anchorFn) {
-      const node = anchorFn(content.doc) as HTMLElement | null;
-      if (node && typeof node.offsetTop === 'number') anchorOffset = node.offsetTop;
-    }
-  } catch { /* ignore */ }
-
-  // Target in outer-container scroll coordinates: the view's offsetTop
-  // relative to container + anchor's offset inside the section.
-  const target = targetView.offsetTop + anchorOffset;
-  scrollStackContainer.scrollTo({ top: Math.max(0, target), behavior: 'auto' });
-}
-
-// Capture the current CFI from whichever renderer is active, for
-// mode-switch position preservation.
-function captureCurrentCfi(): string | null {
-  if (scrollStackContainer && scrollStackViews.length > 0) {
-    // Find the visible range in the current stacked view.
-    const v = scrollStackViews[scrollStackCurIdx];
-    if (!v) return null;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const contents = (v as any).renderer?.getContents?.() ?? [];
-      const content = contents[0];
-      if (!content) return null;
-      const doc = content.doc as Document;
-      // Build a range at the first visible element inside the iframe.
-      const iframe = doc.defaultView?.frameElement as HTMLElement | null;
-      const ir = iframe?.getBoundingClientRect();
-      const crect = scrollStackContainer.getBoundingClientRect();
-      const targetY = (crect.top + crect.height / 2) - (ir?.top ?? 0);
-      // Walk text nodes to find one near targetY.
-      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-      let best: Text | null = null;
-      let bestDist = Infinity;
-      let n = walker.nextNode();
-      while (n) {
-        const t = n as Text;
-        if (t.nodeValue && t.nodeValue.trim().length > 0) {
-          const range = doc.createRange();
-          range.selectNodeContents(t);
-          const rr = range.getBoundingClientRect();
-          const y = rr.top;
-          const dist = Math.abs(y - targetY);
-          if (dist < bestDist) { bestDist = dist; best = t; }
-          if (y > targetY + 100) break;
-        }
-        n = walker.nextNode();
-      }
-      if (best && v.getCFI) {
-        const range = doc.createRange();
-        range.selectNodeContents(best);
-        return v.getCFI(scrollStackCurIdx, range) ?? null;
-      }
-    } catch { /* ignore */ }
-    // Fallback: last relocate detail
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const d = (v as any).__lastRelocateDetail;
-    return d?.cfi ?? null;
-  }
-  // Paginated mode — pull from lastRelocateDetail.
-  return lastRelocateDetail?.cfi ?? null;
 }
 
 // ─── Incoming RN messages ─────────────────────────────────────────────
 
-// Pick the view that owns the section for a given CFI. In scroll mode
-// each section has its own stacked view; in paginated mode the single
-// `view` handles everything.
-function viewForCfi(cfi: string): FoliateView | null {
-  if (scrollStackContainer && scrollStackViews.length > 0) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const resolved = (scrollStackViews[0] as any).resolveCFI?.(cfi);
-      const idx = typeof resolved?.index === 'number'
-        ? Math.max(0, Math.min(scrollStackViews.length - 1, resolved.index))
-        : scrollStackCurIdx;
-      return scrollStackViews[idx] ?? null;
-    } catch { return scrollStackViews[scrollStackCurIdx] ?? null; }
-  }
-  return view;
-}
-
 function handleRNMessage(data: RNMessage): void {
   if (!view) return;
-  const inScroll = scrollStackContainer != null;
-
   switch (data.type) {
     case 'setTheme':
       applyTheme(data.payload);
       break;
     case 'goToLocation': {
+      // Await the nav so we can post 'restored' once foliate has
+      // actually laid out the target page. RN uses that signal to
+      // dismiss its loading overlay — avoids the first-section flash
+      // that would otherwise show between init() and the resume nav.
+      const v = view;
       (async (): Promise<void> => {
         try {
-          if (data.payload.cfi) {
-            if (inScroll) await scrollStackGoToCfi(data.payload.cfi);
-            else await view!.goTo(data.payload.cfi);
-          } else if (data.payload.fraction != null) {
-            if (inScroll && scrollStackContainer) {
-              const max = scrollStackContainer.scrollHeight - scrollStackContainer.clientHeight;
-              scrollStackContainer.scrollTo({ top: max * data.payload.fraction, behavior: 'auto' });
-            } else {
-              await view!.goToFraction(data.payload.fraction);
-            }
-          }
+          if (data.payload.cfi) await v.goTo(data.payload.cfi);
+          else if (data.payload.fraction != null)
+            await v.goToFraction(data.payload.fraction);
         } catch { /* ignore */ }
         post('restored', {});
       })();
@@ -1156,51 +246,31 @@ function handleRNMessage(data: RNMessage): void {
     }
     case 'goToChapter':
       if (data.payload.href) {
-        if (inScroll) {
-          void scrollStackGoToHref(data.payload.href);
-        } else {
-          try { view.goTo(data.payload.href); }
-          catch { try { view.goTo({ href: data.payload.href }); } catch { /* ignore */ } }
+        try {
+          view.goTo(data.payload.href);
+        } catch {
+          // Some hrefs need to be resolved against the book's base
+          try { view.goTo({ href: data.payload.href }); } catch { /* ignore */ }
         }
       }
       break;
     case 'prevPage':
-      if (inScroll && scrollStackContainer) {
-        scrollStackContainer.scrollBy({ top: -scrollStackContainer.clientHeight * 0.9, behavior: 'auto' });
-      } else {
-        view.prev();
-      }
+      view.prev();
       break;
     case 'nextPage':
-      if (inScroll && scrollStackContainer) {
-        scrollStackContainer.scrollBy({ top: scrollStackContainer.clientHeight * 0.9, behavior: 'auto' });
-      } else {
-        view.next();
-      }
+      view.next();
       break;
     case 'search':
       performSearch(data.payload.query);
       break;
     case 'clearSearch':
-      if (inScroll) {
-        for (const sv of scrollStackViews) try { sv.clearSearch?.(); } catch { /* ignore */ }
-      } else if (view.clearSearch) view.clearSearch();
+      if (view.clearSearch) view.clearSearch();
       break;
     case 'getPageText': {
-      // In scroll mode, pull text from the currently-central section.
-      let text = '';
-      if (inScroll) {
-        const cv = scrollStackViews[scrollStackCurIdx];
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contents = (cv as any)?.renderer?.getContents?.() ?? [];
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          text = (contents[0]?.doc?.body as any)?.innerText?.trim() ?? '';
-        } catch { /* ignore */ }
-      } else {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        text = (currentSectionDoc?.body as any)?.innerText?.trim() ?? '';
-      }
+      // Return the visible section's plain text for TTS. Fall back to
+      // empty string if the section hasn't loaded yet.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = (currentSectionDoc?.body as any)?.innerText?.trim() ?? '';
       post('pageText', { text });
       break;
     }
@@ -1214,30 +284,36 @@ function handleRNMessage(data: RNMessage): void {
       if (!cfi) break;
       const color = data.payload.color || 'yellow';
       highlightRegistry.set(cfi, color);
-      const target = viewForCfi(cfi);
-      if (target?.addAnnotation) {
-        try { target.addAnnotation({ value: cfi, color, kind: 'highlight' }); }
-        catch (err) { post('highlightError', { cfi, error: String(err) }); }
+      if (view.addAnnotation) {
+        try {
+          view.addAnnotation({ value: cfi, color, kind: 'highlight' });
+        } catch (err) {
+          post('highlightError', { cfi, error: String(err) });
+        }
       }
       break;
     }
     case 'removeHighlight': {
       const cfi = data.payload.cfi || data.payload.cfiRange;
-      if (!cfi) break;
+      if (!cfi || !view.addAnnotation) break;
       highlightRegistry.delete(cfi);
-      const target = viewForCfi(cfi);
-      try { target?.addAnnotation?.({ value: cfi }, true); } catch { /* ignore */ }
+      try {
+        // foliate: passing truthy 2nd arg removes the annotation
+        view.addAnnotation({ value: cfi }, true);
+      } catch { /* ignore */ }
       break;
     }
     case 'addNote': {
+      // Notes share foliate's annotation machinery but render as a
+      // squiggly/underline so they're distinguishable from highlights
+      // and don't block the underlying text. The noteType controls
+      // the visual style so typed notes and drawings look different.
       const cfi: string | undefined = data.payload.cfi;
       const noteType: 'typed' | 'handwritten' =
         data.payload.noteType === 'handwritten' ? 'handwritten' : 'typed';
-      if (!cfi) break;
-      const target = viewForCfi(cfi);
-      if (!target?.addAnnotation) break;
+      if (!cfi || !view.addAnnotation) break;
       try {
-        target.addAnnotation({ value: cfi, kind: 'note', noteType });
+        view.addAnnotation({ value: cfi, kind: 'note', noteType });
         noteCfis.set(cfi, noteType);
       } catch (err) {
         post('noteError', { cfi, error: String(err) });
@@ -1246,10 +322,9 @@ function handleRNMessage(data: RNMessage): void {
     }
     case 'removeNote': {
       const cfi: string | undefined = data.payload.cfi;
-      if (!cfi) break;
-      const target = viewForCfi(cfi);
+      if (!cfi || !view.addAnnotation) break;
       try {
-        target?.addAnnotation?.({ value: cfi }, true);
+        view.addAnnotation({ value: cfi }, true);
         noteCfis.delete(cfi);
       } catch { /* ignore */ }
       break;
@@ -1408,7 +483,6 @@ function layoutSignature(t: Theme): string {
     t.fontFamily ?? null,
     t.fontWeight ?? null,
     t.lineHeight ?? null,
-    t.pageTurnMode ?? null,
   ]);
 }
 let lastLayoutSig: string | null = null;
@@ -1423,7 +497,7 @@ function applyTheme(theme: Theme): void {
   const isFirst = lastLayoutSig == null;
   const layoutChanged = isFirst || sig !== lastLayoutSig;
   lastLayoutSig = sig;
-  post('debug', { msg: `applyTheme isFirst=${isFirst} layoutChanged=${layoutChanged} sig=${sig} prevBg=${prevTheme.bg} newBg=${theme.bg}` });
+  post('debug', { msg: `applyTheme isFirst=${isFirst} layoutChanged=${layoutChanged} prevBg=${prevTheme.bg} newBg=${theme.bg}` });
 
   // ── Colour work (always, cheap, no reflow) ───────────────────────
   const root = document.documentElement;
@@ -1439,20 +513,25 @@ function applyTheme(theme: Theme): void {
     forceShadowBackground(view, bgColor);
   }
 
-  // Page-turn mode. "scroll" switches foliate to continuous
-  // scrolled flow; the other three are gesture modes within
+  // Page-turn mode. "scroll" switches foliate into continuous scrolled
+  // flow (our forked paginator mounts adjacent sections in-place, so a
+  // single drag carries the reader across section boundaries without
+  // remounting anything). The other three are gesture modes within
   // paginated layout.
   const mode: 'tap' | 'swipe' | 'both' | 'scroll' =
     theme.pageTurnMode ?? (theme.tapToTurn === false ? 'swipe' : 'both');
   if (mode === 'scroll') {
+    // Tap-to-turn is meaningless in scroll mode and swipeEnabled must
+    // be TRUE so blockSwipe doesn't preventDefault — native scroll
+    // has to reach the paginator.
     tapToTurn = false;
-    // In scroll mode, swipeEnabled must be TRUE so blockSwipe
-    // doesn't preventDefault — we need native touch scrolling.
     swipeEnabled = true;
   } else {
     tapToTurn = mode !== 'swipe';
     swipeEnabled = mode !== 'tap';
   }
+  // Tell RN (for UI affordances like hiding page-indicator in scroll).
+  post('scrollModeChanged', { scrollMode: mode === 'scroll' });
 
   // Keep the section-iframe CSS string current so new sections pick
   // up the latest theme. Also push it into the current section doc —
@@ -1462,77 +541,39 @@ function applyTheme(theme: Theme): void {
   applyThemeStyles();
 
   const renderer = view?.renderer;
+  if (!renderer) return;
 
   // ── Layout work (only when something layout-affecting changed) ───
   if (!layoutChanged) return;
 
-  const isScrolled = mode === 'scroll';
-  const wasScrolled = scrollStackContainer != null;
-  const flowChanged = wasScrolled !== isScrolled;
-  post('debug', { msg: `applyTheme mode=${mode} isScrolled=${isScrolled} flowChanged=${flowChanged}` });
-  post('scrollModeChanged', { scrollMode: isScrolled });
-
-  // CFI capture/restore across renderer switch: paginated ↔ scroll
-  // keeps the user's reading position stable.
-  const cfiToRestore: string | null = flowChanged ? captureCurrentCfi() : null;
-
-  if (flowChanged) {
-    if (isScrolled) {
-      // paginated → scroll: mount the stack. Restore CFI once mount
-      // finishes (mountScrollStack consumes scrollStackPendingCfi).
-      scrollStackPendingCfi = cfiToRestore;
-      installScrollProgressLoop(false);
-      void mountScrollStack();
-    } else {
-      // scroll → paginated: tear down stack, restore into single view.
-      unmountScrollStack();
-      if (renderer) {
-        renderer.setAttribute('flow', 'paginated');
-        renderer.setAttribute('gap', '0%');
-        renderer.setAttribute('max-inline-size', '99999px');
-        renderer.setAttribute('max-block-size', '99999px');
-        renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
-      }
-      if (cfiToRestore && view) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            try { view?.goTo(cfiToRestore); } catch { /* ignore */ }
-          });
-        });
-      }
-    }
-  } else if (!isScrolled) {
-    // Pure layout change within paginated mode — re-apply paginator
-    // attributes so margin/gap updates land.
-    if (renderer) {
-      renderer.setAttribute('flow', 'paginated');
-      renderer.setAttribute('gap', '0%');
-      renderer.setAttribute('max-inline-size', '99999px');
-      renderer.setAttribute('max-block-size', '99999px');
-      renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
-    }
-  } else {
-    // Pure layout change within scroll mode — push the new CSS into
-    // every stacked view's paginator so margin/font updates take.
-    for (const sv of scrollStackViews) {
-      try { sv.renderer?.setStyles?.(currentThemeCSS); } catch { /* ignore */ }
-    }
-  }
-
-  // Page-count measurement runs only in paginated mode. Scroll mode
-  // doesn't need measured page counts — progress % comes from byte
-  // fractions over scroll position.
-  if (!isScrolled) {
-    sectionPageCounts = {};
-    sectionPageCountsLocked = false;
-    _measureSeq++;
-    post('debug', {
-      msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily}`,
-    });
-    requestAnimationFrame(() => {
-      void runMeasurement();
-    });
-  }
+  // Apply layout attributes to foliate's actual paginator, not the
+  // outer foliate-view wrapper. The paginator keeps its own anchor
+  // across render() calls, so we can let it reflow in place instead of
+  // blanking the screen and manually restoring by CFI.
+  // Foliate expects `gap` as a percentage, while the max-* caps and
+  // margin use px lengths. Keep those units aligned with the paginator
+  // contract or its grid math falls back to the defaults.
+  // Flow attribute drives our forked paginator's mode switch — on
+  // transition to/from 'scrolled' it builds or tears down the section
+  // stack IN PLACE. No view re-creation, no CFI capture/restore dance;
+  // foliate's internal #index + #anchor carry the position across.
+  renderer.setAttribute('flow', mode === 'scroll' ? 'scrolled' : 'paginated');
+  renderer.setAttribute('gap', '0%');
+  renderer.setAttribute('max-inline-size', '99999px');
+  renderer.setAttribute('max-block-size', '99999px');
+  renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
+  // Page-count measurement is paginated-only — in scrolled flow pages
+  // are a derived concept and the progress bar uses book fraction.
+  sectionPageCounts = {};
+  sectionPageCountsLocked = false;
+  _measureSeq++;
+  post('debug', {
+    msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily} mode=${mode}`,
+  });
+  if (mode === 'scroll') return;
+  requestAnimationFrame(() => {
+    void runMeasurement();
+  });
 }
 
 // Force our bg color onto every element inside the foliate-view's
@@ -1806,14 +847,12 @@ async function init(): Promise<void> {
     const foliate = window.__foliate;
     if (!foliate) throw new Error('foliate-bundle not loaded');
     const { makeBook, Overlayer } = foliate;
-    OverlayerRef = Overlayer;
 
     const blob = await fetchFile(config.bookUrl);
     const file = new File([blob], 'book.epub', { type: blob.type || 'application/epub+zip' });
     bookFile = file;
 
     book = await makeBook(file);
-    buildTocFlat();
     const loading = document.getElementById('loading');
     if (loading) loading.style.display = 'none';
 
@@ -2001,11 +1040,8 @@ async function init(): Promise<void> {
     // can call exactly the same logic.
     view.addEventListener('relocate', (e) => {
       ensureAllDocsAttached();
-      firstRelocateFiredInScrollMode = true;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const detail = (e as CustomEvent).detail as any;
-      lastRelocateDetail = detail;
-      computeAndPostProgress(detail);
+      computeAndPostProgress((e as CustomEvent).detail as any);
     });
 
     // Annotation rendering — pick highlight vs note styling.

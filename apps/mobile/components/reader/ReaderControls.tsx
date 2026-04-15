@@ -19,7 +19,7 @@ export interface ReaderTheme {
    * pages (swipe is swallowed), "swipe" = only swipe/drag turns pages
    * (edge taps just open controls), "both" = both work.
    */
-  pageTurnMode: "tap" | "swipe" | "both";
+  pageTurnMode: "tap" | "swipe" | "both" | "scroll";
   /** 100 = normal weight. 300 = light, 700 = bold. Applied via CSS font-weight. */
   fontWeight: number;
   /**
@@ -27,6 +27,10 @@ export interface ReaderTheme {
    * via expo-brightness. null = honor the system setting.
    */
   brightness: number | null;
+  /** Progress bar visibility mode:
+   *  "off" = never, "bar" = only in toolbar, "always" = toolbar + mini bar,
+   *  "verbose" = toolbar + richer mini bar with percentage & chapter. */
+  progressBar: "off" | "bar" | "always" | "verbose";
   /** Always-visible page number overlay drawn over the reader content. */
   pageIndicator: PageIndicator;
 }
@@ -55,6 +59,7 @@ export const DEFAULT_THEME: ReaderTheme = {
   pageTurnMode: "both",
   fontWeight: 400,
   brightness: null,
+  progressBar: "always",
   pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
 };
 
@@ -71,6 +76,7 @@ export const EINK_THEME: ReaderTheme = {
   pageTurnMode: "both",
   fontWeight: 500,
   brightness: null,
+  progressBar: "always",
   pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
 };
 

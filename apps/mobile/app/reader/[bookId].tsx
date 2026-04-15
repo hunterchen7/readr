@@ -6,6 +6,7 @@ import {
   Pressable,
   Alert,
   PanResponder,
+  StatusBar,
 } from "react-native";
 import { LoadingIndicator } from "../../components/LoadingIndicator";
 import { ErrorFallback } from "../../components/ErrorFallback";
@@ -19,6 +20,7 @@ import {
   Settings,
   Bookmark as BookmarkIcon,
 } from "lucide-react-native";
+import * as NavigationBar from "expo-navigation-bar";
 import { getBook, logReadingSession } from "../../lib/api";
 import { getReaderHtml } from "../../components/reader/epub-html";
 import { getPdfReaderHtml } from "../../components/reader/pdf-html";
@@ -85,6 +87,26 @@ export default function ReaderScreen() {
   const display = useDisplay();
   const insets = useSafeAreaInsets();
   const [controlsVisible, setControlsVisible] = useState(false);
+  const [isScrollMode, setIsScrollMode] = useState(false);
+
+  // Hide system bars (status bar + nav bar) when reader controls
+  // are hidden for immersive reading. Show them when controls appear.
+  useEffect(() => {
+    StatusBar.setHidden(!controlsVisible, "fade");
+    if (!controlsVisible) {
+      NavigationBar.setVisibilityAsync("hidden");
+    } else {
+      NavigationBar.setVisibilityAsync("visible");
+    }
+  }, [controlsVisible]);
+
+  // Restore system bars when leaving the reader.
+  useEffect(() => {
+    return () => {
+      StatusBar.setHidden(false);
+      NavigationBar.setVisibilityAsync("visible");
+    };
+  }, []);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -93,6 +115,11 @@ export default function ReaderScreen() {
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
   );
+  // Normalize progressBar — old persisted booleans get mapped to new string modes
+  const progressMode: "off" | "bar" | "always" | "verbose" =
+    typeof theme.progressBar === "boolean"
+      ? (theme.progressBar ? "always" : "off")
+      : (theme.progressBar ?? "always");
   // Merged theme sent to the WebView — the base theme plus an isEink flag
   // so the injected EPUB stylesheet can force high-contrast black text.
   const themeForWebView = useMemo(
@@ -641,14 +668,27 @@ export default function ReaderScreen() {
           }
           // Don't persist until the initial restore has run — the very
           // first relocate from foliate fires at pct=0 and would clobber
-          // the saved position otherwise.
-          if (bookId && hasRestoredRef.current) {
+          // the saved position otherwise. Also skip persistence for
+          // transient (rAF-driven) updates during scroll — we'd hammer
+          // the DB at 60fps otherwise. The next non-transient relocate
+          // (fired by foliate after scroll settles) will persist.
+          if (bookId && hasRestoredRef.current && !msg.payload.transient) {
             upsertProgress(bookId, position);
           }
           break;
         }
         case "tocLoaded":
           setToc(msg.payload.chapters ?? []);
+          break;
+        case "scrollModeChanged":
+          setIsScrollMode(!!msg.payload.scrollMode);
+          break;
+        case "scrollProgress":
+          // Lightweight continuous update during scroll — only
+          // updates the progress bar percentage, not page numbers.
+          if (!isDraggingRef.current) {
+            setProgress(msg.payload.percentage ?? 0);
+          }
           break;
         case "tapCenter":
           setControlsVisible((v) => {
@@ -1118,128 +1158,163 @@ export default function ReaderScreen() {
             </Pressable>
           </View>
 
-          <View
-            style={[
-              styles.progressOverlay,
-              {
-                backgroundColor: theme.bg,
-                paddingBottom: Math.max(insets.bottom, 8),
-                borderTopColor: theme.fg + "22",
-              },
-            ]}
-          >
-            {/* Scrubber track — drag to seek. Wrapped in a hit-slop
-                area so the finger doesn't have to land precisely on
-                the 4px line. E-ink uses solid theme.fg/bg since
-                translucent grays collapse into ghost smudges. */}
+          {progressMode !== "off" ? (
             <View
-              ref={trackRef}
-              style={styles.progressTrackHitArea}
-              onLayout={measureTrack}
-              {...scrubberPanResponder.panHandlers}
+              style={[
+                styles.progressOverlay,
+                {
+                  backgroundColor: theme.bg,
+                  paddingBottom: Math.max(insets.bottom, 8),
+                  borderTopColor: theme.fg + "22",
+                },
+              ]}
             >
               <View
-                style={[
-                  styles.progressTrack,
-                  display.isEink && {
-                    backgroundColor: theme.fg + "22",
-                    borderWidth: 1,
-                    borderColor: theme.fg,
-                  },
-                ]}
+                ref={trackRef}
+                style={styles.progressTrackHitArea}
+                onLayout={measureTrack}
+                {...scrubberPanResponder.panHandlers}
               >
                 <View
                   style={[
-                    styles.progressFill,
-                    {
-                      width: `${dragFraction != null ? dragFraction * 100 : progress}%`,
+                    styles.progressTrack,
+                    display.isEink && {
+                      backgroundColor: theme.fg + "22",
+                      borderWidth: 1,
+                      borderColor: theme.fg,
                     },
-                    display.isEink && { backgroundColor: theme.fg },
                   ]}
-                />
-                <View
-                  style={[
-                    styles.progressDot,
-                    {
-                      left: `${dragFraction != null ? dragFraction * 100 : progress}%`,
-                    },
-                    dragFraction != null && styles.progressDotDragging,
-                    display.isEink && { backgroundColor: theme.fg },
-                  ]}
-                />
+                >
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${dragFraction != null ? dragFraction * 100 : progress}%`,
+                      },
+                      display.isEink && { backgroundColor: theme.fg },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.progressDot,
+                      {
+                        left: `${dragFraction != null ? dragFraction * 100 : progress}%`,
+                      },
+                      dragFraction != null && styles.progressDotDragging,
+                      display.isEink && { backgroundColor: theme.fg },
+                    ]}
+                  />
+                </View>
               </View>
-            </View>
 
-            {(() => {
-              const progressTextStyle = {
-                color: theme.fg,
-                fontFamily: readerTextFontFamily(theme.fontFamily),
-                fontSize: Math.max(11, Math.round(theme.fontSize * 0.75)),
-              };
-              const sectionStr =
-                pageInSection != null &&
-                pagesInSection != null &&
-                pagesInSection > 0
-                  ? `p. ${pageInSection}/${pagesInSection}`
-                  : "";
-              const totalStr =
-                currentPage != null && totalPages != null && totalPages > 0
-                  ? `p. ${currentPage}/${totalPages}`
-                  : "";
-              return (
-                <>
-                  <View style={styles.progressInfoRow}>
-                    <Text
-                      style={[
-                        styles.progressLabel,
-                        progressTextStyle,
-                        { flex: 1 },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {currentPosition?.chapterLabel ?? ""}
-                    </Text>
-                    <Text style={[styles.progressLabel, progressTextStyle]}>
-                      {`${progress.toFixed(1)}%`}
-                    </Text>
-                  </View>
-                  <View style={styles.progressInfoRow}>
-                    <Text style={[styles.progressLabel, progressTextStyle]}>
-                      {sectionStr}
-                    </Text>
-                    <Text style={[styles.progressLabel, progressTextStyle]}>
-                      {totalStr}
-                    </Text>
-                  </View>
-                </>
-              );
-            })()}
-          </View>
+              {(() => {
+                const progressTextStyle = {
+                  color: theme.fg,
+                  fontFamily: readerTextFontFamily(theme.fontFamily),
+                  fontSize: Math.max(11, Math.round(theme.fontSize * 0.75)),
+                };
+                const sectionStr =
+                  pageInSection != null &&
+                  pagesInSection != null &&
+                  pagesInSection > 0
+                    ? `p. ${pageInSection}/${pagesInSection}`
+                    : "";
+                const totalStr =
+                  currentPage != null && totalPages != null && totalPages > 0
+                    ? `p. ${currentPage}/${totalPages}`
+                    : "";
+                return (
+                  <>
+                    <View style={styles.progressInfoRow}>
+                      <Text
+                        style={[
+                          styles.progressLabel,
+                          progressTextStyle,
+                          { flex: 1 },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {currentPosition?.chapterLabel ?? ""}
+                      </Text>
+                      <Text style={[styles.progressLabel, progressTextStyle]}>
+                        {`${progress.toFixed(1)}%`}
+                      </Text>
+                    </View>
+                    <View style={styles.progressInfoRow}>
+                      <Text style={[styles.progressLabel, progressTextStyle]}>
+                        {sectionStr}
+                      </Text>
+                      <Text style={[styles.progressLabel, progressTextStyle]}>
+                        {totalStr}
+                      </Text>
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+          ) : null}
         </>
       ) : (
-        /* Minimal progress bar always visible at bottom.
-           E-ink uses solid fg/bg so the bar stays crisp — translucent
-           tints smudge into the ~16 gray levels of an e-ink panel. */
-        <View
-          style={[
-            styles.miniProgress,
-            { backgroundColor: display.isEink ? theme.bg : theme.bg + "cc" },
-          ]}
-        >
+        /* Controls hidden — show mini bar based on progressMode */
+        progressMode === "always" ? (
           <View
             style={[
-              styles.miniProgressFill,
+              styles.miniProgress,
+              { backgroundColor: display.isEink ? theme.bg : theme.bg + "cc" },
+            ]}
+          >
+            <View
+              style={[
+                styles.miniProgressFill,
+                {
+                  width: `${progress}%`,
+                  backgroundColor: display.isEink ? theme.fg : theme.fg + "33",
+                },
+              ]}
+            />
+          </View>
+        ) : progressMode === "verbose" ? (
+          <View
+            style={[
+              styles.verboseProgress,
               {
-                width: `${progress}%`,
-                backgroundColor: display.isEink ? theme.fg : theme.fg + "33",
+                backgroundColor: display.isEink ? theme.bg : theme.bg + "cc",
+                paddingBottom: Math.max(insets.bottom, 4),
               },
             ]}
-          />
-        </View>
+          >
+            <View style={styles.miniProgressTrack}>
+              <View
+                style={[
+                  styles.miniProgressFill,
+                  {
+                    width: `${progress}%`,
+                    backgroundColor: display.isEink ? theme.fg : theme.fg + "55",
+                  },
+                ]}
+              />
+            </View>
+            <View style={styles.verboseInfoRow}>
+              <Text
+                style={[
+                  styles.verboseLabel,
+                  { color: theme.fg },
+                ]}
+                numberOfLines={1}
+              >
+                {currentPosition?.chapterLabel ?? ""}
+              </Text>
+              <Text style={[styles.verboseLabel, { color: theme.fg }]}>
+                {`${progress.toFixed(1)}%`}
+              </Text>
+            </View>
+          </View>
+        ) : null
       )}
 
       {theme.pageIndicator?.enabled &&
       !controlsVisible &&
+      !isScrollMode &&
       currentPage != null &&
       totalPages != null &&
       totalPages > 0 ? (
@@ -1493,15 +1568,15 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   progressTrack: {
-    height: 4,
-    backgroundColor: "rgba(0,0,0,0.08)",
-    borderRadius: 2,
+    height: 6,
+    backgroundColor: "rgba(0,0,0,0.2)",
+    borderRadius: 3,
     position: "relative",
   },
   progressFill: {
-    height: 4,
-    backgroundColor: "rgba(0,0,0,0.25)",
-    borderRadius: 2,
+    height: 6,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: 3,
   },
   progressDot: {
     position: "absolute",
@@ -1544,6 +1619,29 @@ const styles = StyleSheet.create({
   },
   miniProgressFill: {
     height: 3,
+  },
+  verboseProgress: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 5,
+    paddingHorizontal: 12,
+    paddingTop: 4,
+  },
+  miniProgressTrack: {
+    height: 3,
+    borderRadius: 1.5,
+    overflow: "hidden" as const,
+  },
+  verboseInfoRow: {
+    flexDirection: "row" as const,
+    justifyContent: "space-between" as const,
+    marginTop: 3,
+  },
+  verboseLabel: {
+    fontSize: 11,
+    opacity: 0.7,
   },
   pageIndicator: {
     position: "absolute",

@@ -481,15 +481,24 @@ export function HandwritingCanvas({
   const handleCancel = useCallback(() => {
     const hasChanges = strokesRef.current.length !== initialStrokes.length;
     if (hasChanges) {
-      if (NATIVE_DRAW) HandwriteService.stop();
+      // Don't stop the kernel until the user actually confirms. Stopping
+      // it here caused a visible panel flicker even when they picked
+      // "Keep editing", defeating the purpose of the confirmation.
       Alert.alert("Discard changes?", "Your drawing will not be saved.", [
-        { text: "Keep editing", style: "cancel", onPress: restartKernel },
-        { text: "Discard", style: "destructive", onPress: doCancel },
+        { text: "Keep editing", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            if (NATIVE_DRAW) HandwriteService.stop();
+            doCancel();
+          },
+        },
       ]);
     } else {
       doCancel();
     }
-  }, [doCancel, initialStrokes.length, restartKernel]);
+  }, [doCancel, initialStrokes.length]);
   const handleSave = useCallback(async () => {
     if (NATIVE_DRAW) {
       // If a debounced capture is pending, flush it now.
@@ -798,10 +807,13 @@ export function HandwritingCanvas({
   }, [rebuildFromStrokes, flushKernelBuffer, renderSnapshot]);
   const handleClear = useCallback(() => {
     if (strokesRef.current.length === 0) return;
-    if (NATIVE_DRAW) HandwriteService.stop();
+    // Don't stop the kernel until the user confirms — otherwise the
+    // panel flashes a "clear" even when they tap Cancel, which is
+    // exactly what the confirmation is there to prevent.
     Alert.alert("Clear canvas", "Erase everything?", [
-      { text: "Cancel", style: "cancel", onPress: restartKernel },
+      { text: "Cancel", style: "cancel" },
       { text: "Clear", style: "destructive", onPress: async () => {
+        if (NATIVE_DRAW) HandwriteService.stop();
         doClear();
         // Full refresh to wipe kernel trail from panel.
         await EpdMode.setFull();
