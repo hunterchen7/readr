@@ -457,7 +457,6 @@ export class Paginator extends HTMLElement {
     #windowRadius = 1          // mount [focal-R, focal+R]
     #stackScrollHandler = null
     #programmaticScroll = false // suppresses focal-update during scrollTo
-    #pendingHostForIndex = -1  // sync hint: mount-into-host uses this
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -686,14 +685,13 @@ export class Paginator extends HTMLElement {
                     `break-${x}: ${y ?? ''}column`))
         })
     }
-    #createView() {
-        // In stacked scrolled mode, the view is mounted into its
-        // section's host div (handled in #mountSection). The single-
-        // view teardown-and-reattach dance only applies to paginated.
-        if (this.#stacked) {
-            const idx = this.#pendingHostForIndex
-            const host = idx >= 0 ? this.#hosts[idx] : null
-            const existing = this.#views.get(idx)
+    #createView(stackedIndex) {
+        // Stacked path: mount the view into the section's host div.
+        // Paginated path: do the upstream single-view teardown-and-
+        // reattach against #container.
+        if (stackedIndex != null) {
+            const host = this.#hosts[stackedIndex]
+            const existing = this.#views.get(stackedIndex)
             if (existing) {
                 existing.destroy()
                 host?.removeChild(existing.element)
@@ -701,16 +699,16 @@ export class Paginator extends HTMLElement {
             const view = new View({
                 container: this,
                 onExpand: () => {
-                    this.#measureSection(idx)
-                    // Only re-anchor if this section is the current focal,
-                    // otherwise we'd jump the viewport mid-scroll when a
-                    // neighbor reflows (image decode, font load).
-                    if (idx === this.#focalIdx)
+                    this.#measureSection(stackedIndex)
+                    // Only re-anchor if this section is the focal one,
+                    // else a neighbor reflow (image decode, font load)
+                    // would jerk the viewport mid-scroll.
+                    if (stackedIndex === this.#focalIdx)
                         this.#scrollToAnchor(this.#anchor)
                 },
             })
             host?.append(view.element)
-            if (idx >= 0) this.#views.set(idx, view)
+            this.#views.set(stackedIndex, view)
             this.#view = view
             return view
         }
@@ -1293,9 +1291,7 @@ export class Paginator extends HTMLElement {
             const src = opts.src ?? await Promise.resolve(this.sections[index].load())
                 .catch(e => { console.warn(e); return null })
             if (!src) return
-            this.#pendingHostForIndex = index
-            const view = this.#createView()
-            this.#pendingHostForIndex = -1
+            const view = this.#createView(index)
             const afterLoad = doc => {
                 if (doc.head) {
                     const sb = doc.createElement('style'); doc.head.prepend(sb)

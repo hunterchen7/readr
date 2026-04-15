@@ -566,17 +566,14 @@ function applyTheme(theme: Theme): void {
   // ── Layout work (only when something layout-affecting changed) ───
   if (!layoutChanged) return;
 
-  // Apply layout attributes to foliate's actual paginator, not the
-  // outer foliate-view wrapper. The paginator keeps its own anchor
-  // across render() calls, so we can let it reflow in place instead of
-  // blanking the screen and manually restoring by CFI.
-  // Foliate expects `gap` as a percentage, while the max-* caps and
-  // margin use px lengths. Keep those units aligned with the paginator
-  // contract or its grid math falls back to the defaults.
-  // Flow attribute drives our forked paginator's mode switch — on
-  // transition to/from 'scrolled' it builds or tears down the section
-  // stack IN PLACE. No view re-creation, no CFI capture/restore dance;
-  // foliate's internal #index + #anchor carry the position across.
+  // Apply layout attributes to the paginator (renderer), not the outer
+  // foliate-view wrapper — the paginator keeps its anchor across
+  // render() calls so it can reflow in place. `gap` is a percentage,
+  // `margin`/max-* caps are px lengths; mismatched units fall back to
+  // the paginator's defaults.
+  // The flow attribute drives our forked paginator's mode switch:
+  // toggling to/from 'scrolled' builds or tears down the section stack
+  // in place, with foliate's #index/#anchor carrying position across.
   renderer.setAttribute('flow', mode === 'scroll' ? 'scrolled' : 'paginated');
   renderer.setAttribute('gap', '0%');
   renderer.setAttribute('max-inline-size', '99999px');
@@ -1091,7 +1088,8 @@ async function init(): Promise<void> {
           // values agree instead of jumping when the user lifts off.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const ar = r as any;
-          const focal: number = ar.focalIndex ?? 0;
+          // focalIndex is -1 before the first section mounts; clamp.
+          const focal: number = Math.max(0, ar.focalIndex ?? 0);
           const localFrac: number = ar.focalLocalFraction ?? 0;
           const fractions = view!.getSectionFractions?.() ?? [];
           const secStart = fractions[focal] ?? (focal / Math.max(1, fractions.length - 1));
