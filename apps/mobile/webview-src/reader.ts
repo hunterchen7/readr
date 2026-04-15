@@ -1085,16 +1085,31 @@ async function init(): Promise<void> {
         if (scrollRaf) return;
         scrollRaf = requestAnimationFrame(() => {
           scrollRaf = 0;
+          // Compute BOOK-LEVEL fraction using foliate's byte-weighted
+          // section breakpoints — same math view.js's sectionProgress
+          // wrap does for the debounced relocate, so live and post-stop
+          // values agree instead of jumping when the user lifts off.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const ar = r as any;
-          const start: number = ar.start ?? 0;
-          const viewSize: number = ar.viewSize ?? 1;
-          const frac = viewSize > 0 ? Math.max(0, Math.min(1, start / viewSize)) : 0;
+          const focal: number = ar.focalIndex ?? 0;
+          const localFrac: number = ar.focalLocalFraction ?? 0;
+          const fractions = view!.getSectionFractions?.() ?? [];
+          const secStart = fractions[focal] ?? (focal / Math.max(1, fractions.length - 1));
+          const secEnd = fractions[focal + 1] ?? Math.min(1, ((focal + 1) / Math.max(1, fractions.length - 1)));
+          const frac = secStart + (secEnd - secStart) * localFrac;
           post('scrollProgress', { percentage: Math.round(frac * 1000) / 10 });
           if (lastRelocateDetail) {
             computeAndPostProgress({
               ...lastRelocateDetail,
               fraction: frac,
+              // Patch section.current too so secIdx-derived computations
+              // (currentPage from sectionPageCounts) follow the focal
+              // section live, not the last debounced one.
+              section: {
+                current: focal,
+                total: lastRelocateDetail.section?.total
+                  ?? book?.sections?.length ?? 1,
+              },
               transient: true,
             });
           }

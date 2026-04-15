@@ -854,6 +854,21 @@ export class Paginator extends HTMLElement {
     get scrolled() {
         return this.getAttribute('flow') === 'scrolled'
     }
+    // Live-reading exposure for stacked scroll mode. reader.ts uses
+    // these to compute book-level fraction during a drag, matching
+    // what view.js's sectionProgress wrap would produce post-scroll.
+    get focalIndex() {
+        return this.#stacked ? this.#focalIdx : this.#index
+    }
+    get focalLocalFraction() {
+        if (!this.#stacked) return 0
+        const host = this.#hosts[this.#focalIdx]
+        const h = this.#heights[this.#focalIdx]
+            || host?.getBoundingClientRect().height || 0
+        if (!host || h <= 0) return 0
+        const local = this.start - host.offsetTop
+        return Math.max(0, Math.min(1, local / h))
+    }
     get scrollProp() {
         const { scrolled } = this
         return this.#vertical ? (scrolled ? 'scrollLeft' : 'scrollTop')
@@ -1143,7 +1158,23 @@ export class Paginator extends HTMLElement {
 
         const index = this.#index
         const detail = { reason, range, index }
-        if (this.scrolled) detail.fraction = this.start / this.viewSize
+        if (this.scrolled) {
+            // Stacked mode: report SECTION-RELATIVE fraction so view.js's
+            // sectionProgress wrap can byte-weight it into a book-level
+            // fraction the same way it does for paginated flow. Using
+            // pixel-uniform `start/viewSize` here would feed sectionProgress
+            // a value it interprets as section-relative, double-weighting
+            // and producing a different fraction than mid-scroll.
+            if (this.#stacked) {
+                const host = this.#hosts[this.#focalIdx]
+                const h = this.#heights[this.#focalIdx]
+                    || host?.getBoundingClientRect().height || 0
+                const local = host ? (this.start - host.offsetTop) : 0
+                detail.fraction = h > 0
+                    ? Math.max(0, Math.min(1, local / h))
+                    : 0
+            } else detail.fraction = this.start / this.viewSize
+        }
         else if (this.pages > 0) {
             const { page, pages } = this
             this.#header.style.visibility = page > 1 ? 'visible' : 'hidden'
