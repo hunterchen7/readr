@@ -1298,14 +1298,16 @@ export default function ReaderScreen() {
               <Text
                 style={[
                   styles.verboseLabel,
-                  { color: theme.fg },
+                  { color: theme.fg, flex: 1 },
                 ]}
                 numberOfLines={1}
               >
                 {currentPosition?.chapterLabel ?? ""}
               </Text>
               <Text style={[styles.verboseLabel, { color: theme.fg }]}>
-                {`${progress.toFixed(1)}%`}
+                {currentPage != null && totalPages != null && totalPages > 0
+                  ? `p. ${currentPage}/${totalPages}  ·  ${progress.toFixed(1)}%`
+                  : `${progress.toFixed(1)}%`}
               </Text>
             </View>
           </View>
@@ -1614,11 +1616,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: 3,
+    height: 6,
     zIndex: 5,
   },
   miniProgressFill: {
-    height: 3,
+    height: 6,
   },
   verboseProgress: {
     position: "absolute",
@@ -1630,8 +1632,8 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   miniProgressTrack: {
-    height: 3,
-    borderRadius: 1.5,
+    height: 6,
+    borderRadius: 3,
     overflow: "hidden" as const,
   },
   verboseInfoRow: {
