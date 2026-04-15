@@ -110,6 +110,11 @@ let sectionPageCountsLocked = false;
 // Theme CSS that gets injected into every new section document.
 let currentThemeCSS = '';
 let currentTheme: Theme = {};
+// Cached most recent relocate detail. Scroll-mode rAF updates reuse
+// it so they don't have to recompute fields foliate already produced
+// (cfi, tocItem, byte-based location).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let lastRelocateDetail: any = null;
 // Map of note CFI → noteType ('typed' | 'handwritten'). Foliate's
 // show-annotation event drops custom annotation fields, so we mirror
 // classifications here and consult it when routing a tap.
@@ -150,9 +155,18 @@ function computeAndPostProgress(d: any): void {
 
   const rPages = view.renderer?.pages;
   const rPage = view.renderer?.page;
-  const pagesInSection = typeof rPages === 'number' && rPages > 2 ? rPages - 2 : 1;
-  const pageInSection = typeof rPage === 'number' && typeof rPages === 'number' && rPages > 2
-    ? Math.max(1, Math.min(pagesInSection, rPage))
+  // Paginated mode has 2 padding columns (start/end), so the visible
+  // page count is rPages - 2. Scrolled flow (including our forked
+  // stacked-scrolled mode where rPages now reports focal-section page
+  // count) has no padding, so use rPages directly.
+  const isScrolled = view.renderer?.getAttribute?.('flow') === 'scrolled';
+  const pagesInSection = typeof rPages === 'number'
+    ? (isScrolled ? Math.max(1, rPages) : (rPages > 2 ? rPages - 2 : 1))
+    : 1;
+  const pageInSection = typeof rPage === 'number' && typeof rPages === 'number'
+    ? (isScrolled
+        ? Math.max(1, Math.min(pagesInSection, rPage))
+        : (rPages > 2 ? Math.max(1, Math.min(pagesInSection, rPage)) : 1))
     : 1;
 
   let currentPage: number;
@@ -164,7 +178,10 @@ function computeAndPostProgress(d: any): void {
     // source of truth for the section we're actually rendering. If
     // measurement drifted, update sectionPageCounts in place so the
     // mapping below is exact and total converges toward truth.
-    if (typeof rPages === 'number' && rPages > 2) {
+    // Don't refine in scroll mode — pages there are derived from
+    // viewport-fit math, not foliate's columnized page count, so the
+    // runtime number wouldn't match what paginated measurement saw.
+    if (!isScrolled && typeof rPages === 'number' && rPages > 2) {
       const runtimeCount = rPages - 2;
       if (sectionPageCounts[secIdx] !== runtimeCount) {
         sectionPageCounts[secIdx] = runtimeCount;
@@ -199,10 +216,13 @@ function computeAndPostProgress(d: any): void {
   } else {
     // Stub: foliate's byte-based location.total. Note this is
     // invariant to font/margin (it's a byte-based estimate), so the
-    // user won't see a number change until measurement locks.
+    // user won't see a TOTAL change until measurement locks. But
+    // currentPage interpolated from the live fraction lets it scrub
+    // smoothly during scroll instead of being frozen at the cached
+    // location.current from the last debounced relocate.
     const loc = d.location;
     totalPages = loc?.total ?? 1;
-    currentPage = loc?.current != null ? loc.current + 1 : 1;
+    currentPage = Math.max(1, Math.min(totalPages, Math.round(totalPages * frac) || 1));
     totalIsEstimate = true;
   }
 
@@ -562,15 +582,17 @@ function applyTheme(theme: Theme): void {
   renderer.setAttribute('max-inline-size', '99999px');
   renderer.setAttribute('max-block-size', '99999px');
   renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
-  // Page-count measurement is paginated-only — in scrolled flow pages
-  // are a derived concept and the progress bar uses book fraction.
+  // Page-count measurement is paginated-only. When entering scroll
+  // mode, KEEP the previous run's counts so total pages still display
+  // — they're correct as long as the layout (margin/font) hasn't
+  // changed, which is exactly what the layoutChanged guard ensures.
+  if (mode === 'scroll') return;
   sectionPageCounts = {};
   sectionPageCountsLocked = false;
   _measureSeq++;
   post('debug', {
     msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily} mode=${mode}`,
   });
-  if (mode === 'scroll') return;
   requestAnimationFrame(() => {
     void runMeasurement();
   });
@@ -1041,8 +1063,44 @@ async function init(): Promise<void> {
     view.addEventListener('relocate', (e) => {
       ensureAllDocsAttached();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      computeAndPostProgress((e as CustomEvent).detail as any);
+      const detail = (e as CustomEvent).detail as any;
+      lastRelocateDetail = detail;
+      computeAndPostProgress(detail);
     });
+
+    // Live scroll-mode progress: foliate's debounced relocate only
+    // fires 250ms after scroll stops, so percentage and page numbers
+    // freeze during a long drag. The paginator (renderer) dispatches
+    // a non-debounced 'scroll' Event on every native scroll — we
+    // throttle that via rAF and emit a transient progressUpdated
+    // built from the last authoritative relocate detail with the
+    // live fraction patched in. RN ignores transient updates for DB
+    // persistence (avoids 60fps writes) but still reflects them in
+    // the progress bar / page numbers.
+    if (view.renderer) {
+      let scrollRaf = 0;
+      view.renderer.addEventListener('scroll', () => {
+        const r = view!.renderer!;
+        if (r.getAttribute('flow') !== 'scrolled') return;
+        if (scrollRaf) return;
+        scrollRaf = requestAnimationFrame(() => {
+          scrollRaf = 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ar = r as any;
+          const start: number = ar.start ?? 0;
+          const viewSize: number = ar.viewSize ?? 1;
+          const frac = viewSize > 0 ? Math.max(0, Math.min(1, start / viewSize)) : 0;
+          post('scrollProgress', { percentage: Math.round(frac * 1000) / 10 });
+          if (lastRelocateDetail) {
+            computeAndPostProgress({
+              ...lastRelocateDetail,
+              fraction: frac,
+              transient: true,
+            });
+          }
+        });
+      });
+    }
 
     // Annotation rendering — pick highlight vs note styling.
     view.addEventListener('draw-annotation', (e) => {

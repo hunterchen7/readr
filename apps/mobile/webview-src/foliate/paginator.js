@@ -884,9 +884,23 @@ export class Paginator extends HTMLElement {
         return this.start + this.size
     }
     get page() {
+        if (this.#stacked) {
+            // Focal-section-relative page (1-indexed) so the reader's
+            // "page X / pagesInSection" math matches paginated semantics.
+            const host = this.#hosts[this.#focalIdx]
+            if (!host) return 1
+            const local = (this.start + this.size / 2) - host.offsetTop
+            return Math.max(1, Math.floor(local / this.size) + 1)
+        }
         return Math.floor(((this.start + this.end) / 2) / this.size)
     }
     get pages() {
+        if (this.#stacked) {
+            const h = this.#heights[this.#focalIdx]
+                || this.#hosts[this.#focalIdx]?.getBoundingClientRect().height
+                || 0
+            return Math.max(1, Math.round(h / this.size))
+        }
         return Math.round(this.viewSize / this.size)
     }
     // this is the current position of the container
