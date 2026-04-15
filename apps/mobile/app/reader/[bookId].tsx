@@ -1268,7 +1268,7 @@ export default function ReaderScreen() {
                 styles.miniProgressFill,
                 {
                   width: `${progress}%`,
-                  backgroundColor: display.isEink ? theme.fg : theme.fg + "33",
+                  backgroundColor: display.isEink ? theme.fg : theme.fg + "99",
                 },
               ]}
             />
@@ -1289,7 +1289,7 @@ export default function ReaderScreen() {
                   styles.miniProgressFill,
                   {
                     width: `${progress}%`,
-                    backgroundColor: display.isEink ? theme.fg : theme.fg + "55",
+                    backgroundColor: display.isEink ? theme.fg : theme.fg + "99",
                   },
                 ]}
               />
