@@ -1358,6 +1358,10 @@ export class Paginator extends HTMLElement {
             )
         } catch { return }
         if (h <= 0) return
+        // Floor to one viewport so a tiny section (title page, half
+        // title) still occupies a full screen — keeps each section
+        // visually distinct and the scrubber feel consistent.
+        h = Math.max(h, this.size)
         const prev = this.#heights[index] || 0
         if (Math.abs(h - prev) < 2) return
         // Compensate scroll position so content above the viewport
