@@ -98,12 +98,13 @@ function pickGridColumns(screenWidth: number, isEink: boolean): number {
 function readingStatus(
   item: BookWithProgress,
 ): { label: string; tone: "reading" | "finished" | "unread" } | null {
-  // Finished status wins over download state — if you've finished a
-  // book, the card should say so whether or not it's still cached
-  // locally. Reading/Unread badges still require a local copy since
-  // they imply "you can pick up where you left off".
+  // Status reflects the book's reading state — independent of whether
+  // its EPUB is currently cached on this device. A book at 47% on
+  // another device shows "Reading · 47%" here too; the download state
+  // is surfaced separately (cover badge / cover opacity) so the user
+  // can tell at a glance which books need downloading to read offline
+  // without losing the progress signal.
   if (item.progressPct >= 98) return { label: "Finished", tone: "finished" };
-  if (!item.downloaded) return null;
   if (item.progressPct > 0)
     return { label: `Reading · ${item.progressPct}%`, tone: "reading" };
   return { label: "Unread", tone: "unread" };
@@ -284,27 +285,31 @@ export default function LibraryScreen() {
       : filtered.toReversed();
   }, [booksWithProgress, filter, search, sort, sortDir]);
 
-  // Most recently read, partially-finished, locally-available book —
-  // shown in the "Jump back in" card at the top of the library so the
-  // user can resume with a single tap. Always visible when a candidate
-  // exists; the whole point is a compact, always-available shortcut
-  // back into the book regardless of filter or search state.
+  // Most recently read, partially-finished book — shown in the "Jump
+  // back in" card at the top of the library. Picked across ALL books
+  // regardless of which device they're downloaded on, so the same
+  // candidate appears on every device. If the book isn't on the local
+  // device the card shows a download-and-resume affordance instead of
+  // a one-tap resume.
   const resumeBook = useMemo(() => {
     let best: BookWithProgress | null = null;
     for (const b of booksWithProgress) {
       if (!b.lastReadAt) continue;
       if (b.progressPct <= 0 || b.progressPct >= 98) continue;
-      // On native the reader needs a local copy to render offline. Web
-      // streams everything, so downloaded state doesn't apply there.
-      if (Platform.OS !== "web" && !b.downloaded) continue;
       if (!best || b.lastReadAt > (best.lastReadAt ?? "")) best = b;
     }
     return best;
   }, [booksWithProgress]);
 
   function handleResume(book: BookWithProgress) {
-    // Skip the detail screen — the whole point of the resume card is
-    // "one tap back into the book", not a detour through metadata.
+    // Downloaded → straight into the reader, the whole point of the
+    // resume card is one tap. Not downloaded → detour through the
+    // detail screen where the Download flow lives, so the user
+    // doesn't tap "resume" and get a blank reader.
+    if (Platform.OS !== "web" && !book.downloaded) {
+      router.push(`/book/${book.id}`);
+      return;
+    }
     router.push(`/reader/${book.id}`);
   }
 
@@ -702,9 +707,10 @@ function renderResumeCard(
   onPress: (b: BookWithProgress) => void,
 ) {
   const pct = Math.min(100, Math.max(0, item.progressPct));
+  const needsDownload = Platform.OS !== "web" && !item.downloaded;
   return (
     <Pressable style={styles.resumeCard} onPress={() => onPress(item)}>
-      <View style={styles.resumeCover}>
+      <View style={[styles.resumeCover, needsDownload && styles.coverDimmed]}>
         {item.coverUrl ? (
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
         ) : (
@@ -714,7 +720,9 @@ function renderResumeCard(
         )}
       </View>
       <View style={styles.resumeBody}>
-        <Text style={styles.resumeLabel}>Jump back in</Text>
+        <Text style={styles.resumeLabel}>
+          {needsDownload ? "Download to continue" : "Jump back in"}
+        </Text>
         <Text style={styles.resumeTitle} numberOfLines={1}>
           {item.title ?? "Untitled"}
         </Text>
@@ -732,11 +740,11 @@ function renderResumeCard(
           <Text style={styles.resumeProgressText}>{pct}%</Text>
         </View>
       </View>
-      <BookOpen
-        size={20}
-        color={colors.primary}
-        style={styles.resumeIcon}
-      />
+      {needsDownload ? (
+        <Download size={20} color={colors.primary} style={styles.resumeIcon} />
+      ) : (
+        <BookOpen size={20} color={colors.primary} style={styles.resumeIcon} />
+      )}
     </Pressable>
   );
 }
@@ -749,9 +757,10 @@ function renderCard(
 ) {
   const downloading = item.downloadProgress !== null;
   const status = readingStatus(item);
+  const notDownloaded = Platform.OS !== "web" && !item.downloaded;
   return (
     <Pressable style={[styles.card, { width }]} onPress={() => onPress(item)}>
-      <View style={[styles.cover, !item.downloaded && styles.coverDimmed]}>
+      <View style={[styles.cover, notDownloaded && styles.coverDimmed]}>
         {item.coverUrl ? (
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
         ) : (
@@ -759,12 +768,19 @@ function renderCard(
             {item.title ?? "Untitled"}
           </Text>
         )}
-        {!item.downloaded && downloading ? (
+        {notDownloaded && downloading ? (
           <View style={[styles.downloadOverlay, isEink && styles.downloadOverlayEink]}>
             <LoadingIndicator color="#fff" label="Downloading" />
             <Text style={styles.downloadOverlayText}>
               {Math.round((item.downloadProgress ?? 0) * 100)}%
             </Text>
+          </View>
+        ) : notDownloaded ? (
+          // Small "not on this device" badge — keeps the progress pill
+          // free to show actual reading state (Reading X% / Unread /
+          // Finished) the same way a downloaded book does.
+          <View style={styles.coverDownloadBadge}>
+            <Download size={12} color="#fff" />
           </View>
         ) : null}
       </View>
@@ -784,20 +800,15 @@ function renderStatusPill(
   status: ReturnType<typeof readingStatus>,
   downloading: boolean,
 ) {
-  // Finished state is a full-width label regardless of download
-  // status — done books aren't "downloadable", they're done.
-  if (!item.downloaded && status?.tone !== "finished") {
+  // Active download still takes precedence — a download-in-progress
+  // animation is the actionable signal users care about right then.
+  if (downloading) {
     return (
       <View style={[styles.statusPill, styles.statusPillMuted]}>
-        {downloading ? (
-          <View style={[styles.statusPillFill, { width: `${Math.round((item.downloadProgress ?? 0) * 100)}%` }]} />
-        ) : null}
+        <View style={[styles.statusPillFill, { width: `${Math.round((item.downloadProgress ?? 0) * 100)}%` }]} />
         <View style={styles.statusPillRow}>
-          {!downloading ? <Download size={12} color="#555" /> : null}
           <Text style={[styles.statusPillText, styles.statusPillTextNoPad]} numberOfLines={1}>
-            {downloading
-              ? `Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`
-              : "Download"}
+            {`Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`}
           </Text>
         </View>
       </View>
@@ -837,11 +848,17 @@ function renderRow(
 ) {
   const downloading = item.downloadProgress !== null;
   const status = readingStatus(item);
+  const notDownloaded = Platform.OS !== "web" && !item.downloaded;
   return (
     <Pressable style={styles.rowCard} onPress={() => onPress(item)}>
-      <View style={[styles.rowCover, !item.downloaded && styles.coverDimmed]}>
+      <View style={[styles.rowCover, notDownloaded && styles.coverDimmed]}>
         {item.coverUrl ? (
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
+        ) : null}
+        {notDownloaded && !downloading ? (
+          <View style={styles.coverDownloadBadge}>
+            <Download size={12} color="#fff" />
+          </View>
         ) : null}
       </View>
       <View style={styles.rowMeta}>
@@ -851,13 +868,10 @@ function renderRow(
         <Text style={styles.rowAuthor} numberOfLines={1}>
           {item.author ?? "Unknown"}
         </Text>
-        {!item.downloaded && status?.tone !== "finished" ? (
+        {downloading ? (
           <View style={styles.rowStatusDownload}>
-            {!downloading ? <Download size={12} color={colors.textMuted} /> : null}
             <Text style={styles.rowStatus}>
-              {downloading
-                ? `Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`
-                : "Tap to download"}
+              {`Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`}
             </Text>
           </View>
         ) : (
@@ -1088,6 +1102,21 @@ const styles = StyleSheet.create({
     color: colors.primaryFg,
   },
   coverDimmed: { opacity: 0.55 },
+  // Small badge in the top-right of a non-downloaded book's cover.
+  // Tells the user "this book lives on the server, you'll need to
+  // download it to read offline" without sacrificing the progress
+  // pill below the cover.
+  coverDownloadBadge: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   downloadOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(17,17,17,0.55)",
