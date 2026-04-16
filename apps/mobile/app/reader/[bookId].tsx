@@ -115,11 +115,19 @@ export default function ReaderScreen() {
   const [theme, setTheme] = useState<ReaderTheme>(() =>
     display.isEink ? EINK_THEME : DEFAULT_THEME,
   );
-  // Normalize progressBar — old persisted booleans get mapped to new string modes
-  const progressMode: "off" | "bar" | "always" | "verbose" =
-    typeof theme.progressBar === "boolean"
-      ? (theme.progressBar ? "always" : "off")
-      : (theme.progressBar ?? "always");
+  // Normalize progressBar — old persisted booleans and the legacy "always"
+  // value both map to the current "bar" mode.
+  const progressMode: "off" | "bar" | "verbose" = (() => {
+    const raw: string =
+      typeof theme.progressBar === "boolean"
+        ? theme.progressBar
+          ? "bar"
+          : "off"
+        : (theme.progressBar ?? "bar");
+    if (raw === "verbose") return "verbose";
+    if (raw === "off") return "off";
+    return "bar";
+  })();
   // Merged theme sent to the WebView — the base theme plus an isEink flag
   // so the injected EPUB stylesheet can force high-contrast black text.
   const themeForWebView = useMemo(
@@ -242,6 +250,17 @@ export default function ReaderScreen() {
   const finishedRef = useRef(false);
   const hasRestoredRef = useRef(false);
   const pendingReadyRestoreRef = useRef(false);
+  // Byte-weighted fraction of the START of what's currently visible,
+  // refreshed on every progressUpdated. Safe to round-trip through a
+  // mode switch (scroll's viewport-start and page's page-start map to
+  // the same byte position), unlike `progress` which in page mode is
+  // the END of the current page and jumps +1 page after EPSILON nudge.
+  const lastAnchorFracRef = useRef<number | null>(null);
+  // Mute anchor updates during a mode-switch replay settle window.
+  // The post-replay relocate can report an anchor ~1px earlier than the
+  // one we sent (viewport-top rounding), and if we pick that up between
+  // toggles we accumulate a few pages of backward drift before settling.
+  const anchorMuteUntilRef = useRef(0);
 
   // The RN-side loading curtain. We cover the WebView with a solid
   // theme-coloured View until foliate has actually laid out the saved
@@ -519,7 +538,29 @@ export default function ReaderScreen() {
 
   function handleThemeChange(newTheme: ReaderTheme) {
     setTheme(newTheme);
+    // Toggling between paginated and scroll mode: snapshot the CFI
+    // and replay via goToLocation AFTER the layout flip. Fraction-
+    // based replay drifts because page mode reports the book fraction
+    // at the END of the current page (via sectionProgress.getProgress
+    // with pageFraction=size). getSection then adds Number.EPSILON on
+    // replay and lands on the NEXT page — +~0.2% per scroll→page cycle.
+    // CFI is a DOM-anchored pointer, invariant across the mode flip.
+    const prevMode = theme.pageTurnMode ?? "both";
+    const nextMode = newTheme.pageTurnMode ?? "both";
+    const modeChanged =
+      (prevMode === "scroll") !== (nextMode === "scroll");
+    const snapshotAnchor = modeChanged ? lastAnchorFracRef.current : null;
     sendToWebView("setTheme", { ...newTheme, isEink: display.isEink });
+    if (snapshotAnchor != null) {
+      // Freeze anchor from tap-time through the replay settle. Post-
+      // replay relocates can report anchors that drift a few pixels
+      // below the one we sent (viewport-top rounding), which would
+      // compound into page-level backward drift over repeated toggles.
+      anchorMuteUntilRef.current = Date.now() + 1500;
+      setTimeout(() => {
+        sendToWebView("goToLocation", { fraction: snapshotAnchor });
+      }, 400);
+    }
     // Fire-and-forget persistence — failure is non-fatal.
     saveReaderPrefs({ theme: newTheme });
   }
@@ -629,6 +670,12 @@ export default function ReaderScreen() {
           if (isDraggingRef.current) break;
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
+          if (
+            typeof msg.payload.anchorFraction === "number" &&
+            Date.now() >= anchorMuteUntilRef.current
+          ) {
+            lastAnchorFracRef.current = msg.payload.anchorFraction;
+          }
           // Hitting 100% auto-flips the finished flag so users don't
           // have to dig into the detail screen to mark it. Sticky —
           // never cleared on pct drop, so re-reading past the end
@@ -1269,7 +1316,7 @@ export default function ReaderScreen() {
         </>
       ) : (
         /* Controls hidden — show mini bar based on progressMode */
-        progressMode === "always" ? (
+        progressMode === "bar" ? (
           <View
             style={[
               styles.miniProgress,
@@ -1339,7 +1386,20 @@ export default function ReaderScreen() {
             styles.pageIndicator,
             theme.pageIndicator.edge === "top"
               ? { top: insets.top + 4 }
-              : { bottom: Math.max(insets.bottom, 4) + 6 },
+              : {
+                  // Lift above the mini progress overlay when it's
+                  // visible at the bottom — verbose mode is taller
+                  // (bar + chapter/percent row), bar mode is just the
+                  // 6px fill.
+                  bottom:
+                    Math.max(insets.bottom, 4) +
+                    6 +
+                    (progressMode === "verbose"
+                      ? 26
+                      : progressMode === "bar"
+                        ? 8
+                        : 0),
+                },
             resolveIndicatorSide(theme.pageIndicator.side, currentPage) ===
             "left"
               ? { left: 12 }

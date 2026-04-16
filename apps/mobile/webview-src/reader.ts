@@ -226,8 +226,22 @@ function computeAndPostProgress(d: any): void {
     totalIsEstimate = true;
   }
 
+  // Mode-switch-safe anchor fraction: always the START of what's visible,
+  // in byte-weighted book fraction. Page mode's `d.fraction` is the END of
+  // current page (sectionProgress adds pageFraction*sizeInSection), which
+  // round-trips to the NEXT page after getSection(+EPSILON). Subtract one
+  // page's worth for paginated, or pass through as-is for scrolled.
+  const sectionFractionsArr = view.getSectionFractions?.() ?? [];
+  const sectionStartFrac = sectionFractionsArr[secIdx] ?? (secIdx / totalSections);
+  const sectionEndFrac = sectionFractionsArr[secIdx + 1] ?? ((secIdx + 1) / totalSections);
+  const sectionSpanFrac = Math.max(0, sectionEndFrac - sectionStartFrac);
+  const anchorFraction = isScrolled || pagesInSection <= 1
+    ? frac
+    : sectionStartFrac + ((pageInSection - 1) / pagesInSection) * sectionSpanFrac;
+
   post('progressUpdated', {
-    percentage: Math.round(frac * 1000) / 10,
+    percentage: Math.round(frac * 100000) / 1000,
+    anchorFraction,
     cfi: d.cfi,
     chapter: d.tocItem?.label,
     chapterHref: d.tocItem?.href,
@@ -503,6 +517,7 @@ function layoutSignature(t: Theme): string {
     t.fontFamily ?? null,
     t.fontWeight ?? null,
     t.lineHeight ?? null,
+    t.pageTurnMode ?? null,
   ]);
 }
 let lastLayoutSig: string | null = null;
@@ -1095,7 +1110,7 @@ async function init(): Promise<void> {
           const secStart = fractions[focal] ?? (focal / Math.max(1, fractions.length - 1));
           const secEnd = fractions[focal + 1] ?? Math.min(1, ((focal + 1) / Math.max(1, fractions.length - 1)));
           const frac = secStart + (secEnd - secStart) * localFrac;
-          post('scrollProgress', { percentage: Math.round(frac * 1000) / 10 });
+          post('scrollProgress', { percentage: Math.round(frac * 100000) / 1000 });
           if (lastRelocateDetail) {
             computeAndPostProgress({
               ...lastRelocateDetail,

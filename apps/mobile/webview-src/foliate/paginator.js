@@ -457,6 +457,14 @@ export class Paginator extends HTMLElement {
     #windowRadius = 1          // mount [focal-R, focal+R]
     #stackScrollHandler = null
     #programmaticScroll = false // suppresses focal-update during scrollTo
+    // Pin focal during mode switch + its settling window. #onStackScroll
+    // would otherwise reassign #focalIdx based on viewport midpoint,
+    // and the scrollToAnchor that runs inside render() can land at a
+    // transient position where a DIFFERENT section is under the midpoint
+    // (neighbors haven't grown/shrunk yet). That wrong focal poisons
+    // subsequent relocate events with a book fraction ~1.0, which then
+    // snapshots into the next mode switch.
+    #focalPinned = false
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -636,36 +644,31 @@ export class Paginator extends HTMLElement {
     attributeChangedCallback(name, _, value) {
         switch (name) {
             case 'flow':
-                // Flow toggles between paginated and scrolled. If we
-                // have a book open, build or tear down the section
-                // stack accordingly. Position is preserved via the
-                // current #index + #anchor (foliate's existing fields).
+                // Mode switch. Pin focal across the DOM swap + settle
+                // window so the transient scroll positions during the
+                // CSS flip can't trigger a wrong-focal reassignment
+                // in #onStackScroll. reader.ts snaps precise position
+                // ~400ms later via goToFraction once the pin lifts.
                 if (this.sections) {
+                    this.#focalPinned = true
+                    const savedAnchor = this.#anchor
                     if (value === 'scrolled' && !this.#stacked) {
                         this.#initStack()
-                        this.render()
                     } else if (value !== 'scrolled' && this.#stacked) {
-                        // Capture focal position BEFORE teardown wipes
-                        // it, then re-enter that section with a fresh
-                        // single view. Without this, render() short-
-                        // circuits on `!this.#view` and the container
-                        // stays stuck on the now-orphaned stack DOM.
-                        const restoreIdx = this.#focalIdx >= 0
-                            ? this.#focalIdx : this.#index
-                        const restoreAnchor = this.#anchor
                         this.#teardownStack()
-                        if (restoreIdx >= 0 && this.sections[restoreIdx]) {
-                            void this.#goTo({
-                                index: restoreIdx,
-                                anchor: restoreAnchor,
-                            })
-                        }
-                    } else {
-                        this.render()
                     }
-                } else {
-                    this.render()
+                    this.#container.scrollLeft = 0
+                    this.#container.scrollTop = 0
+                    this.#anchor = savedAnchor
+                    // Release the pin slightly after reader.ts's
+                    // goToFraction replay (~400ms) so the explicit
+                    // seek lands first and THEN #onStackScroll can
+                    // resume tracking from the correct focal.
+                    setTimeout(() => { this.#focalPinned = false }, 600)
                 }
+                this.render()
+                if (this.#stacked && this.#focalIdx >= 0)
+                    void this.#slideWindow(this.#focalIdx)
                 break
             case 'gap':
             case 'margin':
@@ -705,32 +708,47 @@ export class Paginator extends HTMLElement {
         })
     }
     #createView(stackedIndex) {
-        // Stacked path: mount the view into the section's host div.
-        // Paginated path: do the upstream single-view teardown-and-
-        // reattach against #container.
+        // Stacked path: this is a NEIGHBOR mount. Replace the
+        // placeholder div at #hosts[stackedIndex] with the new View's
+        // element, so the new View becomes a sibling of the focal
+        // view inside #container. The focal view's DOM position is
+        // untouched. `#view` always points at the CURRENTLY FOCAL
+        // view — don't clobber it here.
         if (stackedIndex != null) {
-            const host = this.#hosts[stackedIndex]
             const existing = this.#views.get(stackedIndex)
             if (existing) {
+                // Re-mount: destroy the old view's iframe and
+                // re-insert a placeholder in its stead.
                 existing.destroy()
-                host?.removeChild(existing.element)
+                const ph = document.createElement('div')
+                ph.dataset.sectionIndex = String(stackedIndex)
+                if (existing.element.parentNode === this.#container) {
+                    this.#container.replaceChild(ph, existing.element)
+                }
+                this.#hosts[stackedIndex] = ph
             }
             const view = new View({
                 container: this,
                 onExpand: () => {
                     this.#measureSection(stackedIndex)
-                    // Only re-anchor if this section is the focal one,
-                    // else a neighbor reflow (image decode, font load)
-                    // would jerk the viewport mid-scroll.
                     if (stackedIndex === this.#focalIdx)
                         this.#scrollToAnchor(this.#anchor)
                 },
             })
-            host?.append(view.element)
+            // Swap placeholder → view.element in place so the DOM
+            // order matches reading order without reparenting the
+            // focal view.
+            const slot = this.#hosts[stackedIndex]
+            if (slot?.parentNode === this.#container) {
+                this.#container.replaceChild(view.element, slot)
+            } else {
+                this.#container.appendChild(view.element)
+            }
+            this.#hosts[stackedIndex] = view.element
             this.#views.set(stackedIndex, view)
-            this.#view = view
             return view
         }
+        // Paginated single-view path — upstream behavior.
         if (this.#view) {
             this.#view.destroy()
             this.#container.removeChild(this.#view.element)
@@ -1254,30 +1272,52 @@ export class Paginator extends HTMLElement {
     #initStack() {
         if (this.#stacked || !this.sections) return
         this.#stacked = true
-        // Tear down any leftover single-view child of #container.
-        if (this.#view?.element?.parentNode === this.#container) {
-            this.#view.destroy()
-            this.#container.removeChild(this.#view.element)
-            this.#view = null
-        }
-        this.#hosts = []
-        this.#views = new Map()
+        // Focal view (this.#view) STAYS exactly where it is in
+        // #container — we never touch it. We only insert placeholder
+        // <div>s for the other sections as SIBLINGS, before the focal
+        // for earlier sections and after it for later ones. That way
+        // the mode switch itself doesn't re-render the focal iframe;
+        // render() downstream does a pure CSS flip, just like
+        // upstream foliate. Neighbors mount lazily via slideWindow,
+        // replacing their placeholder in place.
+        const focalIdx = this.#index ?? 0
+        this.#hosts = new Array(this.sections.length)
         this.#heights = new Array(this.sections.length).fill(0)
+        this.#views = new Map()
         const estH = this.#estSectionHeight()
-        for (let i = 0; i < this.sections.length; i++) {
-            const host = document.createElement('div')
-            host.dataset.sectionIndex = String(i)
-            // content-visibility: auto skips rendering offscreen hosts.
-            // contain-intrinsic-size gives the scrollbar a stable total
-            // before the host has been measured. min-height keeps space
-            // reserved even when the host becomes offscreen + skipped.
-            host.style.cssText =
-                `display:block;width:100%;min-height:${estH}px;` +
-                `content-visibility:auto;contain-intrinsic-size:0 ${estH}px;` +
-                `position:relative;`
-            this.#container.appendChild(host)
-            this.#hosts.push(host)
+        const focalEl = this.#view?.element ?? null
+        if (this.#view && focalIdx >= 0 && focalIdx < this.#hosts.length) {
+            this.#hosts[focalIdx] = focalEl
+            this.#views.set(focalIdx, this.#view)
         }
+        const makePlaceholder = i => {
+            const ph = document.createElement('div')
+            ph.dataset.sectionIndex = String(i)
+            // Plain block spacer — no content-visibility:auto. That
+            // optimization triggered blank-until-interaction bugs
+            // because initial layout + scrollToAnchor ran before the
+            // browser materialized reserved sizes for skipped content.
+            ph.style.cssText =
+                `display:block;width:100%;min-height:${estH}px;` +
+                `position:relative;`
+            return ph
+        }
+        // Insert earlier-section placeholders before the focal, in
+        // ascending order, so the final DOM order matches reading
+        // order without re-parenting the focal.
+        for (let i = 0; i < focalIdx; i++) {
+            const ph = makePlaceholder(i)
+            if (focalEl) this.#container.insertBefore(ph, focalEl)
+            else this.#container.appendChild(ph)
+            this.#hosts[i] = ph
+        }
+        // Later-section placeholders after the focal.
+        for (let i = focalIdx + 1; i < this.sections.length; i++) {
+            const ph = makePlaceholder(i)
+            this.#container.appendChild(ph)
+            this.#hosts[i] = ph
+        }
+        this.#focalIdx = focalIdx
         this.#stackScrollHandler = () => this.#onStackScroll()
         this.#container.addEventListener('scroll',
             this.#stackScrollHandler, { passive: true })
@@ -1288,18 +1328,35 @@ export class Paginator extends HTMLElement {
             this.#container.removeEventListener('scroll', this.#stackScrollHandler)
             this.#stackScrollHandler = null
         }
-        for (const [, v] of this.#views) {
-            try { v.destroy() } catch { /* ignore */ }
+        // Destroy neighbor views + remove all non-focal children from
+        // #container (mounted-neighbor view elements AND placeholder
+        // divs). The focal this.#view.element stays put in #container
+        // — upstream invariant restored. No CSS flip, no reparenting.
+        const focalIdx = this.#focalIdx >= 0 ? this.#focalIdx : this.#index
+        for (const [idx, v] of this.#views) {
+            if (idx === focalIdx) continue
+            try {
+                if (v.element.parentNode === this.#container) {
+                    this.#container.removeChild(v.element)
+                }
+                v.destroy()
+            } catch { /* ignore */ }
+        }
+        for (let i = 0; i < this.#hosts.length; i++) {
+            if (i === focalIdx) continue
+            const el = this.#hosts[i]
+            if (el?.parentNode === this.#container) {
+                this.#container.removeChild(el)
+            }
         }
         this.#views = new Map()
         this.#hosts = []
         this.#heights = []
         this.#mountPromises.clear()
-        this.#container.innerHTML = ''
         this.#stacked = false
         this.#focalIdx = -1
-        this.#view = null
-        // Paginated render will re-create a single view via #goTo.
+        if (focalIdx >= 0) this.#index = focalIdx
+        // this.#view intentionally untouched — still the focal view.
     }
     async #mountSection(index, opts = {}) {
         if (index < 0 || index >= this.#hosts.length) return
@@ -1341,12 +1398,22 @@ export class Paginator extends HTMLElement {
     #unmountSection(index) {
         const view = this.#views.get(index)
         if (!view) return
+        // In the new design #hosts[index] IS view.element when mounted.
+        // Replace it in #container with a fresh placeholder that keeps
+        // the measured height so offsets stay stable.
+        const oldEl = this.#hosts[index]
+        const h = this.#heights[index] || this.#estSectionHeight()
+        const ph = document.createElement('div')
+        ph.dataset.sectionIndex = String(index)
+        ph.style.cssText =
+            `display:block;width:100%;min-height:${h}px;` +
+            `position:relative;`
+        if (oldEl?.parentNode === this.#container) {
+            this.#container.replaceChild(ph, oldEl)
+        }
+        this.#hosts[index] = ph
         try { view.destroy() } catch { /* ignore */ }
-        const host = this.#hosts[index]
-        if (host) host.innerHTML = ''
         this.#views.delete(index)
-        // Host retains its cached height (min-height + contain-intrinsic-
-        // size) so the scrollbar doesn't jump when we release this view.
     }
     async #slideWindow(focal) {
         const R = this.#windowRadius
@@ -1363,9 +1430,13 @@ export class Paginator extends HTMLElement {
         if (toMount.length > 0) await Promise.all(toMount)
     }
     #measureSection(index) {
+        // Record the mounted section's actual layout height so
+        // focalLocalFraction and #onStackScroll can do offset math.
+        // The View sizes its own element via expand() — don't fight
+        // it with explicit styles on #hosts[index] (which IS the
+        // view.element once mounted).
         const view = this.#views.get(index)
-        const host = this.#hosts[index]
-        if (!view || !host) return
+        if (!view) return
         const doc = view.document
         if (!doc) return
         let h = 0
@@ -1377,24 +1448,15 @@ export class Paginator extends HTMLElement {
             )
         } catch { return }
         if (h <= 0) return
-        // Floor to one viewport so a tiny section (title page, half
-        // title) still occupies a full screen — keeps each section
-        // visually distinct and the scrubber feel consistent.
         h = Math.max(h, this.size)
         const prev = this.#heights[index] || 0
         if (Math.abs(h - prev) < 2) return
-        // Compensate scroll position so content above the viewport
-        // resizing doesn't shove the user downstream visually.
-        const hostRect = host.getBoundingClientRect()
+        const el = this.#hosts[index]
+        if (!el) { this.#heights[index] = h; return }
+        const rect = el.getBoundingClientRect()
         const crect = this.#container.getBoundingClientRect()
-        const above = hostRect.bottom <= crect.top
+        const above = rect.bottom <= crect.top
         this.#heights[index] = h
-        // Pin host to exact measured content height: scrollbar math
-        // stays stable and the host doesn't grow/shrink when a
-        // neighbor's View resizes itself on image decode.
-        host.style.minHeight = ''
-        host.style.height = h + 'px'
-        host.style.containIntrinsicSize = `0 ${h}px`
         if (above) {
             this.#programmaticScroll = true
             this.#container.scrollTop += (h - prev)
@@ -1415,6 +1477,11 @@ export class Paginator extends HTMLElement {
     }
     #onStackScroll() {
         if (this.#programmaticScroll) return
+        // While pinned (mode-switch settling window), trust the caller-
+        // set #focalIdx instead of recomputing from viewport midpoint.
+        // Transient scroll positions during the flip land under the
+        // wrong section and would poison subsequent relocate events.
+        if (this.#focalPinned) return
         // Determine focal section by viewport midpoint of #container.
         const crect = this.#container.getBoundingClientRect()
         const mid = crect.top + crect.height / 2
@@ -1450,7 +1517,7 @@ export class Paginator extends HTMLElement {
             await this.#display(Promise.resolve({ index, anchor, select }))
             return
         }
-        if (index === this.#index) await this.#display({ index, anchor, select })
+        if (index === this.#index && this.#view) await this.#display({ index, anchor, select })
         else {
             const oldIndex = this.#index
             const onLoad = detail => {
