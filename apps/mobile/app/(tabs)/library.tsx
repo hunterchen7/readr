@@ -579,7 +579,9 @@ export default function LibraryScreen() {
         </View>
       ) : null}
 
-      {resumeBook ? renderResumeCard(resumeBook, handleResume) : null}
+      {resumeBook
+        ? renderResumeCard(resumeBook, handleResume, handleDownload, display.isEink)
+        : null}
 
       <ScrollView
         horizontal
@@ -677,7 +679,7 @@ export default function LibraryScreen() {
             />
           }
           renderItem={({ item }) =>
-            renderCard(item, handleBookPress, gridCardWidth, display.isEink)
+            renderCard(item, handleBookPress, handleDownload, gridCardWidth, display.isEink)
           }
         />
       ) : (
@@ -694,7 +696,7 @@ export default function LibraryScreen() {
               }
             />
           }
-          renderItem={({ item }) => renderRow(item, handleBookPress)}
+          renderItem={({ item }) => renderRow(item, handleBookPress, handleDownload)}
         />
       )}
     </View>
@@ -705,11 +707,18 @@ export default function LibraryScreen() {
 function renderResumeCard(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
+  onDownload: (bookId: string) => void,
+  isEink: boolean,
 ) {
   const pct = Math.min(100, Math.max(0, item.progressPct));
   const needsDownload = Platform.OS !== "web" && !item.downloaded;
+  const downloading = item.downloadProgress !== null;
+  const dlPct = Math.round((item.downloadProgress ?? 0) * 100);
   return (
-    <Pressable style={styles.resumeCard} onPress={() => onPress(item)}>
+    <Pressable
+      style={[styles.resumeCard, isEink && styles.resumeCardEink]}
+      onPress={() => onPress(item)}
+    >
       <View style={[styles.resumeCover, needsDownload && styles.coverDimmed]}>
         {item.coverUrl ? (
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
@@ -720,28 +729,58 @@ function renderResumeCard(
         )}
       </View>
       <View style={styles.resumeBody}>
-        <Text style={styles.resumeLabel}>
+        <Text style={[styles.resumeLabel, isEink && styles.resumeLabelEink]}>
           {needsDownload ? "Download to continue" : "Jump back in"}
         </Text>
         <Text style={styles.resumeTitle} numberOfLines={1}>
           {item.title ?? "Untitled"}
         </Text>
         {item.lastReadChapter ? (
-          <Text style={styles.resumeChapter} numberOfLines={1}>
+          <Text
+            style={[styles.resumeChapter, isEink && styles.resumeChapterEink]}
+            numberOfLines={1}
+          >
             {item.lastReadChapter}
           </Text>
         ) : null}
         <View style={styles.resumeProgressRow}>
-          <View style={styles.resumeProgressTrack}>
+          <View
+            style={[
+              styles.resumeProgressTrack,
+              isEink && styles.resumeProgressTrackEink,
+            ]}
+          >
             <View
               style={[styles.resumeProgressFill, { width: `${pct}%` }]}
             />
           </View>
-          <Text style={styles.resumeProgressText}>{pct}%</Text>
+          <Text
+            style={[
+              styles.resumeProgressText,
+              isEink && styles.resumeProgressTextEink,
+            ]}
+          >
+            {pct}%
+          </Text>
         </View>
       </View>
       {needsDownload ? (
-        <Download size={20} color={colors.primary} style={styles.resumeIcon} />
+        <Pressable
+          onPress={(e) => {
+            e.stopPropagation();
+            if (!downloading) onDownload(item.id);
+          }}
+          disabled={downloading}
+          hitSlop={8}
+          accessibilityLabel={downloading ? `Downloading ${dlPct}%` : "Download"}
+          style={styles.resumeIconBtn}
+        >
+          {downloading ? (
+            <Text style={styles.resumeDownloadingText}>{dlPct}%</Text>
+          ) : (
+            <Download size={20} color={colors.primary} />
+          )}
+        </Pressable>
       ) : (
         <BookOpen size={20} color={colors.primary} style={styles.resumeIcon} />
       )}
@@ -752,6 +791,7 @@ function renderResumeCard(
 function renderCard(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
+  onDownload: (bookId: string) => void,
   width: number,
   isEink: boolean,
 ) {
@@ -776,12 +816,20 @@ function renderCard(
             </Text>
           </View>
         ) : notDownloaded ? (
-          // Small "not on this device" badge — keeps the progress pill
-          // free to show actual reading state (Reading X% / Unread /
-          // Finished) the same way a downloaded book does.
-          <View style={styles.coverDownloadBadge}>
-            <Download size={12} color="#fff" />
-          </View>
+          // Small "not on this device" badge — doubles as a tap
+          // target to start the download in place without routing
+          // to the detail screen.
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              onDownload(item.id);
+            }}
+            hitSlop={10}
+            accessibilityLabel="Download"
+            style={styles.coverDownloadBadge}
+          >
+            <Download size={16} color="#fff" />
+          </Pressable>
         ) : null}
       </View>
       <Text style={styles.bookTitle} numberOfLines={1}>
@@ -845,6 +893,7 @@ function renderStatusPill(
 function renderRow(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
+  onDownload: (bookId: string) => void,
 ) {
   const downloading = item.downloadProgress !== null;
   const status = readingStatus(item);
@@ -856,9 +905,17 @@ function renderRow(
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
         ) : null}
         {notDownloaded && !downloading ? (
-          <View style={styles.coverDownloadBadge}>
-            <Download size={12} color="#fff" />
-          </View>
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              onDownload(item.id);
+            }}
+            hitSlop={10}
+            accessibilityLabel="Download"
+            style={styles.coverDownloadBadge}
+          >
+            <Download size={16} color="#fff" />
+          </Pressable>
         ) : null}
       </View>
       <View style={styles.rowMeta}>
@@ -1110,9 +1167,9 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 6,
     right: 6,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 31,
+    height: 31,
+    borderRadius: 16,
     backgroundColor: "rgba(0,0,0,0.6)",
     alignItems: "center",
     justifyContent: "center",
@@ -1187,6 +1244,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderLight,
   },
+  // E-ink pass: drop the near-white card fill (it bleeds into the
+  // page background at 16-level grayscale) and lean on a hard black
+  // border instead. Crisp edges read much better than soft tints.
+  resumeCardEink: {
+    backgroundColor: "#fff",
+    borderColor: colors.text,
+    borderWidth: 1.5,
+  },
   resumeCover: {
     width: 40,
     aspectRatio: 2 / 3,
@@ -1213,6 +1278,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
   },
+  resumeLabelEink: {
+    fontSize: 10,
+    color: colors.text,
+  },
   resumeTitle: {
     fontSize: fontSize.sm,
     fontWeight: "700",
@@ -1225,6 +1294,10 @@ const styles = StyleSheet.create({
     marginTop: 1,
     fontStyle: "italic",
   },
+  resumeChapterEink: {
+    color: colors.text,
+    fontStyle: "normal",
+  },
   resumeProgressRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1233,24 +1306,48 @@ const styles = StyleSheet.create({
   },
   resumeProgressTrack: {
     flex: 1,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: colors.borderLight,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.border,
     overflow: "hidden",
+  },
+  resumeProgressTrackEink: {
+    height: 6,
+    borderRadius: 0,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: colors.text,
   },
   resumeProgressFill: {
     height: "100%",
     backgroundColor: colors.primary,
   },
   resumeProgressText: {
-    fontSize: 10,
-    color: colors.textMuted,
-    fontWeight: "600",
+    fontSize: 11,
+    color: colors.text,
+    fontWeight: "700",
     minWidth: 28,
     textAlign: "right",
+  },
+  resumeProgressTextEink: {
+    fontSize: 12,
   },
   resumeIcon: {
     alignSelf: "center",
     marginRight: 4,
+  },
+  resumeIconBtn: {
+    alignSelf: "center",
+    marginRight: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
+    minWidth: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  resumeDownloadingText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.primary,
   },
 });

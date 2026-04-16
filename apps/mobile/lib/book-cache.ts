@@ -160,6 +160,15 @@ export async function deleteDownloadedBook(bookId: string): Promise<void> {
   ]);
 }
 
+/** Total bytes + file count across every book in the offline cache. */
+export async function getCacheUsage(): Promise<{ bytes: number; count: number }> {
+  const database = await getDb();
+  const row = await database.getFirstAsync<{ total: number | null; count: number }>(
+    "SELECT COALESCE(SUM(size_bytes), 0) AS total, COUNT(*) AS count FROM downloaded_books",
+  );
+  return { bytes: row?.total ?? 0, count: row?.count ?? 0 };
+}
+
 /** Remove all offline book files and clear the downloads database. */
 export async function clearAllDownloads(): Promise<number> {
   const database = await getDb();

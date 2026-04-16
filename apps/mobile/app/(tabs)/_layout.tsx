@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Library, BarChart3, Settings } from "lucide-react-native";
+import { Library, LineChart, Settings } from "lucide-react-native";
 
 export default function TabLayout() {
   return (
@@ -22,8 +22,8 @@ export default function TabLayout() {
         name="stats"
         options={{
           headerShown: false,
-          title: "Reading",
-          tabBarIcon: ({ color, size }) => <BarChart3 size={size} color={color} />,
+          title: "Stats",
+          tabBarIcon: ({ color, size }) => <LineChart size={size} color={color} />,
         }}
       />
       <Tabs.Screen
