@@ -68,6 +68,10 @@ export interface BookPosition {
   cfi?: string;
   page?: number;
   percentage: number;
+  /** User-set "I've finished this" flag. Orthogonal to percentage —
+   *  the position fields above still reflect where the user actually
+   *  stopped reading, so Continue on a finished book returns there. */
+  finished?: boolean;
 }
 
 export interface ReadingProgress {

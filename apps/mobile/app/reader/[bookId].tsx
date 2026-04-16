@@ -236,6 +236,10 @@ export default function ReaderScreen() {
   // (b) issued the restore navigation to the WebView.
   const savedPositionRef = useRef<BookPosition | null>(null);
   const hasLoadedSavedRef = useRef(false);
+  // Sticky finished flag carried between relocate events. Seeded from
+  // the DB on load, auto-set to true once percentage crosses 98, and
+  // merged into every upsertProgress call so we don't clobber it.
+  const finishedRef = useRef(false);
   const hasRestoredRef = useRef(false);
   const pendingReadyRestoreRef = useRef(false);
 
@@ -412,6 +416,7 @@ export default function ReaderScreen() {
         savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
+        finishedRef.current = savedProgress.position.finished === true;
       }
       hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
@@ -622,12 +627,19 @@ export default function ReaderScreen() {
           if (isDraggingRef.current) break;
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
+          // 98%+ is close enough to "done" that we can auto-flip the
+          // finished flag and stop the user from having to go into
+          // the detail screen to mark it. Sticky — never flipped back
+          // to false on pct drop, since re-reading shouldn't lose
+          // the milestone.
+          if (pct >= 98) finishedRef.current = true;
           const position: BookPosition = {
             percentage: pct,
             cfi: msg.payload.cfi,
             chapter: msg.payload.sectionIndex,
             chapterLabel: msg.payload.chapter,
             page: msg.payload.currentPage ?? msg.payload.page,
+            finished: finishedRef.current || undefined,
           };
           setCurrentPosition(position);
           setCurrentChapterHref(msg.payload.chapterHref ?? null);

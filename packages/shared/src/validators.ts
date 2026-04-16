@@ -7,6 +7,10 @@ export const bookPositionSchema = z.object({
   cfi: z.string().optional(),
   page: z.number().int().optional(),
   percentage: z.number().min(0).max(100),
+  // Separate flag from percentage — a user can mark a book finished
+  // at any point, and the percentage still reflects their actual
+  // last-read position so Continue lands where they stopped.
+  finished: z.boolean().optional(),
 });
 
 // === Books ===

@@ -55,6 +55,9 @@ import type { Book } from "@readr/shared";
 
 type BookWithProgress = Book & {
   progressPct: number;
+  /** User-set finished flag from the progress record. Independent of
+   *  progressPct — a book can be finished at any percentage. */
+  finished: boolean;
   downloaded: boolean;
   /** 0..1 when a download is in flight, null when idle or done. */
   downloadProgress: number | null;
@@ -104,7 +107,7 @@ function readingStatus(
   // is surfaced separately (cover badge / cover opacity) so the user
   // can tell at a glance which books need downloading to read offline
   // without losing the progress signal.
-  if (item.progressPct >= 98) return { label: "Finished", tone: "finished" };
+  if (item.finished) return { label: "Finished", tone: "finished" };
   if (item.progressPct > 0)
     return { label: `Reading · ${item.progressPct}%`, tone: "reading" };
   return { label: "Unread", tone: "unread" };
@@ -242,6 +245,7 @@ export default function LibraryScreen() {
         return {
           ...b,
           progressPct: localPct ?? serverPct,
+          finished: p?.position.finished === true,
           downloaded: downloadedSet.has(b.id),
           downloadProgress: null,
           lastReadAt: p?.updatedAt ?? null,
@@ -262,13 +266,13 @@ export default function LibraryScreen() {
     const filtered = booksWithProgress.filter((b) => {
       switch (filter) {
         case "reading":
-          if (!(b.progressPct > 0 && b.progressPct < 98)) return false;
+          if (b.finished || !(b.progressPct > 0)) return false;
           break;
         case "unread":
-          if (b.progressPct > 0) return false;
+          if (b.finished || b.progressPct > 0) return false;
           break;
         case "finished":
-          if (b.progressPct < 98) return false;
+          if (!b.finished) return false;
           break;
         case "downloaded":
           if (!b.downloaded) return false;
@@ -292,13 +296,24 @@ export default function LibraryScreen() {
   // device the card shows a download-and-resume affordance instead of
   // a one-tap resume.
   const resumeBook = useMemo(() => {
-    let best: BookWithProgress | null = null;
+    // Prefer an in-progress book; fall back to the most recently
+    // finished one so the slot still has something useful when the
+    // user's caught up. The card flips its header text based on
+    // which bucket won.
+    let reading: BookWithProgress | null = null;
+    let finishedFallback: BookWithProgress | null = null;
     for (const b of booksWithProgress) {
       if (!b.lastReadAt) continue;
-      if (b.progressPct <= 0 || b.progressPct >= 98) continue;
-      if (!best || b.lastReadAt > (best.lastReadAt ?? "")) best = b;
+      if (b.finished) {
+        if (!finishedFallback || b.lastReadAt > (finishedFallback.lastReadAt ?? "")) {
+          finishedFallback = b;
+        }
+        continue;
+      }
+      if (b.progressPct <= 0) continue;
+      if (!reading || b.lastReadAt > (reading.lastReadAt ?? "")) reading = b;
     }
-    return best;
+    return reading ?? finishedFallback;
   }, [booksWithProgress]);
 
   function handleResume(book: BookWithProgress) {
@@ -758,7 +773,11 @@ function renderResumeCard(
       </View>
       <View style={styles.resumeBody}>
         <Text style={[styles.resumeLabel, isEink && styles.resumeLabelEink]}>
-          {needsDownload ? "Download to continue" : "Jump back in"}
+          {item.finished
+            ? "Read it again?"
+            : needsDownload
+              ? "Download to continue"
+              : "Jump back in"}
         </Text>
         <Text style={styles.resumeTitle} numberOfLines={1}>
           {item.title ?? "Untitled"}
@@ -910,7 +929,7 @@ function renderStatusPill(
       : unread
         ? "Read"
         : finished
-          ? "Re-read"
+          ? "Finished"
           : (status?.label ?? "");
   return (
     <Pressable
@@ -956,7 +975,7 @@ function renderRow(
       : status?.tone === "unread"
         ? "Read"
         : status?.tone === "finished"
-          ? "Re-read"
+          ? "Finished"
           : (status?.label ?? "");
   return (
     <Pressable style={styles.rowCard} onPress={() => onPress(item)}>

@@ -84,6 +84,7 @@ export default function BookDetailScreen() {
   const [downloading, setDownloading] = useState(false);
   const [downloadPct, setDownloadPct] = useState(0);
   const [progressPct, setProgressPct] = useState(0);
+  const [finished, setFinished] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -93,6 +94,7 @@ export default function BookDetailScreen() {
       setDownloaded(!!dl);
       const p = await getProgress(bookId);
       setProgressPct(Math.round(p?.position.percentage ?? 0));
+      setFinished(p?.position.finished === true);
     })();
   }, [bookId]);
 
@@ -120,7 +122,10 @@ export default function BookDetailScreen() {
         }
         queryClient.invalidateQueries({ queryKey: ["book", bookId] });
         const p = await getProgress(bookId);
-        if (p) setProgressPct(Math.round(p.position.percentage ?? 0));
+        if (p) {
+          setProgressPct(Math.round(p.position.percentage ?? 0));
+          setFinished(p.position.finished === true);
+        }
       })();
     }, [bookId, queryClient, runSyncNow]),
   );
@@ -250,23 +255,20 @@ export default function BookDetailScreen() {
     );
   }
 
-  const status = progressPct >= 98 ? "Finished" : progressPct > 0 ? "Reading" : null;
-  const finished = progressPct >= 98;
+  const status = finished ? "Finished" : progressPct > 0 ? "Reading" : null;
 
   async function markFinished() {
     if (!bookId) return;
-    setProgressPct(100);
+    setFinished(true);
     try {
-      // Preserve the existing cfi/chapter/page so re-opening a
-      // finished book lands on wherever the user actually stopped
-      // reading, not back at the start. Only the percentage flips
-      // to 100 to flag the book as finished.
+      // Flip the finished flag; don't touch percentage / cfi / chapter
+      // so Continue on a finished book lands where the user stopped.
       const existing = await getProgress(bookId);
-      const basePos = existing?.position ?? {};
-      await upsertProgress(bookId, { ...basePos, percentage: 100 });
+      const basePos = existing?.position ?? { percentage: progressPct };
+      await upsertProgress(bookId, { ...basePos, finished: true });
       queryClient.invalidateQueries({ queryKey: ["books"] });
     } catch (err) {
-      setProgressPct((p) => (p === 100 ? 0 : p));
+      setFinished(false);
       Alert.alert("Couldn't mark as finished", err instanceof Error ? err.message : String(err));
     }
   }
@@ -274,11 +276,15 @@ export default function BookDetailScreen() {
   async function markUnread() {
     if (!bookId) return;
     setProgressPct(0);
+    setFinished(false);
     try {
-      await upsertProgress(bookId, { percentage: 0 });
+      // Reset to a totally fresh position — no cfi, no chapter, 0%,
+      // finished cleared. Re-opening goes to page 0.
+      await upsertProgress(bookId, { percentage: 0, finished: false });
       queryClient.invalidateQueries({ queryKey: ["books"] });
     } catch (err) {
       setProgressPct((p) => (p === 0 ? 100 : p));
+      setFinished(true);
       Alert.alert("Couldn't mark as unread", err instanceof Error ? err.message : String(err));
     }
   }
