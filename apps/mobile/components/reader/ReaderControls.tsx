@@ -28,9 +28,9 @@ export interface ReaderTheme {
    */
   brightness: number | null;
   /** Progress bar visibility mode:
-   *  "off" = never, "bar" = only in toolbar, "always" = toolbar + mini bar,
+   *  "off" = never, "bar" = toolbar + mini bar,
    *  "verbose" = toolbar + richer mini bar with percentage & chapter. */
-  progressBar: "off" | "bar" | "always" | "verbose";
+  progressBar: "off" | "bar" | "verbose";
   /** Always-visible page number overlay drawn over the reader content. */
   pageIndicator: PageIndicator;
 }
@@ -59,7 +59,7 @@ export const DEFAULT_THEME: ReaderTheme = {
   pageTurnMode: "both",
   fontWeight: 400,
   brightness: null,
-  progressBar: "always",
+  progressBar: "bar",
   pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
 };
 
@@ -76,7 +76,7 @@ export const EINK_THEME: ReaderTheme = {
   pageTurnMode: "both",
   fontWeight: 500,
   brightness: null,
-  progressBar: "always",
+  progressBar: "bar",
   pageIndicator: { enabled: true, edge: "bottom", side: "alternate" },
 };
 

@@ -310,12 +310,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
               {([
                 { label: "Off", value: "off" as const },
                 { label: "Bar", value: "bar" as const },
-                { label: "Always", value: "always" as const },
                 { label: "Verbose", value: "verbose" as const },
               ]).map((opt) => {
-                const cur = typeof theme.progressBar === "boolean"
-                  ? (theme.progressBar ? "always" : "off")
-                  : (theme.progressBar ?? "always");
+                const raw: string = typeof theme.progressBar === "boolean"
+                  ? (theme.progressBar ? "bar" : "off")
+                  : (theme.progressBar ?? "bar");
+                // Legacy "always" maps to the new "bar".
+                const cur = raw === "always" ? "bar" : raw;
                 const active = cur === opt.value;
                 return (
                   <Pressable
