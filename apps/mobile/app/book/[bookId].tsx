@@ -7,12 +7,23 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Modal,
   Platform,
 } from "react-native";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Download, BookOpen, Check, Trash2, FileDown } from "lucide-react-native";
+import {
+  ArrowLeft,
+  Download,
+  BookOpen,
+  Trash2,
+  FileDown,
+  MoreVertical,
+  CircleCheck,
+  RotateCcw,
+  CloudOff,
+} from "lucide-react-native";
 import { getBook, deleteBook } from "../../lib/api";
 import { downloadBook, getDownloadedBook, deleteDownloadedBook } from "../../lib/book-cache";
 import { deleteCachedCover } from "../../lib/cover-cache";
@@ -73,6 +84,7 @@ export default function BookDetailScreen() {
   const [downloading, setDownloading] = useState(false);
   const [downloadPct, setDownloadPct] = useState(0);
   const [progressPct, setProgressPct] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!bookId) return;
@@ -186,10 +198,13 @@ export default function BookDetailScreen() {
   }
 
   function handleDelete() {
-    Alert.alert("Delete book", "Remove this book from your library?", [
+    Alert.alert(
+      "Remove from library",
+      "Remove this book from your library on all devices? The file and your progress will be deleted.",
+      [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Delete",
+        text: "Remove",
         style: "destructive",
         onPress: async () => {
           try {
@@ -209,7 +224,8 @@ export default function BookDetailScreen() {
           }
         },
       },
-    ]);
+      ],
+    );
   }
 
   if (error) {
@@ -234,13 +250,53 @@ export default function BookDetailScreen() {
     );
   }
 
-  const status = progressPct >= 98 ? "Finished" : progressPct > 0 ? "Reading" : "Not started";
+  const status = progressPct >= 98 ? "Finished" : progressPct > 0 ? "Reading" : null;
+  const finished = progressPct >= 98;
+
+  async function markFinished() {
+    if (!bookId) return;
+    setProgressPct(100);
+    try {
+      await upsertProgress(bookId, { percentage: 100 });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+    } catch (err) {
+      setProgressPct((p) => (p === 100 ? 0 : p));
+      Alert.alert("Couldn't mark as finished", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function markUnread() {
+    if (!bookId) return;
+    setProgressPct(0);
+    try {
+      await upsertProgress(bookId, { percentage: 0 });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+    } catch (err) {
+      setProgressPct((p) => (p === 0 ? 100 : p));
+      Alert.alert("Couldn't mark as unread", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // Primary button: Read (or Continue) when downloaded / on web.
+  // Download-for-offline otherwise — matches the "not downloaded =
+  // can't open" affordance from the library card. The reader itself
+  // still falls back to the remote URL, but the intent here is to
+  // make the primary action always get you into a read-ready state.
+  const primaryIsDownload = Platform.OS !== "web" && !downloaded && !downloading;
+  const primaryIsReading = !primaryIsDownload && !downloading;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} accessibilityLabel="Go back" style={styles.backBtn}>
           <ArrowLeft size={22} color={colors.text} />
+        </Pressable>
+        <Pressable
+          onPress={() => setMenuOpen(true)}
+          accessibilityLabel="More actions"
+          style={styles.moreBtn}
+        >
+          <MoreVertical size={22} color={colors.text} />
         </Pressable>
       </View>
 
@@ -262,22 +318,17 @@ export default function BookDetailScreen() {
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{book.format?.toUpperCase() ?? "EPUB"}</Text>
               </View>
-              <View
-                style={[
-                  styles.badge,
-                  status === "Finished" && styles.badgeFinished,
-                  status === "Reading" && styles.badgeReading,
-                ]}
-              >
-                <Text
+              {status ? (
+                <View
                   style={[
-                    styles.badgeText,
-                    (status === "Finished" || status === "Reading") && styles.badgeTextActive,
+                    styles.badge,
+                    status === "Finished" && styles.badgeFinished,
+                    status === "Reading" && styles.badgeReading,
                   ]}
                 >
-                  {status}
-                </Text>
-              </View>
+                  <Text style={[styles.badgeText, styles.badgeTextActive]}>{status}</Text>
+                </View>
+              ) : null}
             </View>
           </View>
 
@@ -316,113 +367,117 @@ export default function BookDetailScreen() {
             );
           })()}
 
-          {/* Primary action */}
-          <Pressable style={styles.primaryBtn} onPress={handleRead}>
-            <BookOpen size={18} color={colors.primaryFg} />
-            <Text style={styles.primaryBtnText}>
-              {progressPct > 0 && progressPct < 98 ? "Continue reading" : "Read"}
-            </Text>
-          </Pressable>
-
-          {/* Offline cache — native only. On web there's no on-device
-              file store, so we drop this row entirely and let the
-              "Download file" button below cover the "get the file"
-              use case. */}
-          {Platform.OS !== "web" ? (
-            !downloaded ? (
-              <Pressable
-                style={[styles.secondaryBtn, downloading && { opacity: 0.5 }]}
-                onPress={handleDownload}
-                disabled={downloading}
-              >
-                {downloading ? (
-                  <Text style={styles.secondaryBtnText}>Downloading {downloadPct}%</Text>
-                ) : (
-                  <>
-                    <Download size={16} color={colors.text} />
-                    <Text style={styles.secondaryBtnText}>Download for offline</Text>
-                  </>
-                )}
-              </Pressable>
+          {/* Primary action: Download (when not on disk) or Read */}
+          <Pressable
+            style={[styles.primaryBtn, downloading && { opacity: 0.7 }]}
+            onPress={primaryIsDownload ? handleDownload : handleRead}
+            disabled={downloading}
+          >
+            {downloading ? (
+              <>
+                <Download size={18} color={colors.primaryFg} />
+                <Text style={styles.primaryBtnText}>Downloading {downloadPct}%</Text>
+              </>
+            ) : primaryIsDownload ? (
+              <>
+                <Download size={18} color={colors.primaryFg} />
+                <Text style={styles.primaryBtnText}>Download</Text>
+              </>
             ) : (
-              <Pressable style={styles.secondaryBtn} onPress={handleRemoveDownload}>
-                <Check size={16} color="#16a34a" />
-                <Text style={styles.secondaryBtnText}>Available offline — tap to remove</Text>
-              </Pressable>
-            )
-          ) : null}
-
-          {/* Download the original EPUB/PDF file. Always available —
-              on native it hands off to the OS via Linking, on web it
-              triggers a browser download. */}
-          <Pressable style={styles.secondaryBtn} onPress={handleDownloadFile}>
-            <FileDown size={16} color={colors.text} />
-            <Text style={styles.secondaryBtnText}>Download file</Text>
-          </Pressable>
-
-          {/* Secondary actions list */}
-          <View style={styles.listCard}>
-            {progressPct < 98 ? (
-              <Pressable
-                style={styles.listRow}
-                onPress={async () => {
-                  if (!bookId) return;
-                  setProgressPct(100);
-                  try {
-                    await upsertProgress(bookId, { percentage: 100 });
-                    queryClient.invalidateQueries({ queryKey: ["books"] });
-                  } catch (err) {
-                    setProgressPct((p) => (p === 100 ? 0 : p));
-                    Alert.alert(
-                      "Couldn't mark as finished",
-                      err instanceof Error ? err.message : String(err),
-                    );
-                  }
-                }}
-              >
-                <Check size={16} color={colors.textSecondary} />
-                <Text style={styles.listRowText}>Mark as finished</Text>
-              </Pressable>
-            ) : (
-              <Pressable
-                style={styles.listRow}
-                onPress={async () => {
-                  if (!bookId) return;
-                  setProgressPct(0);
-                  try {
-                    await upsertProgress(bookId, { percentage: 0 });
-                    queryClient.invalidateQueries({ queryKey: ["books"] });
-                  } catch (err) {
-                    setProgressPct((p) => (p === 0 ? 100 : p));
-                    Alert.alert(
-                      "Couldn't mark as unread",
-                      err instanceof Error ? err.message : String(err),
-                    );
-                  }
-                }}
-              >
-                <BookOpen size={16} color={colors.textSecondary} />
-                <Text style={styles.listRowText}>Mark as unread</Text>
-              </Pressable>
+              <>
+                <BookOpen size={18} color={colors.primaryFg} />
+                <Text style={styles.primaryBtnText}>
+                  {progressPct > 0 && progressPct < 98 ? "Continue reading" : "Read"}
+                </Text>
+              </>
             )}
+          </Pressable>
 
-            <View style={styles.listDivider} />
-
-            <Pressable style={styles.listRow} onPress={handleDelete}>
-              <Trash2 size={16} color={colors.error} />
-              <Text style={[styles.listRowText, { color: colors.error }]}>Delete book</Text>
-            </Pressable>
-          </View>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={menuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuOpen(false)}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={() => setMenuOpen(false)}>
+          <View style={[styles.menuCard, { top: insets.top + 48, right: spacing.lg }]}>
+            <Pressable
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuOpen(false);
+                handleDownloadFile();
+              }}
+            >
+              <FileDown size={16} color={colors.text} />
+              <Text style={styles.menuRowText}>Download original file</Text>
+            </Pressable>
+            <View style={styles.menuDivider} />
+            <Pressable
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuOpen(false);
+                if (finished) markUnread();
+                else markFinished();
+              }}
+            >
+              {finished ? (
+                <RotateCcw size={16} color={colors.text} />
+              ) : (
+                <CircleCheck size={16} color={colors.text} />
+              )}
+              <Text style={styles.menuRowText}>
+                {finished ? "Mark as unread" : "Mark as finished"}
+              </Text>
+            </Pressable>
+            {Platform.OS !== "web" && downloaded ? (
+              <>
+                <View style={styles.menuDivider} />
+                <Pressable
+                  style={styles.menuRow}
+                  onPress={() => {
+                    setMenuOpen(false);
+                    handleRemoveDownload();
+                  }}
+                >
+                  <CloudOff size={16} color={colors.text} />
+                  <Text style={styles.menuRowText}>Remove offline download</Text>
+                </Pressable>
+              </>
+            ) : null}
+            <View style={styles.menuDivider} />
+            <Pressable
+              style={styles.menuRow}
+              onPress={() => {
+                setMenuOpen(false);
+                handleDelete();
+              }}
+            >
+              <Trash2 size={16} color={colors.error} />
+              <Text style={[styles.menuRowText, { color: colors.error }]}>
+                Remove from library
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  header: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
   backBtn: { width: 40, height: 40, justifyContent: "center" },
+  moreBtn: { width: 40, height: 40, justifyContent: "center", alignItems: "flex-end" },
   scrollContent: { paddingBottom: 40, alignItems: "center" },
   content: {
     width: "100%",
@@ -527,32 +582,31 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: { fontSize: fontSize.md, color: colors.text, fontWeight: "500" },
 
-  downloadedPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-  },
-  downloadedText: { fontSize: fontSize.sm, color: "#16a34a", fontWeight: "500" },
-
-  listCard: {
-    backgroundColor: colors.backgroundSecondary,
+  menuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.15)" },
+  menuCard: {
+    position: "absolute",
+    minWidth: 220,
+    backgroundColor: colors.background,
     borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
     overflow: "hidden",
-    marginTop: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  listRow: {
+  menuRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md + 2,
   },
-  listRowText: { fontSize: fontSize.md, color: colors.text },
-  listDivider: {
+  menuRowText: { fontSize: fontSize.md, color: colors.text },
+  menuDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border,
-    marginLeft: spacing.lg + 16 + spacing.md,
   },
 });
