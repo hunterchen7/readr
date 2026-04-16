@@ -641,12 +641,31 @@ export class Paginator extends HTMLElement {
                 // stack accordingly. Position is preserved via the
                 // current #index + #anchor (foliate's existing fields).
                 if (this.sections) {
-                    if (value === 'scrolled' && !this.#stacked)
+                    if (value === 'scrolled' && !this.#stacked) {
                         this.#initStack()
-                    else if (value !== 'scrolled' && this.#stacked)
+                        this.render()
+                    } else if (value !== 'scrolled' && this.#stacked) {
+                        // Capture focal position BEFORE teardown wipes
+                        // it, then re-enter that section with a fresh
+                        // single view. Without this, render() short-
+                        // circuits on `!this.#view` and the container
+                        // stays stuck on the now-orphaned stack DOM.
+                        const restoreIdx = this.#focalIdx >= 0
+                            ? this.#focalIdx : this.#index
+                        const restoreAnchor = this.#anchor
                         this.#teardownStack()
+                        if (restoreIdx >= 0 && this.sections[restoreIdx]) {
+                            void this.#goTo({
+                                index: restoreIdx,
+                                anchor: restoreAnchor,
+                            })
+                        }
+                    } else {
+                        this.render()
+                    }
+                } else {
+                    this.render()
                 }
-                this.render()
                 break
             case 'gap':
             case 'margin':
