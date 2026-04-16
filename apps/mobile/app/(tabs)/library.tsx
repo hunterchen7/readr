@@ -245,7 +245,11 @@ export default function LibraryScreen() {
         return {
           ...b,
           progressPct: localPct ?? serverPct,
-          finished: p?.position.finished === true,
+          // 98%+ counts as finished even without an explicit flag —
+           // makes upgrades from older progress rows behave correctly
+           // until the local-db migration backfills them.
+          finished:
+            p?.position.finished === true || (localPct ?? serverPct) >= 100,
           downloaded: downloadedSet.has(b.id),
           downloadProgress: null,
           lastReadAt: p?.updatedAt ?? null,
@@ -790,24 +794,26 @@ function renderResumeCard(
             {item.lastReadChapter}
           </Text>
         ) : null}
-        <View style={styles.resumeProgressRow}>
-          <View
-            style={[
-              styles.resumeProgressTrack,
-              isEink && styles.resumeProgressTrackEink,
-            ]}
-          >
-            <View style={[styles.resumeProgressFill, { width: `${pct}%` }]} />
+        {item.finished ? null : (
+          <View style={styles.resumeProgressRow}>
+            <View
+              style={[
+                styles.resumeProgressTrack,
+                isEink && styles.resumeProgressTrackEink,
+              ]}
+            >
+              <View style={[styles.resumeProgressFill, { width: `${pct}%` }]} />
+            </View>
+            <Text
+              style={[
+                styles.resumeProgressText,
+                isEink && styles.resumeProgressTextEink,
+              ]}
+            >
+              {pct}%
+            </Text>
           </View>
-          <Text
-            style={[
-              styles.resumeProgressText,
-              isEink && styles.resumeProgressTextEink,
-            ]}
-          >
-            {pct}%
-          </Text>
-        </View>
+        )}
       </View>
       {needsDownload ? (
         <Pressable

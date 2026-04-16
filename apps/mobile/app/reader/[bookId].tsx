@@ -416,7 +416,9 @@ export default function ReaderScreen() {
         savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
         setCurrentPosition(savedProgress.position);
-        finishedRef.current = savedProgress.position.finished === true;
+        finishedRef.current =
+          savedProgress.position.finished === true ||
+          (savedProgress.position.percentage ?? 0) >= 100;
       }
       hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
@@ -627,12 +629,11 @@ export default function ReaderScreen() {
           if (isDraggingRef.current) break;
           const pct = msg.payload.percentage ?? 0;
           setProgress(pct);
-          // 98%+ is close enough to "done" that we can auto-flip the
-          // finished flag and stop the user from having to go into
-          // the detail screen to mark it. Sticky — never flipped back
-          // to false on pct drop, since re-reading shouldn't lose
-          // the milestone.
-          if (pct >= 98) finishedRef.current = true;
+          // Hitting 100% auto-flips the finished flag so users don't
+          // have to dig into the detail screen to mark it. Sticky —
+          // never cleared on pct drop, so re-reading past the end
+          // doesn't lose the milestone.
+          if (pct >= 100) finishedRef.current = true;
           const position: BookPosition = {
             percentage: pct,
             cfi: msg.payload.cfi,

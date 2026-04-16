@@ -131,6 +131,7 @@ export const readingProgress = pgTable(
       cfi?: string;
       page?: number;
       percentage: number;
+      finished?: boolean;
     }>(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },

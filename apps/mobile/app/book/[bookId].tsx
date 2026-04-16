@@ -93,8 +93,9 @@ export default function BookDetailScreen() {
       const dl = await getDownloadedBook(bookId);
       setDownloaded(!!dl);
       const p = await getProgress(bookId);
-      setProgressPct(Math.round(p?.position.percentage ?? 0));
-      setFinished(p?.position.finished === true);
+      const pct = Math.round(p?.position.percentage ?? 0);
+      setProgressPct(pct);
+      setFinished(p?.position.finished === true || pct >= 100);
     })();
   }, [bookId]);
 
@@ -123,8 +124,9 @@ export default function BookDetailScreen() {
         queryClient.invalidateQueries({ queryKey: ["book", bookId] });
         const p = await getProgress(bookId);
         if (p) {
-          setProgressPct(Math.round(p.position.percentage ?? 0));
-          setFinished(p.position.finished === true);
+          const pct = Math.round(p.position.percentage ?? 0);
+          setProgressPct(pct);
+          setFinished(p.position.finished === true || pct >= 100);
         }
       })();
     }, [bookId, queryClient, runSyncNow]),

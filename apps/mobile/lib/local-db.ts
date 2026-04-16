@@ -150,6 +150,29 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
   // means the entire push payload 400s and nothing drains. Reassign
   // fresh UUIDs to any stragglers and re-enqueue their creates.
   await migrateLegacyIds(database);
+
+  // Backfill `finished: true` into reading_progress.position JSON for
+  // any row at 100% that predates the explicit flag. SQLite's
+  // json_set is available since 3.38; the WHERE filters out rows that
+  // already have the flag so this is a one-shot no-op after running.
+  await backfillFinishedFlag(database);
+}
+
+async function backfillFinishedFlag(
+  database: SQLite.SQLiteDatabase,
+): Promise<void> {
+  try {
+    await database.runAsync(
+      `UPDATE reading_progress
+         SET position = json_set(position, '$.finished', json('true')),
+             synced = 0
+       WHERE json_extract(position, '$.percentage') >= 100
+         AND COALESCE(json_extract(position, '$.finished'), 0) <> 1`,
+    );
+  } catch {
+    // Older sqlite or malformed JSON — non-fatal, the client-side
+    // derivation (pct >= 100 → finished) keeps the UI honest.
+  }
 }
 
 async function addColumnIfMissing(
