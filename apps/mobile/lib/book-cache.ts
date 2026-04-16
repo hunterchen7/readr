@@ -18,6 +18,15 @@ import { getBook } from "./api";
 
 const BOOKS_DIR = FileSystem.documentDirectory + "books/";
 
+// In-flight downloads, keyed by bookId. Lets the UI cancel a
+// download that's already in progress by tapping the same affordance
+// that started it (e.g. the cover badge).
+interface ActiveDownload {
+  resumable: ReturnType<typeof FileSystem.createDownloadResumable>;
+  localPath: string;
+}
+const activeDownloads = new Map<string, ActiveDownload>();
+
 async function ensureDir(): Promise<void> {
   const info = await FileSystem.getInfoAsync(BOOKS_DIR);
   if (!info.exists) {
@@ -111,8 +120,14 @@ export async function downloadBook(
       }
     },
   );
+  activeDownloads.set(bookId, { resumable: downloadResumable, localPath });
 
-  const result = await downloadResumable.downloadAsync();
+  let result: Awaited<ReturnType<typeof downloadResumable.downloadAsync>>;
+  try {
+    result = await downloadResumable.downloadAsync();
+  } finally {
+    activeDownloads.delete(bookId);
+  }
   if (!result) throw new Error("Download was cancelled");
   const info = await FileSystem.getInfoAsync(result.uri);
   const sizeBytes =
@@ -147,6 +162,28 @@ export async function downloadBook(
     sizeBytes,
     downloadedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Cancel an in-flight download for the given book, if one exists.
+ * The partial file is deleted so a later retry starts fresh. No-op
+ * when no download is active — safe to call speculatively from the
+ * UI's "tap again to cancel" handler.
+ */
+export async function cancelDownload(bookId: string): Promise<void> {
+  const active = activeDownloads.get(bookId);
+  if (!active) return;
+  activeDownloads.delete(bookId);
+  try {
+    await active.resumable.cancelAsync();
+  } catch {
+    /* ignore — cancelAsync may throw if the download already finished */
+  }
+  try {
+    await FileSystem.deleteAsync(active.localPath, { idempotent: true });
+  } catch {
+    /* ignore — partial file may not exist */
+  }
 }
 
 export async function deleteDownloadedBook(bookId: string): Promise<void> {

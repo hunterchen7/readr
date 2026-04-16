@@ -257,7 +257,13 @@ export default function BookDetailScreen() {
     if (!bookId) return;
     setProgressPct(100);
     try {
-      await upsertProgress(bookId, { percentage: 100 });
+      // Preserve the existing cfi/chapter/page so re-opening a
+      // finished book lands on wherever the user actually stopped
+      // reading, not back at the start. Only the percentage flips
+      // to 100 to flag the book as finished.
+      const existing = await getProgress(bookId);
+      const basePos = existing?.position ?? {};
+      await upsertProgress(bookId, { ...basePos, percentage: 100 });
       queryClient.invalidateQueries({ queryKey: ["books"] });
     } catch (err) {
       setProgressPct((p) => (p === 100 ? 0 : p));

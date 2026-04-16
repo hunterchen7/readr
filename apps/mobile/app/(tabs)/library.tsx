@@ -25,7 +25,7 @@ import {
   pruneCachedBooks,
   getCachedBooks,
 } from "../../lib/local-db";
-import { downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
+import { cancelDownload, downloadBook, getDownloadedBookIds } from "../../lib/book-cache";
 import { cacheCoversInBackground } from "../../lib/cover-cache";
 import { DragDropUpload } from "../../components/upload/DragDropUpload";
 import { useSyncStatus } from "../../lib/sync-status";
@@ -314,6 +314,20 @@ export default function LibraryScreen() {
   }
 
   async function handleDownload(bookId: string) {
+    // Toggle: if a download is already in flight for this book,
+    // tapping the same affordance cancels it (and wipes the partial
+    // file). This is why the UI always routes the cover badge +
+    // resume icon through here — one handler, two verbs.
+    const existing = booksWithProgress.find((b) => b.id === bookId);
+    if (existing?.downloadProgress != null) {
+      await cancelDownload(bookId);
+      setBooksWithProgress((prev) =>
+        prev.map((b) =>
+          b.id === bookId ? { ...b, downloadProgress: null } : b,
+        ),
+      );
+      return;
+    }
     setBooksWithProgress((prev) =>
       prev.map((b) => (b.id === bookId ? { ...b, downloadProgress: 0 } : b)),
     );
@@ -338,34 +352,28 @@ export default function LibraryScreen() {
           b.id === bookId ? { ...b, downloadProgress: null } : b,
         ),
       );
-      Alert.alert(
-        "Download failed",
-        err instanceof Error ? err.message : String(err),
-      );
+      // "Download was cancelled" is the expected outcome of the
+      // toggle above — not something to alert on.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/cancell?ed/i.test(msg)) {
+        Alert.alert("Download failed", msg);
+      }
     }
   }
 
   function handleBookPress(book: BookWithProgress) {
-    // On native, a tap on an undownloaded book kicks off the download
-    // in place (no detail-screen detour). Tapping mid-download is a
-    // no-op since downloadProgress is non-null. On web there is no
-    // local "downloaded" state — books stream from the server — so we
-    // always route straight to the book detail screen.
-    if (Platform.OS === "web") {
-      router.push(`/book/${book.id}`);
-      return;
-    }
-    // Finished books skip the download-on-tap shortcut — the user is
-    // done with it, so tapping should just open the detail screen
-    // where they can choose to re-download or delete.
-    const finished = book.progressPct >= 98;
-    if (!book.downloaded && !finished) {
-      if (book.downloadProgress == null) {
-        void handleDownload(book.id);
-      }
-      return;
-    }
+    // Cover press always routes to the detail screen. The reader is
+    // accessed via the status pill's Continue/Read affordance, and
+    // downloads are started/cancelled via the cover badge — so the
+    // cover itself is the "manage this book" tap target.
     router.push(`/book/${book.id}`);
+  }
+
+  function handleContinue(book: BookWithProgress) {
+    // The status pill is the reader shortcut. The reader falls back
+    // to the remote downloadUrl when no local file exists, so we can
+    // open it regardless of download state.
+    router.push(`/reader/${book.id}`);
   }
 
   /**
@@ -467,239 +475,259 @@ export default function LibraryScreen() {
 
   return (
     <DragDropUpload onFiles={(files) => void handleFiles(files)}>
-    <View style={styles.container}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Text style={styles.heading}>Library</Text>
-        <View style={styles.topBarActions}>
-          <Pressable
-            style={styles.iconButton}
-            onPress={() => setSearchOpen((o) => !o)}
-            accessibilityLabel={searchOpen ? "Close search" : "Search library"}
-          >
-            {searchOpen ? (
-              <X size={20} color={colors.text} />
-            ) : (
-              <Search size={20} color={colors.text} />
-            )}
-          </Pressable>
-          <Pressable
-            style={styles.iconButton}
-            onPress={() => setView(view === "grid" ? "list" : "grid")}
-            accessibilityLabel={
-              view === "grid" ? "Switch to list view" : "Switch to grid view"
-            }
-          >
-            {view === "grid" ? (
-              <List size={20} color={colors.text} />
-            ) : (
-              <LayoutGrid size={20} color={colors.text} />
-            )}
-          </Pressable>
-          <Pressable
-            style={[
-              styles.syncChip,
-              isNetHydrated && !isOnline && styles.syncChipOffline,
-            ]}
-            onPress={async () => {
-              // Tap-to-retry is the path back online — runSyncNow() will
-              // either succeed (and then NetInfo flips us back to online
-              // through the next event) or no-op silently.
-              await runSyncNow();
-              queryClient.invalidateQueries({ queryKey: ["books"] });
-            }}
-            accessibilityLabel={
-              isNetHydrated && !isOnline ? "Offline — tap to retry" : "Sync library"
-            }
-          >
-            {syncPhase === "running" ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : isNetHydrated && !isOnline ? (
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
-              >
-                <CloudOff size={14} color={colors.syncError} />
-                <Text style={[styles.syncChipText, styles.syncChipTextOffline]}>
-                  Offline
-                </Text>
-              </View>
-            ) : (
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
-              >
-                <RefreshCw
-                  size={14}
-                  color={syncLastError ? colors.syncError : colors.syncIcon}
-                />
-                <Text style={styles.syncChipText}>
-                  {syncLastError
-                    ? "Error"
-                    : syncLastAt
-                      ? formatRelative(syncLastAt)
-                      : "Sync"}
-                </Text>
-              </View>
-            )}
-          </Pressable>
-          <Pressable
-            style={[
-              styles.uploadButton,
-              uploading && styles.uploadButtonDisabled,
-            ]}
-            onPress={handleUpload}
-            disabled={uploading}
-            accessibilityLabel="Upload book"
-          >
-            {uploading ? (
-              <ActivityIndicator color={colors.primaryFg} />
-            ) : (
-              <Plus size={20} color={colors.primaryFg} />
-            )}
-          </Pressable>
-        </View>
-      </View>
-
-      {searchOpen ? (
-        <View style={styles.searchBar}>
-          <TextInput
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search by title or author…"
-            placeholderTextColor={colors.textMuted}
-            autoFocus
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="search"
-          />
-          {search ? (
-            <Pressable onPress={() => setSearch("")}>
-              <X size={18} color={colors.textMuted} />
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
-
-      {resumeBook
-        ? renderResumeCard(resumeBook, handleResume, handleDownload, display.isEink)
-        : null}
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterRow}
-        style={styles.filterScroll}
-      >
-        <Pressable style={styles.sortPill} onPress={cycleSort}>
-          <Text style={styles.sortPillText} numberOfLines={1}>
-            {SORT_LABELS[sort]}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={styles.sortDirPill}
-          onPress={toggleSortDir}
-          accessibilityLabel={
-            sortDir === "asc" ? "Sort ascending" : "Sort descending"
-          }
-        >
-          {sortDir === "asc" ? (
-            <ArrowUp size={14} color={colors.primaryFg} />
-          ) : (
-            <ArrowDown size={14} color={colors.primaryFg} />
-          )}
-        </Pressable>
-        {(Object.keys(FILTER_LABELS) as FilterKey[]).map((key) => (
-          <Pressable
-            key={key}
-            onPress={() => setFilter(key)}
-            style={[
-              styles.filterPill,
-              filter === key && styles.filterPillActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.filterPillText,
-                filter === key && styles.filterPillTextActive,
-              ]}
-              numberOfLines={1}
+      <View style={styles.container}>
+        <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+          <Text style={styles.heading}>Library</Text>
+          <View style={styles.topBarActions}>
+            <Pressable
+              style={styles.iconButton}
+              onPress={() => setSearchOpen((o) => !o)}
+              accessibilityLabel={
+                searchOpen ? "Close search" : "Search library"
+              }
             >
-              {FILTER_LABELS[key]}
-            </Text>
-          </Pressable>
-        ))}
-      </ScrollView>
+              {searchOpen ? (
+                <X size={20} color={colors.text} />
+              ) : (
+                <Search size={20} color={colors.text} />
+              )}
+            </Pressable>
+            <Pressable
+              style={styles.iconButton}
+              onPress={() => setView(view === "grid" ? "list" : "grid")}
+              accessibilityLabel={
+                view === "grid" ? "Switch to list view" : "Switch to grid view"
+              }
+            >
+              {view === "grid" ? (
+                <List size={20} color={colors.text} />
+              ) : (
+                <LayoutGrid size={20} color={colors.text} />
+              )}
+            </Pressable>
+            <Pressable
+              style={[
+                styles.syncChip,
+                isNetHydrated && !isOnline && styles.syncChipOffline,
+              ]}
+              onPress={async () => {
+                // Tap-to-retry is the path back online — runSyncNow() will
+                // either succeed (and then NetInfo flips us back to online
+                // through the next event) or no-op silently.
+                await runSyncNow();
+                queryClient.invalidateQueries({ queryKey: ["books"] });
+              }}
+              accessibilityLabel={
+                isNetHydrated && !isOnline
+                  ? "Offline — tap to retry"
+                  : "Sync library"
+              }
+            >
+              {syncPhase === "running" ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : isNetHydrated && !isOnline ? (
+                <View
+                  style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+                >
+                  <CloudOff size={14} color={colors.syncError} />
+                  <Text
+                    style={[styles.syncChipText, styles.syncChipTextOffline]}
+                  >
+                    Offline
+                  </Text>
+                </View>
+              ) : (
+                <View
+                  style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+                >
+                  <RefreshCw
+                    size={14}
+                    color={syncLastError ? colors.syncError : colors.syncIcon}
+                  />
+                  <Text style={styles.syncChipText}>
+                    {syncLastError
+                      ? "Error"
+                      : syncLastAt
+                        ? formatRelative(syncLastAt)
+                        : "Sync"}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+            <Pressable
+              style={[
+                styles.uploadButton,
+                uploading && styles.uploadButtonDisabled,
+              ]}
+              onPress={handleUpload}
+              disabled={uploading}
+              accessibilityLabel="Upload book"
+            >
+              {uploading ? (
+                <ActivityIndicator color={colors.primaryFg} />
+              ) : (
+                <Plus size={20} color={colors.primaryFg} />
+              )}
+            </Pressable>
+          </View>
+        </View>
 
-      {isLoading ? (
-        <View style={styles.center}>
-          <LoadingIndicator
-            size="large"
-            color={colors.textMuted}
-            label="Loading library…"
-          />
-          {display.isEink ? null : (
-            <Text style={[styles.muted, { marginTop: spacing.md }]}>
-              Loading library...
+        {searchOpen ? (
+          <View style={styles.searchBar}>
+            <TextInput
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search by title or author…"
+              placeholderTextColor={colors.textMuted}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {search ? (
+              <Pressable onPress={() => setSearch("")}>
+                <X size={18} color={colors.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+
+        {resumeBook
+          ? renderResumeCard(
+              resumeBook,
+              handleResume,
+              handleDownload,
+              display.isEink,
+            )
+          : null}
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterRow}
+          style={styles.filterScroll}
+        >
+          <Pressable style={styles.sortPill} onPress={cycleSort}>
+            <Text style={styles.sortPillText} numberOfLines={1}>
+              {SORT_LABELS[sort]}
             </Text>
-          )}
-        </View>
-      ) : booksWithProgress.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.muted}>No books yet.</Text>
-          <Text style={styles.muted}>Tap + to add an EPUB or PDF.</Text>
-        </View>
-      ) : visibleBooks.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.muted}>No books match.</Text>
-          <Pressable
-            onPress={() => {
-              setSearch("");
-              setFilter("all");
-            }}
-          >
-            <Text style={styles.clearFilterLink}>Clear filters</Text>
           </Pressable>
-        </View>
-      ) : view === "grid" ? (
-        <FlatList
-          data={visibleBooks}
-          numColumns={gridColumns}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.grid}
-          columnWrapperStyle={styles.row}
-          // FlatList can't change numColumns without remounting, so
-          // fold the column count into the key. Resizing a desktop
-          // window picks up a new layout cleanly.
-          key={`grid-${gridColumns}`}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={() =>
-                queryClient.invalidateQueries({ queryKey: ["books"] })
-              }
+          <Pressable
+            style={styles.sortDirPill}
+            onPress={toggleSortDir}
+            accessibilityLabel={
+              sortDir === "asc" ? "Sort ascending" : "Sort descending"
+            }
+          >
+            {sortDir === "asc" ? (
+              <ArrowUp size={14} color={colors.primaryFg} />
+            ) : (
+              <ArrowDown size={14} color={colors.primaryFg} />
+            )}
+          </Pressable>
+          {(Object.keys(FILTER_LABELS) as FilterKey[]).map((key) => (
+            <Pressable
+              key={key}
+              onPress={() => setFilter(key)}
+              style={[
+                styles.filterPill,
+                filter === key && styles.filterPillActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.filterPillText,
+                  filter === key && styles.filterPillTextActive,
+                ]}
+                numberOfLines={1}
+              >
+                {FILTER_LABELS[key]}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {isLoading ? (
+          <View style={styles.center}>
+            <LoadingIndicator
+              size="large"
+              color={colors.textMuted}
+              label="Loading library…"
             />
-          }
-          renderItem={({ item }) =>
-            renderCard(item, handleBookPress, handleDownload, gridCardWidth, display.isEink)
-          }
-        />
-      ) : (
-        <FlatList
-          data={visibleBooks}
-          keyExtractor={(item) => item.id}
-          key="list"
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={() =>
-                queryClient.invalidateQueries({ queryKey: ["books"] })
-              }
-            />
-          }
-          renderItem={({ item }) => renderRow(item, handleBookPress, handleDownload)}
-        />
-      )}
-    </View>
+            {display.isEink ? null : (
+              <Text style={[styles.muted, { marginTop: spacing.md }]}>
+                Loading library...
+              </Text>
+            )}
+          </View>
+        ) : booksWithProgress.length === 0 ? (
+          <View style={styles.center}>
+            <Text style={styles.muted}>No books yet.</Text>
+            <Text style={styles.muted}>Tap + to add an EPUB or PDF.</Text>
+          </View>
+        ) : visibleBooks.length === 0 ? (
+          <View style={styles.center}>
+            <Text style={styles.muted}>No books match.</Text>
+            <Pressable
+              onPress={() => {
+                setSearch("");
+                setFilter("all");
+              }}
+            >
+              <Text style={styles.clearFilterLink}>Clear filters</Text>
+            </Pressable>
+          </View>
+        ) : view === "grid" ? (
+          <FlatList
+            data={visibleBooks}
+            numColumns={gridColumns}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.grid}
+            columnWrapperStyle={styles.row}
+            // FlatList can't change numColumns without remounting, so
+            // fold the column count into the key. Resizing a desktop
+            // window picks up a new layout cleanly.
+            key={`grid-${gridColumns}`}
+            refreshControl={
+              <RefreshControl
+                refreshing={isRefetching}
+                onRefresh={() =>
+                  queryClient.invalidateQueries({ queryKey: ["books"] })
+                }
+              />
+            }
+            renderItem={({ item }) =>
+              renderCard(
+                item,
+                handleBookPress,
+                handleContinue,
+                handleDownload,
+                gridCardWidth,
+                display.isEink,
+              )
+            }
+          />
+        ) : (
+          <FlatList
+            data={visibleBooks}
+            keyExtractor={(item) => item.id}
+            key="list"
+            contentContainerStyle={styles.list}
+            refreshControl={
+              <RefreshControl
+                refreshing={isRefetching}
+                onRefresh={() =>
+                  queryClient.invalidateQueries({ queryKey: ["books"] })
+                }
+              />
+            }
+            renderItem={({ item }) =>
+              renderRow(item, handleBookPress, handleContinue, handleDownload)
+            }
+          />
+        )}
+      </View>
     </DragDropUpload>
   );
 }
@@ -750,9 +778,7 @@ function renderResumeCard(
               isEink && styles.resumeProgressTrackEink,
             ]}
           >
-            <View
-              style={[styles.resumeProgressFill, { width: `${pct}%` }]}
-            />
+            <View style={[styles.resumeProgressFill, { width: `${pct}%` }]} />
           </View>
           <Text
             style={[
@@ -772,7 +798,9 @@ function renderResumeCard(
           }}
           disabled={downloading}
           hitSlop={8}
-          accessibilityLabel={downloading ? `Downloading ${dlPct}%` : "Download"}
+          accessibilityLabel={
+            downloading ? `Downloading ${dlPct}%` : "Download"
+          }
           style={styles.resumeIconBtn}
         >
           {downloading ? (
@@ -791,13 +819,15 @@ function renderResumeCard(
 function renderCard(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
+  onContinue: (b: BookWithProgress) => void,
   onDownload: (bookId: string) => void,
   width: number,
-  isEink: boolean,
+  _isEink: boolean,
 ) {
   const downloading = item.downloadProgress !== null;
   const status = readingStatus(item);
   const notDownloaded = Platform.OS !== "web" && !item.downloaded;
+  const dlPct = Math.round((item.downloadProgress ?? 0) * 100);
   return (
     <Pressable style={[styles.card, { width }]} onPress={() => onPress(item)}>
       <View style={[styles.cover, notDownloaded && styles.coverDimmed]}>
@@ -808,27 +838,26 @@ function renderCard(
             {item.title ?? "Untitled"}
           </Text>
         )}
-        {notDownloaded && downloading ? (
-          <View style={[styles.downloadOverlay, isEink && styles.downloadOverlayEink]}>
-            <LoadingIndicator color="#fff" label="Downloading" />
-            <Text style={styles.downloadOverlayText}>
-              {Math.round((item.downloadProgress ?? 0) * 100)}%
-            </Text>
-          </View>
-        ) : notDownloaded ? (
-          // Small "not on this device" badge — doubles as a tap
-          // target to start the download in place without routing
-          // to the detail screen.
+        {notDownloaded ? (
+          // Same badge whether idle or downloading — during download
+          // it shows the live % and taps cancel; idle it shows the
+          // Download glyph and taps start. One affordance, two verbs.
           <Pressable
             onPress={(e) => {
               e.stopPropagation();
               onDownload(item.id);
             }}
             hitSlop={10}
-            accessibilityLabel="Download"
+            accessibilityLabel={
+              downloading ? `Cancel download (${dlPct}%)` : "Download"
+            }
             style={styles.coverDownloadBadge}
           >
-            <Download size={16} color="#fff" />
+            {downloading ? (
+              <Text style={styles.coverDownloadBadgeText}>{dlPct}</Text>
+            ) : (
+              <Download size={16} color="#fff" />
+            )}
           </Pressable>
         ) : null}
       </View>
@@ -838,7 +867,7 @@ function renderCard(
       <Text style={styles.bookAuthor} numberOfLines={1}>
         {item.author ?? "Unknown"}
       </Text>
-      {renderStatusPill(item, status, downloading)}
+      {renderStatusPill(item, status, downloading, () => onContinue(item))}
     </Pressable>
   );
 }
@@ -847,15 +876,24 @@ function renderStatusPill(
   item: BookWithProgress,
   status: ReturnType<typeof readingStatus>,
   downloading: boolean,
+  onContinue: () => void,
 ) {
-  // Active download still takes precedence — a download-in-progress
-  // animation is the actionable signal users care about right then.
+  // Downloading view is informational only — a passthrough of what
+  // the cover badge is already showing. Not pressable.
   if (downloading) {
     return (
       <View style={[styles.statusPill, styles.statusPillMuted]}>
-        <View style={[styles.statusPillFill, { width: `${Math.round((item.downloadProgress ?? 0) * 100)}%` }]} />
+        <View
+          style={[
+            styles.statusPillFill,
+            { width: `${Math.round((item.downloadProgress ?? 0) * 100)}%` },
+          ]}
+        />
         <View style={styles.statusPillRow}>
-          <Text style={[styles.statusPillText, styles.statusPillTextNoPad]} numberOfLines={1}>
+          <Text
+            style={[styles.statusPillText, styles.statusPillTextNoPad]}
+            numberOfLines={1}
+          >
             {`Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`}
           </Text>
         </View>
@@ -866,8 +904,20 @@ function renderStatusPill(
     status?.tone === "finished" ? 100 : Math.min(100, item.progressPct);
   const finished = status?.tone === "finished";
   const unread = status?.tone === "unread";
+  const label =
+    status?.tone === "reading"
+      ? `Continue · ${Math.round(item.progressPct)}%`
+      : unread
+        ? "Read"
+        : finished
+          ? "Re-read"
+          : (status?.label ?? "");
   return (
-    <View
+    <Pressable
+      onPress={(e) => {
+        e.stopPropagation();
+        onContinue();
+      }}
       style={[
         styles.statusPill,
         finished && styles.statusPillFinished,
@@ -884,37 +934,53 @@ function renderStatusPill(
         ]}
         numberOfLines={1}
       >
-        {status?.label ?? ""}
+        {label}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
 function renderRow(
   item: BookWithProgress,
   onPress: (b: BookWithProgress) => void,
+  onContinue: (b: BookWithProgress) => void,
   onDownload: (bookId: string) => void,
 ) {
   const downloading = item.downloadProgress !== null;
   const status = readingStatus(item);
   const notDownloaded = Platform.OS !== "web" && !item.downloaded;
+  const dlPct = Math.round((item.downloadProgress ?? 0) * 100);
+  const label =
+    status?.tone === "reading"
+      ? `Continue · ${Math.round(item.progressPct)}%`
+      : status?.tone === "unread"
+        ? "Read"
+        : status?.tone === "finished"
+          ? "Re-read"
+          : (status?.label ?? "");
   return (
     <Pressable style={styles.rowCard} onPress={() => onPress(item)}>
       <View style={[styles.rowCover, notDownloaded && styles.coverDimmed]}>
         {item.coverUrl ? (
           <Image source={{ uri: item.coverUrl }} style={styles.coverImage} />
         ) : null}
-        {notDownloaded && !downloading ? (
+        {notDownloaded ? (
           <Pressable
             onPress={(e) => {
               e.stopPropagation();
               onDownload(item.id);
             }}
             hitSlop={10}
-            accessibilityLabel="Download"
+            accessibilityLabel={
+              downloading ? `Cancel download (${dlPct}%)` : "Download"
+            }
             style={styles.coverDownloadBadge}
           >
-            <Download size={16} color="#fff" />
+            {downloading ? (
+              <Text style={styles.coverDownloadBadgeText}>{dlPct}</Text>
+            ) : (
+              <Download size={16} color="#fff" />
+            )}
           </Pressable>
         ) : null}
       </View>
@@ -928,18 +994,25 @@ function renderRow(
         {downloading ? (
           <View style={styles.rowStatusDownload}>
             <Text style={styles.rowStatus}>
-              {`Downloading ${Math.round((item.downloadProgress ?? 0) * 100)}%`}
+              {`Downloading ${dlPct}%`}
             </Text>
           </View>
         ) : (
-          <Text
-            style={[
-              styles.rowStatus,
-              status?.tone === "reading" && styles.rowStatusReading,
-            ]}
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              onContinue(item);
+            }}
           >
-            {status?.label ?? ""}
-          </Text>
+            <Text
+              style={[
+                styles.rowStatus,
+                status?.tone === "reading" && styles.rowStatusReading,
+              ]}
+            >
+              {label}
+            </Text>
+          </Pressable>
         )}
       </View>
     </Pressable>
@@ -1024,10 +1097,11 @@ const styles = StyleSheet.create({
   filterScroll: {
     flexGrow: 0,
     flexShrink: 0,
+    marginTop: spacing.sm,
   },
   filterRow: {
     paddingHorizontal: spacing.md,
-    paddingVertical: 6,
+    paddingVertical: spacing.sm,
     gap: 6,
     flexDirection: "row",
     alignItems: "center",
@@ -1086,7 +1160,11 @@ const styles = StyleSheet.create({
   },
 
   // Grid view
-  grid: { padding: spacing.md },
+  grid: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+  },
   row: {
     gap: spacing.md,
     justifyContent: "flex-start",
@@ -1174,20 +1252,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  downloadOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(17,17,17,0.55)",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  // Solid black overlay for e-ink — the translucent tint would smudge into
-  // a near-invisible gray on a ~16-level grayscale panel.
-  downloadOverlayEink: { backgroundColor: "#000" },
-  downloadOverlayText: {
-    color: colors.primaryFg,
-    fontSize: fontSize.xs,
-    fontWeight: "600",
+  coverDownloadBadgeText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   bookTitle: {
     fontSize: fontSize.xs,
@@ -1197,7 +1266,12 @@ const styles = StyleSheet.create({
   bookAuthor: { fontSize: 11, color: colors.textSecondary },
 
   // List view
-  list: { padding: spacing.md, gap: spacing.sm },
+  list: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    paddingTop: spacing.sm,
+    gap: spacing.sm,
+  },
   rowCard: {
     flexDirection: "row",
     gap: spacing.md,
