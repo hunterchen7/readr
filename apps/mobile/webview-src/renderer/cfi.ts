@@ -57,14 +57,13 @@ export function resolveCfi(
     const section = sections.find((s) => s.index === sectionIndex);
     if (!section) return { sectionIndex, range: null };
 
-    // Remaining indirections target the in-doc position. Pass the
-    // sub-indirections *plus* the range tails (if any) to toRange.
+    // Spine-only CFI ("epubcfi(/6/N)") has no in-section precision.
+    // Return a null range so callers fall through to fraction-based
+    // positioning instead of scrolling to a placeholder range at the
+    // section's body root (which would put us at the section start
+    // even when fraction says we're mid-chapter).
     if (indirections.length === 1) {
-      // Spine-only CFI — no in-doc position. Place range at section start.
-      const range = section.doc.createRange();
-      range.setStart(section.doc.body ?? section.doc.documentElement, 0);
-      range.collapse(true);
-      return { sectionIndex, range };
+      return { sectionIndex, range: null };
     }
 
     const localIndir = indirections.slice(1);

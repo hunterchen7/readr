@@ -194,18 +194,34 @@ async function restartApp() {
 async function connectDevClientIfNeeded() {
   const nodes = parseUi(dumpUI());
   if (!nodes.some((n) => n.text === 'DEVELOPMENT SERVERS')) return;
-  // First clickable card containing "10.0.2.2" is the active dev server.
   const ip = nodes.find((n) => (n.text ?? '').includes('10.0.2.2'));
   const card = ip ? clickableContainer(nodes, ip) : null;
   if (!card) throw new Error('Dev launcher shown but no server card found');
   const c = boundsCenter(card.bounds);
   tap(c.x, c.y);
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 120; i++) {
     await sleep(1000);
     const nn = parseUi(dumpUI());
     if (nn.some((n) => n.text === 'Library')) return;
+    // Dev auto-login is handled by the (auth)/login useEffect when
+    // EXPO_PUBLIC_DEV_TOKEN is set. If we see the login screen without
+    // auto-login firing, fail fast — there's no OTP-interactive path
+    // for the harness.
   }
   throw new Error('Library did not appear after connecting to dev server');
+}
+
+async function dismissSystemPopupsIfAny() {
+  const nodes = parseUi(dumpUI());
+  // Android 15+ shows a one-shot "Viewing full screen — to exit, swipe
+  // down from the top of your screen" toast with a Got it button when
+  // the reader first enters immersive mode. Tap it away.
+  const gotIt = nodes.find((n) => n.text === 'Got it' && n.clickable === 'true');
+  if (gotIt) {
+    const c = boundsCenter(gotIt.bounds);
+    tap(c.x, c.y);
+    await sleep(500);
+  }
 }
 
 let cachedToc = null;
@@ -224,7 +240,11 @@ async function openBookForTesting() {
     if (target) {
       const c = boundsCenter(target.bounds);
       tap(c.x, c.y);
-      for (let w = 0; w < 25; w++) {
+      // Wait for the reader to fully materialize — both a debug node
+      // AND a populated `latest` field (the React render that surfaces
+      // it in the accessibility tree lands a frame or two after the
+      // WebView posts progressUpdated).
+      for (let w = 0; w < 40; w++) {
         await sleep(500);
         const nn = parseUi(dumpUI());
         const dbg = extractDebug(nn);
@@ -232,7 +252,7 @@ async function openBookForTesting() {
           if (dbg.toc && !cachedToc) cachedToc = dbg.toc;
           const tocEv = dbg.events.find((e) => e.type === 'tocLoaded');
           if (tocEv && !cachedToc) { try { cachedToc = JSON.parse(tocEv.raw); } catch {} }
-          if (dbg.latest || dbg.events.some((e) => e.type === 'progressUpdated')) return dbg;
+          if (dbg.latest) return dbg;
         }
       }
       throw new Error('Reader did not emit progressUpdated after opening book');
@@ -244,56 +264,85 @@ async function openBookForTesting() {
 
 async function waitSettle(ms = 1500) { await sleep(ms); }
 
-async function openSettings() {
+function readerChromeVisible(nodes) {
+  // Chrome is the header bar with TOC / bookmark / settings buttons.
+  return nodes.some((n) => n['content-desc'] === 'Table of contents')
+    && nodes.some((n) => n['content-desc'] === 'Reader settings');
+}
+
+function settingsDropdownOpen(nodes) {
+  // The Settings header in the dropdown is a non-clickable Text. Note
+  // that `n.clickable` is the string "false" (not a boolean), so
+  // compare explicitly.
+  return nodes.some((n) => n.text === 'Settings' && n.clickable !== 'true');
+}
+
+function tocDrawerOpen(nodes) {
+  // TOC drawer tabs are non-clickable Text labels.
+  return nodes.some(
+    (n) =>
+      (n.text === 'Contents' || n.text === 'Bookmarks')
+      && n.clickable !== 'true',
+  );
+}
+
+async function ensureChromeVisible() {
   const screen = screenSize();
-  // Chrome is toggled by a center tap. On scroll mode our tap handler
-  // always posts `tapCenter`. Retry a few times while waiting for the
-  // settings button to appear.
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    // Dismiss any Android system popups (e.g. the "Viewing full
+    // screen" immersive-mode toast) that may be covering our tap
+    // targets.
+    await dismissSystemPopupsIfAny();
     const nodes = parseUi(dumpUI());
-    const existing = nodes.find((n) => n['content-desc'] === 'Reader settings');
-    if (existing) {
-      const c = boundsCenter(existing.bounds);
-      tap(c.x, c.y);
-      await sleep(900);
-      return;
+    if (readerChromeVisible(nodes)) return nodes;
+    if (settingsDropdownOpen(nodes) || tocDrawerOpen(nodes)) {
+      shell('input keyevent 4');
+      await sleep(500);
+      continue;
     }
     tap(screen.w >> 1, screen.h >> 1);
     await sleep(700);
   }
-  throw new Error('Reader settings button did not appear after chrome taps');
+  throw new Error('reader chrome never appeared (app may have left the reader)');
+}
+
+async function openSettings() {
+  const nodes = await ensureChromeVisible();
+  const btn = nodes.find((n) => n['content-desc'] === 'Reader settings');
+  if (!btn) throw new Error('Reader settings button not found');
+  const c = boundsCenter(btn.bounds);
+  tap(c.x, c.y);
+  await sleep(900);
 }
 
 async function setPageTurnMode(mode) {
   const wanted = { tap: 'Tap', swipe: 'Swipe', both: 'Both', scroll: 'Scroll' }[mode];
   if (!wanted) throw new Error('bad mode');
   const nodes = parseUi(dumpUI());
+  if (!settingsDropdownOpen(nodes)) {
+    throw new Error('Settings dropdown must be open before setPageTurnMode');
+  }
   const btn = nodes.find((n) => n.clickable === 'true' && n['content-desc'] === wanted);
   if (!btn) throw new Error(`Page turn mode button "${wanted}" not found`);
   const c = boundsCenter(btn.bounds);
   tap(c.x, c.y);
   await sleep(800);
-  // Dismiss the dropdown.
-  shell('input keyevent 4');
-  await sleep(500);
+  // Only press back if the dropdown is still up — the selection may
+  // have dismissed it on some ROMs.
+  const afterNodes = parseUi(dumpUI());
+  if (settingsDropdownOpen(afterNodes)) {
+    shell('input keyevent 4');
+    await sleep(500);
+  }
 }
 
 async function openToc() {
-  const screen = screenSize();
-  // Make sure chrome is visible.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const nodes = parseUi(dumpUI());
-    const toc = nodes.find((n) => n['content-desc'] === 'Table of contents');
-    if (toc) {
-      const c = boundsCenter(toc.bounds);
-      tap(c.x, c.y);
-      await sleep(900);
-      return;
-    }
-    tap(screen.w >> 1, screen.h >> 1);
-    await sleep(600);
-  }
-  throw new Error('Table of contents button did not appear');
+  const nodes = await ensureChromeVisible();
+  const btn = nodes.find((n) => n['content-desc'] === 'Table of contents');
+  if (!btn) throw new Error('TOC button not found');
+  const c = boundsCenter(btn.bounds);
+  tap(c.x, c.y);
+  await sleep(900);
 }
 
 async function jumpToTocLabelPrefix(prefix) {
@@ -314,30 +363,78 @@ async function jumpToTocLabelPrefix(prefix) {
   throw new Error(`TOC entry starting with "${prefix}" not found`);
 }
 
-async function readReaderState() {
-  await waitSettle(300);
-  const nodes = parseUi(dumpUI());
-  const dbg = extractDebug(nodes);
-  return {
-    dbg,
-    progress: dbg ? latestProgress(dbg) : null,
-    scrollMode: dbg ? latestScrollMode(dbg) : null,
-    visible: dbg?.visible ?? '',
-  };
+async function readReaderState({ waitForProgress = true } = {}) {
+  // Poll until latestProgress is available — the renderer's initial
+  // reportProgress can trail the book-open signal by a few frames, and
+  // a one-shot dump right after can read a stale (empty) debug label.
+  const deadline = Date.now() + (waitForProgress ? 3000 : 0);
+  while (true) {
+    await waitSettle(300);
+    const nodes = parseUi(dumpUI());
+    const dbg = extractDebug(nodes);
+    const progress = dbg ? latestProgress(dbg) : null;
+    if (!waitForProgress || progress || Date.now() >= deadline) {
+      return {
+        dbg,
+        progress,
+        scrollMode: dbg ? latestScrollMode(dbg) : null,
+        visible: dbg?.visible ?? '',
+      };
+    }
+  }
 }
 
 async function closeAnyDrawerOrSheet() {
-  // Tap the scrim / press back to close any open drawer or dropdown.
   for (let i = 0; i < 3; i++) {
     const nodes = parseUi(dumpUI());
-    // If we can still see the reader settings dropdown or TOC drawer
-    // by accessibility label, press back to dismiss.
-    const hasSettings = nodes.some((n) => n.text === 'Settings');
-    const hasTocPanel = nodes.some((n) => n.text === 'Contents' || n.text === 'Bookmarks');
-    if (!hasSettings && !hasTocPanel) return;
+    if (!settingsDropdownOpen(nodes) && !tocDrawerOpen(nodes)) return;
     shell('input keyevent 4');
     await sleep(400);
   }
+}
+
+function isOnHomeScreen(nodes) {
+  return nodes.some((n) => (n['content-desc'] ?? '') === 'Home')
+    && nodes.some((n) => (n.text ?? '').trim() === 'Play Store');
+}
+
+function isOnDevLauncher(nodes) {
+  return nodes.some((n) => n.text === 'DEVELOPMENT SERVERS');
+}
+
+function isOnLibrary(nodes) {
+  return nodes.some((n) => n.text === 'Library');
+}
+
+function isInReader(nodes) {
+  // The dev-only debug Text is only rendered inside the reader screen.
+  return nodes.some((n) => (n.text ?? '').startsWith('READR_DEBUG|'));
+}
+
+async function ensureInReader() {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    // Any drawer/dropdown that was left open will modal-overlay the
+    // reader and keep uiautomator from surfacing the debug text node,
+    // which makes isInReader falsely return false. Drop them first.
+    await closeAnyDrawerOrSheet();
+    const nodes = parseUi(dumpUI());
+    if (isInReader(nodes)) return;
+    if (isOnHomeScreen(nodes)) {
+      shell('am start -n com.readr.app/.MainActivity');
+      await sleep(4000);
+      continue;
+    }
+    if (isOnDevLauncher(nodes)) {
+      await connectDevClientIfNeeded();
+      continue;
+    }
+    if (isOnLibrary(nodes)) {
+      await openBookForTesting();
+      continue;
+    }
+    await sleep(1000);
+  }
+  throw new Error('could not get back into the reader');
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────
@@ -560,16 +657,45 @@ async function main() {
   log('device:', devices[0].split('\t')[0]);
 
   await restartApp();
+  // Dev launcher may not render immediately after `am start`; give it
+  // a couple of dumps to catch up.
+  for (let i = 0; i < 8; i++) {
+    const nn = parseUi(dumpUI());
+    if (isOnDevLauncher(nn) || nn.some((n) => n.text === 'Library')) break;
+    await sleep(1000);
+  }
   await connectDevClientIfNeeded();
   log('library reached');
   const openDbg = await openBookForTesting();
-  log('reader opened, events:', openDbg.events.length);
+  log('reader opened, events:', openDbg.events.length, 'latest:', openDbg.latest?.sectionIndex, openDbg.latest?.chapter);
+  // Book just opened — give the reader a full beat before tests poke
+  // at it. The WebView's initial layout pass, page-count measurement,
+  // and the first few progressUpdated round-trips can fire over ~1s
+  // after `latest` populates, and early taps during that window are
+  // sometimes swallowed or redirected by RN's render cycle.
+  await sleep(3000);
 
   let passed = 0, failed = 0;
   for (const t of tests) {
     if (filter && !t.name.includes(filter)) continue;
     log(`→ ${t.name}`);
     try {
+      try { await ensureInReader(); } catch (err) {
+        log(`  recovery: ${err.message}`);
+      }
+      await closeAnyDrawerOrSheet();
+      // Debug: dump state right before the test runs.
+      {
+        const xml = dumpUI();
+        const hasRaw = xml.includes('READR_DEBUG');
+        const nn = parseUi(xml);
+        const d = extractDebug(nn);
+        if (!d) {
+          log(`  pre-test: no debug node visible (raw has READR_DEBUG: ${hasRaw}; xml len: ${xml.length})`);
+        } else {
+          log(`  pre-test: latest=${d.latest?.sectionIndex ?? '∅'} events=${d.events.length}`);
+        }
+      }
       await t.run();
       log(`✓ ${t.name}`);
       passed++;

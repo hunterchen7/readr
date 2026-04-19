@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,15 @@ import { colors, spacing, fontSize } from "../../lib/theme";
 const DEFAULT_SERVER_URL =
   (Constants.expoConfig?.extra?.defaultServerUrl as string | undefined) ?? "";
 
+// Dev-only: auto-login bypass for the ADB test harness. If both
+// `EXPO_PUBLIC_DEV_TOKEN` and `EXPO_PUBLIC_DEV_SERVER_URL` are set at
+// `npx expo start` time, the login screen stores them and routes
+// straight to the library without the email-OTP dance.
+const DEV_TOKEN =
+  (Constants.expoConfig?.extra?.devToken as string | undefined) ?? "";
+const DEV_SERVER_URL =
+  (Constants.expoConfig?.extra?.devServerUrl as string | undefined) ?? "";
+
 type Step = "email" | "code";
 
 export default function LoginScreen() {
@@ -33,6 +42,26 @@ export default function LoginScreen() {
   // can trip "Maximum update depth" when subscribing to the full store.
   const setStoreServerUrl = useAuthStore((s) => s.setServerUrl);
   const loginDirect = useAuthStore((s) => s.loginDirect);
+
+  // Dev-only auto-login. Runs once on mount, only when both envs are
+  // set and `__DEV__` is true.
+  useEffect(() => {
+    if (!__DEV__) return;
+    if (!DEV_TOKEN || !DEV_SERVER_URL) return;
+    (async () => {
+      try {
+        const url = DEV_SERVER_URL.replace(/\/$/, "");
+        await setStoreServerUrl(url);
+        await api.setToken(DEV_TOKEN);
+        loginDirect(DEV_TOKEN);
+        router.replace("/(tabs)/library");
+      } catch (err) {
+        console.warn("[dev] auto-login failed:", err);
+      }
+    })();
+    // setStoreServerUrl / loginDirect are stable zustand setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSendCode() {
     // Accept bare hostnames by prepending https://. Avoids the cryptic

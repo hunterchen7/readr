@@ -43,5 +43,11 @@ module.exports = ({ config }) => ({
   plugins: ["expo-router", "expo-secure-store", "expo-sqlite", "./plugins/copy-fonts"],
   extra: {
     defaultServerUrl: process.env.EXPO_PUBLIC_DEFAULT_SERVER_URL ?? "",
+    // Dev-only: if both are set and __DEV__ is true, the login screen
+    // skips the email-OTP flow and signs in directly. Used by the ADB
+    // test harness on emulators whose SecureStore was wiped by an APK
+    // reinstall. NEVER shipped to production.
+    devToken: process.env.EXPO_PUBLIC_DEV_TOKEN ?? "",
+    devServerUrl: process.env.EXPO_PUBLIC_DEV_SERVER_URL ?? "",
   },
 });

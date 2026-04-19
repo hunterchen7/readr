@@ -48,41 +48,12 @@ const POLYFILLS = `
 })();
 `;
 
-// Dev iteration: `adb push assets/js/renderer-bundle.js /sdcard/readr/renderer-bundle.js`
-// lets us reload the renderer without rebuilding the APK. The loader below
-// tries the sdcard path first (no-op failure in production where nothing is
-// pushed) and falls through to the bundled asset.
-const BUNDLE_LOADER = `
-(function(){
-  var candidates = [
-    'file:///sdcard/readr/renderer-bundle.js',
-    'file:///android_asset/js/renderer-bundle.js'
-  ];
-  function load(i){
-    if (i >= candidates.length) {
-      document.getElementById('error').style.display='flex';
-      document.getElementById('error').textContent='Failed to load renderer bundle';
-      return;
-    }
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', candidates[i], true);
-    xhr.responseType = 'text';
-    xhr.onload = function(){
-      if (xhr.status === 0 || xhr.status === 200) {
-        var s = document.createElement('script');
-        s.text = xhr.responseText;
-        s.setAttribute('data-src', candidates[i]);
-        document.body.appendChild(s);
-      } else {
-        load(i + 1);
-      }
-    };
-    xhr.onerror = function(){ load(i + 1); };
-    xhr.send();
-  }
-  load(0);
-})();
-`;
+// The renderer bundle is inlined directly in the HTML document, not
+// loaded from android_asset. That lets us iterate on webview-src
+// without rebuilding + reinstalling the APK — `pnpm run
+// build:webview-assets` regenerates the TS module and Metro's watch
+// picks it up on next app reload.
+import { RENDERER_BUNDLE } from "./renderer-bundle.generated";
 
 export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: string): string {
   const bg = initialBg || '#fff';
@@ -114,7 +85,7 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
   <div id="error"></div>
   <div id="viewer"></div>
   <script>window.__READR_CONFIG = ${config};</script>
-  <script>${BUNDLE_LOADER}</script>
+  <script>${RENDERER_BUNDLE}</script>
 </body>
 </html>`;
 }

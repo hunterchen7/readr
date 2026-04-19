@@ -217,39 +217,48 @@ function handleRnMessage(
       const cfi = payload.cfi as string | undefined;
       const fraction = payload.fraction as number | undefined;
       (async () => {
-        let handled = false;
+        // Wait for a paint so the section elements have their final
+        // layout — scrollToFraction reads offsetHeight/offsetWidth and
+        // pageCounts, both of which are only meaningful after layout.
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+        host.recountPages();
         try {
+          let handled = false;
           if (cfi && isCfi(cfi)) {
             const sections = book.spine.map((s) => ({ index: s.index, doc: s.doc }));
             const resolved = resolveCfi(cfi, sections);
             post('debug', { msg: `goToLocation cfi=${cfi.slice(0, 60)} resolved=${resolved ? `sec=${resolved.sectionIndex} range=${!!resolved.range}` : 'null'}` });
             if (resolved) {
-              host.scrollToSection(resolved.sectionIndex);
-              // Attempt to scroll to the in-section range for sub-section
-              // precision. If the live-DOM translation fails we still end
-              // up anchored at the section start, which is the best we
-              // can do for that CFI.
               if (resolved.range) {
+                host.scrollToSection(resolved.sectionIndex);
                 try { host.scrollToRange(resolved.range); } catch { /* ignore */ }
+                handled = true;
+              } else if (typeof fraction === 'number') {
+                // Spine-only CFI — fraction carries the within-section
+                // precision we need.
+                host.scrollToFraction(fraction);
+                handled = true;
+              } else {
+                host.scrollToSection(resolved.sectionIndex);
+                handled = true;
               }
-              handled = true;
             }
           }
           if (!handled && typeof fraction === 'number') {
             post('debug', { msg: `goToLocation fallback fraction=${fraction}` });
             host.scrollToFraction(fraction);
-            handled = true;
           }
         } catch (err) {
           post('debug', { msg: 'goToLocation failed: ' + (err as Error)?.message });
         }
-        // Always signal restored + emit progress so RN can lift the
-        // curtain and reconcile its state, regardless of whether nav
-        // succeeded.
+        // Wait two more frames so the programmatic scroll has landed
+        // (the browser defers scroll + its own scroll events one frame
+        // beyond the scrollTo call), then report the settled position.
         requestAnimationFrame(() => {
-          host.recountPages();
-          host.reportProgress(false);
-          post('restored');
+          requestAnimationFrame(() => {
+            host.reportProgress(false);
+            post('restored');
+          });
         });
       })();
       break;

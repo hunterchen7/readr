@@ -459,6 +459,7 @@ export default function ReaderScreen() {
         getNotes(bookId!),
         loadReaderPrefs(),
       ]);
+      console.log("[RN] load() savedProgress:", JSON.stringify(savedProgress)?.slice(0, 200));
       if (savedProgress) {
         savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
@@ -505,6 +506,7 @@ export default function ReaderScreen() {
     if (restoreSentRef.current) return;
     restoreSentRef.current = true;
     const saved = savedPositionRef.current;
+    console.log("[RN] applySavedRestore saved=", JSON.stringify(saved)?.slice(0, 200));
     let sentNav = false;
     if (saved) {
       const pct = typeof saved.percentage === "number" ? saved.percentage : 0;
@@ -512,6 +514,7 @@ export default function ReaderScreen() {
       if (saved.cfi) payload.cfi = saved.cfi;
       if (pct > 0) payload.fraction = pct / 100;
       if (Object.keys(payload).length > 0) {
+        console.log("[RN] applySavedRestore sending goToLocation", JSON.stringify(payload));
         sendToWebView("goToLocation", payload);
         sentNav = true;
       }
@@ -756,11 +759,19 @@ export default function ReaderScreen() {
           // transient (rAF-driven) updates during scroll — we'd hammer
           // the DB at 60fps otherwise. The next non-transient relocate
           // (fired by foliate after scroll settles) will persist.
-          if (bookId && hasRestoredRef.current && !msg.payload.transient) {
+          // Don't persist the boot-time cover state on a fresh device —
+          // `sectionIndex === 0 && percentage === 0` is what the
+          // renderer emits before the user has made any navigation.
+          // Saving it clobbers a still-being-restored position or fills
+          // a fresh device with a meaningless "at the cover" row that
+          // then masks the real resume next open.
+          const isBootCover =
+            msg.payload.sectionIndex === 0 && (!pct || pct < 0.01);
+          if (bookId && hasRestoredRef.current && !msg.payload.transient && !isBootCover) {
             console.log(`[RN] upsertProgress sec=${msg.payload.sectionIndex} pct=${pct} cfi=${String(msg.payload.cfi).slice(0, 30)}`);
             upsertProgress(bookId, position);
           } else if (bookId && !msg.payload.transient) {
-            console.log(`[RN] skipping save hasRestored=${hasRestoredRef.current}`);
+            console.log(`[RN] skipping save hasRestored=${hasRestoredRef.current} bootCover=${isBootCover}`);
           }
           // Dev-only: non-transient progressUpdated events now carry
           // an inline visibleSample; surface it to the harness via the
