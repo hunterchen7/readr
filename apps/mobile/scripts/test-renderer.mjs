@@ -692,29 +692,22 @@ async function main() {
     if (filter && !t.name.includes(filter)) continue;
     log(`→ ${t.name}`);
     try {
-      try { await ensureInReader(); } catch (err) {
-        log(`  recovery: ${err.message}`);
+      // Simple, reliable pre-flight: force-stop + cold-open the book
+      // if we're not demonstrably in the reader. More costly (~30s
+      // per test) but deterministic, no state-machine heuristics.
+      if (!dumpUI().includes('READR_DEBUG')) {
+        shell('am force-stop com.readr.app');
+        await sleep(1500);
+        shell('am start -n com.readr.app/.MainActivity');
+        await sleep(4500);
+        // Dev launcher → library (auto-login via EXPO_PUBLIC_DEV_TOKEN).
+        await connectDevClientIfNeeded();
+        // Library → reader.
+        await openBookForTesting();
       }
-      // Only close drawers if we're still in the reader — a stray
-      // back press elsewhere bounces the app out of the reader.
-      {
-        const xml0 = dumpUI();
-        if (xml0.includes('READR_DEBUG')) {
-          await closeAnyDrawerOrSheet();
-          // Re-verify we're still in the reader after that.
-          if (!dumpUI().includes('READR_DEBUG')) {
-            try { await ensureInReader(); } catch { /* ignore */ }
-          }
-        }
-      }
-      const xml = dumpUI();
-      const hasRaw = xml.includes('READR_DEBUG');
-      const nn = parseUi(xml);
-      const d = extractDebug(nn);
-      if (!d) {
-        log(`  pre-test: no debug node visible (raw has READR_DEBUG: ${hasRaw}; xml len: ${xml.length})`);
-      } else {
-        log(`  pre-test: latest=${d.latest?.sectionIndex ?? '∅'} events=${d.events.length}`);
+      // One last sanity check so test failures don't cascade.
+      if (!dumpUI().includes('READR_DEBUG')) {
+        throw new Error('reader did not open after cold-start');
       }
       await t.run();
       log(`✓ ${t.name}`);
