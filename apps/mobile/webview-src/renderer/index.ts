@@ -37,6 +37,7 @@ function post(type: string, payload: any = {}): void {
 // ─── Boot ─────────────────────────────────────────────────────────────
 
 async function boot(): Promise<void> {
+  post('debug', { msg: 'BOOT v11 FRESH BUNDLE STARTED' });
   const config = window.__READR_CONFIG;
   const bookUrl = config?.bookUrl;
   if (!bookUrl) {
@@ -115,12 +116,17 @@ let scrollMode = false;
 let tapToTurn = true;
 
 function emitProgress(detail: ProgressDetail, book: ParsedBook): void {
-  // Resolve chapter label from TOC by closest-match href.
   const chapterLabel = chapterForSection(book.toc, detail.sectionHref);
-  // Build a CFI that identifies the current position within the book —
-  // this is the canonical resume token.
   const cfi = sectionCfi(detail.sectionIndex);
-
+  const host = window.__READR?.host;
+  let visibleSample: string | undefined;
+  if (!detail.transient) {
+    try {
+      visibleSample = host ? gatherVisibleText(host, 240) : '(no host)';
+    } catch (err) {
+      visibleSample = `(gather err: ${(err as Error).message})`;
+    }
+  }
   post('progressUpdated', {
     percentage: Math.round(detail.fraction * 100000) / 1000,
     anchorFraction: detail.fraction,
@@ -134,6 +140,7 @@ function emitProgress(detail: ProgressDetail, book: ParsedBook): void {
     pagesInSection: detail.pagesInSection,
     totalIsEstimate: false,
     transient: detail.transient,
+    visibleSample,
   });
 }
 
@@ -358,51 +365,55 @@ function wireTapToTurn(host: RenderHost): void {
 
 function gatherVisibleText(host: RenderHost, maxChars = 0): string {
   // Walk every text node inside any viewport-intersecting section and
-  // accumulate their content. Simpler and more reliable than a tag
-  // allowlist — picks up text regardless of what element wraps it.
+  // accumulate their content.
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  // Collect sections whose bounds intersect the viewport.
-  const visibleSections: HTMLElement[] = [];
+  const content = host.contentElement;
+
+  // Use a Range-based approach: set a range over the section content
+  // and skim its text. Simpler than a TreeWalker-from-shadow-root and
+  // bypasses any cross-root walking quirks.
+  const chunks: string[] = [];
   for (let i = 0; i < host.spineLength; i++) {
     const sec = host.sectionElement(i);
     if (!sec) continue;
     const r = sec.getBoundingClientRect();
     if (r.right <= 0 || r.bottom <= 0) continue;
     if (r.left >= vw || r.top >= vh) continue;
-    visibleSections.push(sec);
-  }
-  if (visibleSections.length === 0) return '';
 
-  const chunks: string[] = [];
-  const intersectsViewport = (el: Element): boolean => {
-    const r = el.getBoundingClientRect();
-    return !(r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh);
-  };
-  for (const sec of visibleSections) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const walker = (document as any).createTreeWalker(
-      sec,
-      NodeFilter.SHOW_TEXT,
-      null,
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let node: any;
-    // eslint-disable-next-line no-cond-assign
-    while ((node = walker.nextNode())) {
-      const text = (node as Text).data?.trim();
+    // Visit every descendant element of this section. For each element
+    // whose bounding rect intersects the viewport, grab its innerText.
+    // Skip elements that themselves contain smaller text-bearing
+    // elements we'll visit separately (to avoid duplicates) by only
+    // taking leaf-ish blocks (<=1 level of child elements with text).
+    const desc = sec.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, div, span');
+    for (const el of Array.from(desc)) {
+      const er = (el as HTMLElement).getBoundingClientRect();
+      if (er.right <= 0 || er.bottom <= 0) continue;
+      if (er.left >= vw || er.top >= vh) continue;
+      const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim();
       if (!text) continue;
-      // Use the parent element's rect as a proxy for the text's rect.
-      const parent = node.parentElement;
-      if (!parent || !intersectsViewport(parent)) continue;
       chunks.push(text);
-      if (maxChars > 0) {
-        const total = chunks.join(' ').length;
-        if (total >= maxChars) break;
-      }
+      if (maxChars > 0 && chunks.join(' ').length >= maxChars) break;
     }
     if (maxChars > 0 && chunks.join(' ').length >= maxChars) break;
   }
+
+  // Fallback: if per-element scan found nothing (e.g. viewport inside
+  // a <pre> or the first section has only images), take the section's
+  // whole text.
+  if (chunks.length === 0) {
+    for (let i = 0; i < host.spineLength; i++) {
+      const sec = host.sectionElement(i);
+      if (!sec) continue;
+      const r = sec.getBoundingClientRect();
+      if (r.right <= 0 || r.bottom <= 0) continue;
+      if (r.left >= vw || r.top >= vh) continue;
+      const t = (sec.textContent ?? '').trim();
+      if (t) { chunks.push(t); break; }
+    }
+  }
+
   let out = chunks.join(' ').replace(/\s+/g, ' ').trim();
   if (maxChars > 0 && out.length > maxChars) out = out.slice(0, maxChars);
   return out;

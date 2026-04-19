@@ -750,11 +750,11 @@ export default function ReaderScreen() {
           if (bookId && hasRestoredRef.current && !msg.payload.transient) {
             upsertProgress(bookId, position);
           }
-          // Dev-only: ask the renderer for its visible text on every
-          // settled progress update so the ADB test harness can compare
-          // what's on screen before/after mode toggles, TOC nav, etc.
-          if (__DEV__ && !msg.payload.transient) {
-            sendToWebView("getVisibleText", {});
+          // Dev-only: non-transient progressUpdated events now carry
+          // an inline visibleSample; surface it to the harness via the
+          // debug accessibility label.
+          if (__DEV__ && !msg.payload.transient && typeof msg.payload.visibleSample === "string") {
+            setVisibleText(msg.payload.visibleSample);
           }
           break;
         }
