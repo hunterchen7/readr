@@ -412,23 +412,35 @@ function isInReader(nodes) {
 }
 
 async function ensureInReader() {
-  for (let attempt = 0; attempt < 6; attempt++) {
-    // Any drawer/dropdown that was left open will modal-overlay the
-    // reader and keep uiautomator from surfacing the debug text node,
-    // which makes isInReader falsely return false. Drop them first.
-    await closeAnyDrawerOrSheet();
+  // Fast path first — don't touch state if we're already in the
+  // reader. Pressing back speculatively (via closeAnyDrawerOrSheet)
+  // on a false-positive "Settings" detection was bouncing us out of
+  // the reader entirely.
+  if (isInReader(parseUi(dumpUI()))) return;
+  await closeAnyDrawerOrSheet();
+  if (isInReader(parseUi(dumpUI()))) return;
+
+  for (let attempt = 0; attempt < 10; attempt++) {
     const nodes = parseUi(dumpUI());
-    if (isInReader(nodes)) return;
-    if (isOnHomeScreen(nodes)) {
+    const state = isInReader(nodes) ? 'reader'
+      : isOnHomeScreen(nodes) ? 'home'
+      : isOnDevLauncher(nodes) ? 'launcher'
+      : isOnLibrary(nodes) ? 'library'
+      : 'unknown';
+    if (attempt > 0) log(`  ensureInReader[${attempt}]: state=${state}`);
+    if (state === 'reader') return;
+    if (state === 'home' || state === 'unknown') {
+      shell('am force-stop com.readr.app');
+      await sleep(800);
       shell('am start -n com.readr.app/.MainActivity');
-      await sleep(4000);
+      await sleep(4500);
       continue;
     }
-    if (isOnDevLauncher(nodes)) {
+    if (state === 'launcher') {
       await connectDevClientIfNeeded();
       continue;
     }
-    if (isOnLibrary(nodes)) {
+    if (state === 'library') {
       await openBookForTesting();
       continue;
     }
@@ -683,18 +695,26 @@ async function main() {
       try { await ensureInReader(); } catch (err) {
         log(`  recovery: ${err.message}`);
       }
-      await closeAnyDrawerOrSheet();
-      // Debug: dump state right before the test runs.
+      // Only close drawers if we're still in the reader — a stray
+      // back press elsewhere bounces the app out of the reader.
       {
-        const xml = dumpUI();
-        const hasRaw = xml.includes('READR_DEBUG');
-        const nn = parseUi(xml);
-        const d = extractDebug(nn);
-        if (!d) {
-          log(`  pre-test: no debug node visible (raw has READR_DEBUG: ${hasRaw}; xml len: ${xml.length})`);
-        } else {
-          log(`  pre-test: latest=${d.latest?.sectionIndex ?? '∅'} events=${d.events.length}`);
+        const xml0 = dumpUI();
+        if (xml0.includes('READR_DEBUG')) {
+          await closeAnyDrawerOrSheet();
+          // Re-verify we're still in the reader after that.
+          if (!dumpUI().includes('READR_DEBUG')) {
+            try { await ensureInReader(); } catch { /* ignore */ }
+          }
         }
+      }
+      const xml = dumpUI();
+      const hasRaw = xml.includes('READR_DEBUG');
+      const nn = parseUi(xml);
+      const d = extractDebug(nn);
+      if (!d) {
+        log(`  pre-test: no debug node visible (raw has READR_DEBUG: ${hasRaw}; xml len: ${xml.length})`);
+      } else {
+        log(`  pre-test: latest=${d.latest?.sectionIndex ?? '∅'} events=${d.events.length}`);
       }
       await t.run();
       log(`✓ ${t.name}`);
