@@ -475,12 +475,20 @@ export default function ReaderScreen() {
     const saved = savedPositionRef.current;
     let sentNav = false;
     if (saved) {
-      const pct = saved.percentage;
-      if (typeof pct === "number" && pct > 0) {
-        sendToWebView("goToLocation", { fraction: pct / 100 });
-        sentNav = true;
-      } else if (saved.cfi) {
+      // Prefer CFI when we have one — CFI is a DOM-anchored pointer and
+      // resolves to the same visible range regardless of flow mode. The
+      // percentage is a byte-weighted book fraction, and feeding it to
+      // view.js's goToFraction runs it through sectionProgress.getSection,
+      // which adds Number.EPSILON before the lookup. Saved percentages
+      // that happen to land on a section boundary (scroll-mode users who
+      // close while viewing the first line of a chapter) then round to
+      // the NEXT section, resuming several chapters off from where the
+      // user was.
+      if (saved.cfi) {
         sendToWebView("goToLocation", { cfi: saved.cfi });
+        sentNav = true;
+      } else if (typeof saved.percentage === "number" && saved.percentage > 0) {
+        sendToWebView("goToLocation", { fraction: saved.percentage / 100 });
         sentNav = true;
       }
     }

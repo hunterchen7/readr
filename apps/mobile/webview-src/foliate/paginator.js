@@ -1226,8 +1226,13 @@ export class Paginator extends HTMLElement {
             // to the anchor inside the outer continuous container.
             this.#focalIdx = index
             await this.#mountSection(index, { src, onLoad })
-            // Prime the window so neighbors are ready before user scrolls.
-            void this.#slideWindow(index)
+            // Await slide-window so all neighbor mounts settle (each goes
+            // placeholder→actual height) before we compute scroll target.
+            // Without awaiting, section.offsetTop shifts out from under
+            // the scrollToAnchor below and we land far off-target — a
+            // big TOC jump (e.g. Ch6 → Ch1) can end up at the END of the
+            // target chapter instead of the start.
+            await this.#slideWindow(index)
             const view = this.#views.get(index)
             if (!view) return
             const hasFocus = view.document?.hasFocus()
