@@ -1,14 +1,13 @@
 /**
  * Generates the HTML shell for the EPUB reader WebView.
  *
- * The reader's runtime logic (theming, tap handling, pagination,
- * selection, etc) lives in `webview-src/reader.ts` and is bundled by
- * `scripts/bundle-webview-assets.mjs` into
- * `assets/js/reader-bundle.js`. This file just emits the outer HTML
- * document: static CSS, polyfills for old WebViews, and `<script>`
- * tags that load foliate-js and the reader bundle. Runtime config
- * (bookUrl) is injected via `window.__READR_CONFIG` before the
- * reader bundle runs.
+ * The reader's runtime logic (parsing, rendering, theming, navigation,
+ * selection, annotations) lives in `webview-src/renderer/` and is
+ * bundled by `scripts/bundle-webview-assets.mjs` into
+ * `assets/js/renderer-bundle.js`. This file just emits the outer HTML
+ * document: static CSS, polyfills for old WebViews, and the `<script>`
+ * tag that loads the renderer bundle. Runtime config (bookUrl) is
+ * injected via `window.__READR_CONFIG` before the bundle runs.
  */
 
 const BUNDLED_FONTS = [
@@ -26,35 +25,10 @@ function fontFaceCss(): string {
 }
 
 // Polyfills for WebViews older than Chrome 117 (e.g. Supernote A5X
-// ships Chromium 96). foliate-js uses Object.groupBy / Map.groupBy /
-// findLast during EPUB metadata parsing; without these the book
-// fails to load with "Object.groupBy is not a function". Kept inline
-// so it's the very first script in the document.
+// ships Chromium 96). Kept inline so it's the very first script in the
+// document and runs before our bundle executes.
 const POLYFILLS = `
 (function () {
-  function groupBy(items, fn) {
-    var out = Object.create(null);
-    var i = 0;
-    for (var it of items) {
-      var k = fn(it, i++);
-      (out[k] = out[k] || []).push(it);
-    }
-    return out;
-  }
-  if (typeof Object.groupBy !== 'function') Object.groupBy = groupBy;
-  if (typeof Map.groupBy !== 'function') {
-    Map.groupBy = function (items, fn) {
-      var m = new Map();
-      var i = 0;
-      for (var it of items) {
-        var k = fn(it, i++);
-        var arr = m.get(k);
-        if (!arr) { arr = []; m.set(k, arr); }
-        arr.push(it);
-      }
-      return m;
-    };
-  }
   if (typeof Array.prototype.findLast !== 'function') {
     Array.prototype.findLast = function (fn, thisArg) {
       for (var i = this.length - 1; i >= 0; i--) {
@@ -74,6 +48,42 @@ const POLYFILLS = `
 })();
 `;
 
+// Dev iteration: `adb push assets/js/renderer-bundle.js /sdcard/readr/renderer-bundle.js`
+// lets us reload the renderer without rebuilding the APK. The loader below
+// tries the sdcard path first (no-op failure in production where nothing is
+// pushed) and falls through to the bundled asset.
+const BUNDLE_LOADER = `
+(function(){
+  var candidates = [
+    'file:///sdcard/readr/renderer-bundle.js',
+    'file:///android_asset/js/renderer-bundle.js'
+  ];
+  function load(i){
+    if (i >= candidates.length) {
+      document.getElementById('error').style.display='flex';
+      document.getElementById('error').textContent='Failed to load renderer bundle';
+      return;
+    }
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', candidates[i], true);
+    xhr.responseType = 'text';
+    xhr.onload = function(){
+      if (xhr.status === 0 || xhr.status === 200) {
+        var s = document.createElement('script');
+        s.text = xhr.responseText;
+        s.setAttribute('data-src', candidates[i]);
+        document.body.appendChild(s);
+      } else {
+        load(i + 1);
+      }
+    };
+    xhr.onerror = function(){ load(i + 1); };
+    xhr.send();
+  }
+  load(0);
+})();
+`;
+
 export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: string): string {
   const bg = initialBg || '#fff';
   const fg = initialFg || '#111';
@@ -90,8 +100,6 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: ${bg}; color: ${fg}; }
     #viewer { width: 100%; height: 100%; background: ${bg}; }
-    foliate-view { width: 100%; height: 100%; background: ${bg}; border: none; }
-    iframe { border: none; }
     #loading, #error {
       display: flex; justify-content: center; align-items: center;
       height: 100%; font-family: system-ui, sans-serif; padding: 24px; text-align: center;
@@ -100,14 +108,13 @@ export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: s
     #error { display: none; color: #dc2626; }
   </style>
   <script>${POLYFILLS}</script>
-  <script src="file:///android_asset/js/foliate-bundle.js"></script>
 </head>
 <body>
   <div id="loading">Loading book...</div>
   <div id="error"></div>
   <div id="viewer"></div>
   <script>window.__READR_CONFIG = ${config};</script>
-  <script src="file:///android_asset/js/reader-bundle.js"></script>
+  <script>${BUNDLE_LOADER}</script>
 </body>
 </html>`;
 }

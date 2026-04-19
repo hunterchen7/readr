@@ -35,6 +35,7 @@
     "expo-speech": "~13",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3",
+    "fflate": "^0.8.2",
     "foliate-js": "1.0.1",
     "lucide-react-native": "^1.8.0",
     "pdfjs-dist": "4.10.38",

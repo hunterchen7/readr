@@ -179,6 +179,33 @@ export default function ReaderScreen() {
   >([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
+  // Debug state — accumulates the last N bridge events so the test
+  // harness can inspect renderer state via uiautomator accessibility
+  // labels. Dev-only; guarded by __DEV__.
+  const [debugTrail, setDebugTrail] = useState<string>("");
+  const [visibleText, setVisibleText] = useState<string>("");
+  // Latest non-transient progressUpdated — stable source of truth for
+  // the test harness. Separate from the event trail, which gets
+  // churned by dev-mode hot-reload restored-storms.
+  const [latestProgress, setLatestProgress] = useState<string>("");
+  function logDebug(ev: string, data: unknown) {
+    if (!__DEV__) return;
+    try {
+      const line = `${ev}:${JSON.stringify(data)}`;
+      setDebugTrail((prev) => {
+        const parts = prev ? prev.split("\u001f") : [];
+        parts.push(line);
+        // Keep the last 8 events to fit within accessibility-label size limits.
+        return parts.slice(-8).join("\u001f");
+      });
+      if (ev === "progressUpdated" && data && !(data as { transient?: boolean }).transient) {
+        setLatestProgress(JSON.stringify(data));
+      }
+    } catch {
+      /* ignore serialisation errors */
+    }
+  }
+
   // Apply the theme's brightness override while the reader is mounted.
   // Only uses brightness if permission is already granted — never requests
   // on reader open (requestPermissionsAsync navigates to system settings
@@ -471,33 +498,25 @@ export default function ReaderScreen() {
   // will start persisting afterwards. Called from both the `ready`
   // handler (if load finished first) and from load() (if ready fired
   // first and buffered itself via pendingReadyRestoreRef).
+  const restoreSentRef = useRef(false);
   const applySavedRestore = useCallback(() => {
+    console.log("[RN] applySavedRestore called, already sent=", restoreSentRef.current);
+    if (restoreSentRef.current) return;
+    restoreSentRef.current = true;
     const saved = savedPositionRef.current;
     let sentNav = false;
     if (saved) {
-      // Prefer CFI when we have one — CFI is a DOM-anchored pointer and
-      // resolves to the same visible range regardless of flow mode. The
-      // percentage is a byte-weighted book fraction, and feeding it to
-      // view.js's goToFraction runs it through sectionProgress.getSection,
-      // which adds Number.EPSILON before the lookup. Saved percentages
-      // that happen to land on a section boundary (scroll-mode users who
-      // close while viewing the first line of a chapter) then round to
-      // the NEXT section, resuming several chapters off from where the
-      // user was.
-      if (saved.cfi) {
-        sendToWebView("goToLocation", { cfi: saved.cfi });
-        sentNav = true;
-      } else if (typeof saved.percentage === "number" && saved.percentage > 0) {
-        sendToWebView("goToLocation", { fraction: saved.percentage / 100 });
+      const pct = typeof saved.percentage === "number" ? saved.percentage : 0;
+      const payload: Record<string, unknown> = {};
+      if (saved.cfi) payload.cfi = saved.cfi;
+      if (pct > 0) payload.fraction = pct / 100;
+      if (Object.keys(payload).length > 0) {
+        sendToWebView("goToLocation", payload);
         sentNav = true;
       }
     }
     hasRestoredRef.current = true;
     if (!sentNav) {
-      // No saved position — nothing will trigger a 'restored' message
-      // from the WebView, so lift the curtain immediately. The first
-      // page that init() already rendered is the correct starting
-      // point for a fresh book.
       setReaderVisible(true);
     }
   }, [sendToWebView]);
@@ -546,30 +565,11 @@ export default function ReaderScreen() {
 
   function handleThemeChange(newTheme: ReaderTheme) {
     setTheme(newTheme);
-    // Toggling between paginated and scroll mode: snapshot the CFI
-    // and replay via goToLocation AFTER the layout flip. Fraction-
-    // based replay drifts because page mode reports the book fraction
-    // at the END of the current page (via sectionProgress.getProgress
-    // with pageFraction=size). getSection then adds Number.EPSILON on
-    // replay and lands on the NEXT page — +~0.2% per scroll→page cycle.
-    // CFI is a DOM-anchored pointer, invariant across the mode flip.
-    const prevMode = theme.pageTurnMode ?? "both";
-    const nextMode = newTheme.pageTurnMode ?? "both";
-    const modeChanged =
-      (prevMode === "scroll") !== (nextMode === "scroll");
-    const snapshotAnchor = modeChanged ? lastAnchorFracRef.current : null;
+    // The new renderer handles mode-change anchor preservation itself
+    // (captures a DOM element, flips CSS, scrolls to the same element
+    // in the new layout). RN just forwards the theme — no fraction
+    // replay needed.
     sendToWebView("setTheme", { ...newTheme, isEink: display.isEink });
-    if (snapshotAnchor != null) {
-      // Freeze anchor from tap-time through the replay settle. Post-
-      // replay relocates can report anchors that drift a few pixels
-      // below the one we sent (viewport-top rounding), which would
-      // compound into page-level backward drift over repeated toggles.
-      anchorMuteUntilRef.current = Date.now() + 1500;
-      setTimeout(() => {
-        sendToWebView("goToLocation", { fraction: snapshotAnchor });
-      }, 400);
-    }
-    // Fire-and-forget persistence — failure is non-fatal.
     saveReaderPrefs({ theme: newTheme });
   }
 
@@ -610,12 +610,19 @@ export default function ReaderScreen() {
   function handleMessage(event: { nativeEvent: { data: string } }) {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === "restored" || msg.type === "ready") {
+        console.log("[RN] <- bridge:", msg.type, JSON.stringify(msg.payload)?.slice(0, 80));
+      }
+      logDebug(msg.type, msg.payload);
       switch (msg.type) {
         case "debug":
           console.log("[WebView]", msg.payload?.msg);
           break;
         case "error":
           console.error("[WebView Error]", msg.payload?.message);
+          break;
+        case "visibleText":
+          setVisibleText(String(msg.payload?.text ?? ""));
           break;
         case "ready":
           sendToWebView("setTheme", themeForWebView);
@@ -742,6 +749,12 @@ export default function ReaderScreen() {
           // (fired by foliate after scroll settles) will persist.
           if (bookId && hasRestoredRef.current && !msg.payload.transient) {
             upsertProgress(bookId, position);
+          }
+          // Dev-only: ask the renderer for its visible text on every
+          // settled progress update so the ADB test harness can compare
+          // what's on screen before/after mode toggles, TOC nav, etc.
+          if (__DEV__ && !msg.payload.transient) {
+            sendToWebView("getVisibleText", {});
           }
           break;
         }
@@ -1590,6 +1603,16 @@ export default function ReaderScreen() {
         onNextPage={handleTtsAdvance}
         onStop={handleStopTts}
       />
+
+      {__DEV__ ? (
+        <Text
+          style={styles.debugLayer}
+          testID="readr-debug"
+          allowFontScaling={false}
+        >
+          {`READR_DEBUG|latest=${latestProgress}|trail=${debugTrail}|visible=${visibleText.slice(0, 400)}`}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -1736,6 +1759,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     opacity: 0.85,
     fontVariant: ["tabular-nums"],
+  },
+  debugLayer: {
+    position: "absolute",
+    left: 1,
+    top: 1,
+    width: 2000,
+    height: 2,
+    color: "rgba(0,0,0,0.001)",
+    fontSize: 1,
+    overflow: "hidden" as const,
   },
 });
 
