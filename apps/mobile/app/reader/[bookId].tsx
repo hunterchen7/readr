@@ -184,10 +184,8 @@ export default function ReaderScreen() {
   // labels. Dev-only; guarded by __DEV__.
   const [debugTrail, setDebugTrail] = useState<string>("");
   const [visibleText, setVisibleText] = useState<string>("");
-  // Latest non-transient progressUpdated — stable source of truth for
-  // the test harness. Separate from the event trail, which gets
-  // churned by dev-mode hot-reload restored-storms.
   const [latestProgress, setLatestProgress] = useState<string>("");
+  const [cachedTocDbg, setCachedTocDbg] = useState<string>("");
   function logDebug(ev: string, data: unknown) {
     if (!__DEV__) return;
     try {
@@ -200,6 +198,9 @@ export default function ReaderScreen() {
       });
       if (ev === "progressUpdated" && data && !(data as { transient?: boolean }).transient) {
         setLatestProgress(JSON.stringify(data));
+      }
+      if (ev === "tocLoaded") {
+        setCachedTocDbg(JSON.stringify(data).slice(0, 8000));
       }
     } catch {
       /* ignore serialisation errors */
@@ -515,8 +516,13 @@ export default function ReaderScreen() {
         sentNav = true;
       }
     }
-    hasRestoredRef.current = true;
+    // When we DON'T nav (no saved position), unlock saves immediately —
+    // the renderer is already at its first-page default. When we DO nav,
+    // defer until `restored` arrives so an intervening progressUpdated
+    // (which happens before the nav's reportProgress lands) can't
+    // clobber the saved position with the pre-restore cover anchor.
     if (!sentNav) {
+      hasRestoredRef.current = true;
       setReaderVisible(true);
     }
   }, [sendToWebView]);
@@ -673,8 +679,11 @@ export default function ReaderScreen() {
           }
           break;
         case "restored":
-          // Foliate has laid out the resume position — safe to lift
-          // the RN curtain and show the WebView.
+          // Renderer has laid out the resume target — safe to lift the
+          // RN curtain, and also the point at which we unlock progress
+          // persistence (so pre-restore cover reports don't clobber
+          // the saved position).
+          hasRestoredRef.current = true;
           setReaderVisible(true);
           break;
         case "progressUpdated": {
@@ -748,7 +757,10 @@ export default function ReaderScreen() {
           // the DB at 60fps otherwise. The next non-transient relocate
           // (fired by foliate after scroll settles) will persist.
           if (bookId && hasRestoredRef.current && !msg.payload.transient) {
+            console.log(`[RN] upsertProgress sec=${msg.payload.sectionIndex} pct=${pct} cfi=${String(msg.payload.cfi).slice(0, 30)}`);
             upsertProgress(bookId, position);
+          } else if (bookId && !msg.payload.transient) {
+            console.log(`[RN] skipping save hasRestored=${hasRestoredRef.current}`);
           }
           // Dev-only: non-transient progressUpdated events now carry
           // an inline visibleSample; surface it to the harness via the
@@ -1610,7 +1622,7 @@ export default function ReaderScreen() {
           testID="readr-debug"
           allowFontScaling={false}
         >
-          {`READR_DEBUG|latest=${latestProgress}|trail=${debugTrail}|visible=${visibleText.slice(0, 400)}`}
+          {`READR_DEBUG|latest=${latestProgress}|toc=${cachedTocDbg}|trail=${debugTrail}|visible=${visibleText.slice(0, 400)}`}
         </Text>
       ) : null}
     </View>

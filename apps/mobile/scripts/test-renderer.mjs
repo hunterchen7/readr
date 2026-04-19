@@ -84,11 +84,15 @@ function clickableContainer(nodes, innerNode) {
 function parseDebugText(text) {
   if (!text || !text.startsWith('READR_DEBUG|')) return null;
   const latestStart = text.indexOf('|latest=');
+  const tocStart = text.indexOf('|toc=');
   const trailStart = text.indexOf('|trail=');
   const visibleStart = text.indexOf('|visible=');
   if (trailStart < 0) return null;
-  const latestRaw = latestStart >= 0
-    ? text.slice(latestStart + 8, trailStart)
+  const latestRaw = latestStart >= 0 && tocStart >= 0
+    ? text.slice(latestStart + 8, tocStart)
+    : '';
+  const tocRaw = tocStart >= 0
+    ? text.slice(tocStart + 5, trailStart)
     : '';
   const trail = visibleStart >= 0
     ? text.slice(trailStart + 7, visibleStart)
@@ -96,6 +100,8 @@ function parseDebugText(text) {
   const visible = visibleStart >= 0 ? text.slice(visibleStart + 9) : '';
   let latest = null;
   if (latestRaw) { try { latest = JSON.parse(latestRaw); } catch { /* ignore */ } }
+  let toc = null;
+  if (tocRaw) { try { toc = JSON.parse(tocRaw); } catch { /* ignore */ } }
   // UIAutomator converts the \u001f separator we use in RN to '.' when
   // emitting the XML. Events are `<name>:<json-payload>`; we find the
   // start of each event by looking for a literal separator + known
@@ -134,7 +140,7 @@ function parseDebugText(text) {
     const raw = trail.slice(startOfJson, end);
     events.push({ type: m[1], raw });
   }
-  return { trail, visible, events, latest };
+  return { trail, visible, events, latest, toc };
 }
 
 function extractDebug(nodes) {
@@ -223,6 +229,7 @@ async function openBookForTesting() {
         const nn = parseUi(dumpUI());
         const dbg = extractDebug(nn);
         if (dbg) {
+          if (dbg.toc && !cachedToc) cachedToc = dbg.toc;
           const tocEv = dbg.events.find((e) => e.type === 'tocLoaded');
           if (tocEv && !cachedToc) { try { cachedToc = JSON.parse(tocEv.raw); } catch {} }
           if (dbg.latest || dbg.events.some((e) => e.type === 'progressUpdated')) return dbg;
@@ -403,7 +410,12 @@ const tests = [
     async run() {
       // Pull a specific chapter from the debug tocLoaded event.
       await closeAnyDrawerOrSheet();
-      const toc = cachedToc;
+      let toc = cachedToc;
+      if (!toc) {
+        const st = await readReaderState();
+        toc = st.dbg?.toc ?? null;
+        if (toc) cachedToc = toc;
+      }
       if (!toc) throw new Error('no cached toc');
       const chapter = toc.chapters?.find((c) => /Chapter\s+3|Chapter\s+Three/i.test(c.label))
         ?? toc.chapters?.find((c) => /Introduction|Prologue/i.test(c.label))
