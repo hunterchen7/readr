@@ -194,8 +194,7 @@ async function connectDevClientIfNeeded() {
   if (!card) throw new Error('Dev launcher shown but no server card found');
   const c = boundsCenter(card.bounds);
   tap(c.x, c.y);
-  // Bundle + JS init — Metro may take a few seconds to serve.
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 90; i++) {
     await sleep(1000);
     const nn = parseUi(dumpUI());
     if (nn.some((n) => n.text === 'Library')) return;
@@ -203,6 +202,7 @@ async function connectDevClientIfNeeded() {
   throw new Error('Library did not appear after connecting to dev server');
 }
 
+let cachedToc = null;
 async function openBookForTesting() {
   // Prefer a book already in progress (CONTINUE button) so the
   // renderer resumes deep into text content and our mode-toggle
@@ -222,7 +222,11 @@ async function openBookForTesting() {
         await sleep(500);
         const nn = parseUi(dumpUI());
         const dbg = extractDebug(nn);
-        if (dbg?.latest || dbg?.events?.some((e) => e.type === 'progressUpdated')) return dbg;
+        if (dbg) {
+          const tocEv = dbg.events.find((e) => e.type === 'tocLoaded');
+          if (tocEv && !cachedToc) { try { cachedToc = JSON.parse(tocEv.raw); } catch {} }
+          if (dbg.latest || dbg.events.some((e) => e.type === 'progressUpdated')) return dbg;
+        }
       }
       throw new Error('Reader did not emit progressUpdated after opening book');
     }
@@ -315,6 +319,20 @@ async function readReaderState() {
   };
 }
 
+async function closeAnyDrawerOrSheet() {
+  // Tap the scrim / press back to close any open drawer or dropdown.
+  for (let i = 0; i < 3; i++) {
+    const nodes = parseUi(dumpUI());
+    // If we can still see the reader settings dropdown or TOC drawer
+    // by accessibility label, press back to dismiss.
+    const hasSettings = nodes.some((n) => n.text === 'Settings');
+    const hasTocPanel = nodes.some((n) => n.text === 'Contents' || n.text === 'Bookmarks');
+    if (!hasSettings && !hasTocPanel) return;
+    shell('input keyevent 4');
+    await sleep(400);
+  }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────
 
 const tests = [
@@ -377,6 +395,97 @@ const tests = [
           throw new Error(`visible text diverged: shared substring only "${sharedPrefix}" (${sharedPrefix.length} chars)`);
         }
         log('  shared text run:', sharedPrefix.slice(0, 80));
+      }
+    },
+  },
+  {
+    name: 'TOC navigation jumps to chosen chapter',
+    async run() {
+      // Pull a specific chapter from the debug tocLoaded event.
+      await closeAnyDrawerOrSheet();
+      const toc = cachedToc;
+      if (!toc) throw new Error('no cached toc');
+      const chapter = toc.chapters?.find((c) => /Chapter\s+3|Chapter\s+Three/i.test(c.label))
+        ?? toc.chapters?.find((c) => /Introduction|Prologue/i.test(c.label))
+        ?? toc.chapters?.[2];
+      if (!chapter) throw new Error('no suitable TOC entry');
+      log(`  jumping to "${chapter.label}" (${chapter.href})`);
+      await openToc();
+      // Find the TOC entry row. TOC items show the label as text.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const nodes = parseUi(dumpUI());
+        const row = nodes.find((n) => (n.text ?? '').trim() === chapter.label);
+        if (row) {
+          const wrapper = clickableContainer(nodes, row) ?? row;
+          const c = boundsCenter(wrapper.bounds);
+          tap(c.x, c.y);
+          break;
+        }
+        // TOC may need scroll if entry is below the fold.
+        const screen = screenSize();
+        swipe(screen.w >> 1, screen.h * 0.8, screen.w >> 1, screen.h * 0.3, 300);
+        await sleep(400);
+      }
+      await waitSettle(1500);
+
+      const after = await readReaderState();
+      if (!after.progress) throw new Error('no progress after TOC nav');
+      log('  landed:', { section: after.progress.sectionIndex, chapter: after.progress.chapter });
+      if (after.progress.chapter && after.progress.chapter.trim() !== chapter.label.trim()) {
+        // Chapter labels can differ slightly from TOC labels (e.g. with
+        // subtitle). Check that the href-derived section matches the
+        // spine index the TOC entry should have pointed to.
+        const hrefOk = (after.progress.chapterHref ?? '').includes(
+          chapter.href.split('#')[0]?.replace(/^\.\//, '') ?? '',
+        );
+        if (!hrefOk) {
+          throw new Error(`TOC nav landed on wrong chapter: ${after.progress.chapter} (wanted ${chapter.label})`);
+        }
+      }
+    },
+  },
+  {
+    name: 'close + reopen resumes to saved position',
+    async run() {
+      const snapshotBefore = await readReaderState();
+      if (!snapshotBefore.progress) throw new Error('no progress before close');
+      log('  before close:', {
+        section: snapshotBefore.progress.sectionIndex,
+        chapter: snapshotBefore.progress.chapter,
+        pct: snapshotBefore.progress.percentage,
+      });
+      const beforeVisible = snapshotBefore.visible.slice(0, 120);
+      log('  before visible:', beforeVisible);
+
+      // Back out to library, then re-open the book.
+      shell('input keyevent 4');
+      await waitSettle(1500);
+      // If the toggle mode left the reader's header open, a single back
+      // press goes to the library. Otherwise we may need another back.
+      for (let i = 0; i < 3; i++) {
+        const nodes = parseUi(dumpUI());
+        if (nodes.some((n) => n.text === 'Library' || n.text === 'CONTINUE' || (n['content-desc'] ?? '').startsWith('CONTINUE'))) break;
+        shell('input keyevent 4');
+        await waitSettle(700);
+      }
+      await openBookForTesting();
+      await waitSettle(2500);
+      const snapshotAfter = await readReaderState();
+      if (!snapshotAfter.progress) throw new Error('no progress after reopen');
+      log('  after reopen:', {
+        section: snapshotAfter.progress.sectionIndex,
+        chapter: snapshotAfter.progress.chapter,
+        pct: snapshotAfter.progress.percentage,
+      });
+      const afterVisible = snapshotAfter.visible.slice(0, 120);
+      log('  after visible:', afterVisible);
+
+      if (snapshotAfter.progress.sectionIndex !== snapshotBefore.progress.sectionIndex) {
+        throw new Error(`resume landed on different section: ${snapshotBefore.progress.sectionIndex} → ${snapshotAfter.progress.sectionIndex}`);
+      }
+      const deltaPct = Math.abs(snapshotAfter.progress.percentage - snapshotBefore.progress.percentage);
+      if (deltaPct > 1.5) {
+        throw new Error(`resume drift too large: ${deltaPct.toFixed(2)}%`);
       }
     },
   },
