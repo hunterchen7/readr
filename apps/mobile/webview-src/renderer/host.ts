@@ -592,18 +592,24 @@ export class RenderHost {
    * chain may not yet match the post-flip scroll container.
    */
   private scrollElementIntoView(el: HTMLElement): void {
-    const rect = el.getBoundingClientRect();
     const contentRect = this.contentEl.getBoundingClientRect();
     if (this.mode === 'scroll') {
+      const rect = el.getBoundingClientRect();
       const targetTop = rect.top - contentRect.top + this.contentEl.scrollTop;
       this.contentEl.scrollTo({ left: 0, top: Math.max(0, targetTop), behavior: 'auto' });
       return;
     }
-    // Paginated: pick the column containing the element's center x
-    // (left-edge rounding drops to the PREVIOUS column when the element
-    // sits fractionally before a boundary).
+    // Paginated: use the FIRST fragment's rect. getClientRects() returns
+    // one rect per CSS-column fragment; the element's own getBoundingClientRect
+    // spans ALL fragments (which for a multi-column section gives a huge
+    // bounding box whose center can land inside the NEXT section). Taking
+    // fragment[0] anchors us at the element's actual beginning.
+    const fragments = el.getClientRects();
+    const rect = fragments.length > 0 ? fragments[0] : el.getBoundingClientRect();
     const scrollStep = window.innerWidth;
-    const probeX = (rect.left + rect.right) / 2 - contentRect.left + this.contentEl.scrollLeft;
+    // Nudge 1px into the column so rounding errors at the exact column
+    // boundary don't drop us one column short.
+    const probeX = rect.left - contentRect.left + this.contentEl.scrollLeft + 1;
     const page = Math.max(0, Math.floor(probeX / scrollStep));
     this.contentEl.scrollTo({ left: page * scrollStep, top: 0, behavior: 'auto' });
   }
@@ -611,12 +617,14 @@ export class RenderHost {
   /** Scroll to a fraction of the whole book (0..1). */
   scrollToFraction(fraction: number): void {
     const f = Math.max(0, Math.min(1, fraction));
-    // Find section containing this fraction.
+    // Find section containing this fraction. Use f < end (strict) so an
+    // exact-boundary fraction lands on the STARTING section (the one
+    // whose start == f), not the preceding section whose end == f.
     let idx = this.book.spine.length - 1;
     for (let i = 0; i < this.book.spine.length; i++) {
       const start = this.sectionStartFractions[i] ?? 0;
       const end = this.sectionStartFractions[i + 1] ?? 1;
-      if (f >= start && f <= end) { idx = i; break; }
+      if (f >= start && f < end) { idx = i; break; }
     }
     const sec = this.sectionEls[idx];
     if (!sec) return;

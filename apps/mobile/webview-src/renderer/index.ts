@@ -233,12 +233,13 @@ function handleRnMessage(
                 host.scrollToSection(resolved.sectionIndex);
                 try { host.scrollToRange(resolved.range); } catch { /* ignore */ }
                 handled = true;
-              } else if (typeof fraction === 'number') {
-                // Spine-only CFI — fraction carries the within-section
-                // precision we need.
-                host.scrollToFraction(fraction);
-                handled = true;
               } else {
+                // Spine-only CFI — scroll to the RESOLVED section. The
+                // accompanying `fraction` is a global book-percentage,
+                // not within-section, so we can't trust it to land
+                // somewhere inside this section. Accept the slight
+                // imprecision (land at section start) for a correct
+                // section over the wrong section with "precise" offset.
                 host.scrollToSection(resolved.sectionIndex);
                 handled = true;
               }

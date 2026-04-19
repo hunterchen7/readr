@@ -16,6 +16,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 
 const log = (...x) => console.log('[harness]', ...x);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -270,19 +271,34 @@ function readerChromeVisible(nodes) {
     && nodes.some((n) => n['content-desc'] === 'Reader settings');
 }
 
+function hasRealBounds(n) {
+  // RN renders offscreen / collapsed views with [0,0][0,0] bounds.
+  // Only treat a label as "present" if its bounds form a real rect.
+  const b = boundsOf(n);
+  return !!b && b.x2 > b.x1 && b.y2 > b.y1;
+}
+
 function settingsDropdownOpen(nodes) {
-  // The Settings header in the dropdown is a non-clickable Text. Note
-  // that `n.clickable` is the string "false" (not a boolean), so
-  // compare explicitly.
-  return nodes.some((n) => n.text === 'Settings' && n.clickable !== 'true');
+  // The Settings header inside the dropdown is a non-clickable Text.
+  // `n.clickable` is the string "false" (not a boolean). The library's
+  // bottom-tab "Settings" is clickable so we exclude it; a stray
+  // zero-bounds sibling is RN measuring an offscreen sheet.
+  return nodes.some(
+    (n) => n.text === 'Settings'
+      && n.clickable !== 'true'
+      && hasRealBounds(n),
+  );
 }
 
 function tocDrawerOpen(nodes) {
-  // TOC drawer tabs are non-clickable Text labels.
+  // TOC drawer tabs are non-clickable Text labels. The reader screen
+  // mounts the drawer offscreen (bounds=[0,0][0,0]) until opened, so
+  // require real bounds to distinguish "mounted" from "visible".
   return nodes.some(
     (n) =>
       (n.text === 'Contents' || n.text === 'Bookmarks')
-      && n.clickable !== 'true',
+      && n.clickable !== 'true'
+      && hasRealBounds(n),
   );
 }
 
@@ -293,8 +309,14 @@ async function ensureChromeVisible() {
     // screen" immersive-mode toast) that may be covering our tap
     // targets.
     await dismissSystemPopupsIfAny();
-    const nodes = parseUi(dumpUI());
+    const xml = dumpUI();
+    const nodes = parseUi(xml);
     if (readerChromeVisible(nodes)) return nodes;
+    const hasDebug = xml.includes('READR_DEBUG');
+    const atLibrary = nodes.some((n) => n.text === 'Library');
+    if (process.env.HARNESS_DEBUG) {
+      log(`  ensureChromeVisible attempt=${attempt} hasDebug=${hasDebug} atLibrary=${atLibrary} dropdown=${settingsDropdownOpen(nodes)} drawer=${tocDrawerOpen(nodes)}`);
+    }
     if (settingsDropdownOpen(nodes) || tocDrawerOpen(nodes)) {
       shell('input keyevent 4');
       await sleep(500);
@@ -303,6 +325,11 @@ async function ensureChromeVisible() {
     tap(screen.w >> 1, screen.h >> 1);
     await sleep(700);
   }
+  // On failure, preserve the last dump + a screenshot for diagnosis.
+  try {
+    execFileSync('bash', ['-c', 'adb exec-out screencap -p > /tmp/harness-chrome-fail.png']);
+    writeFileSync('/tmp/harness-chrome-fail.xml', dumpUI());
+  } catch {}
   throw new Error('reader chrome never appeared (app may have left the reader)');
 }
 
