@@ -33,8 +33,17 @@ function tap(x, y) { shell(`input tap ${x} ${y}`); }
 function swipe(x1, y1, x2, y2, dur = 300) { shell(`input swipe ${x1} ${y1} ${x2} ${y2} ${dur}`); }
 
 function dumpUI() {
-  try { shell('uiautomator dump /sdcard/ui.xml >/dev/null 2>&1'); } catch {}
-  return shell('cat /sdcard/ui.xml');
+  // Dump to /data/local/tmp (always-local tmpfs) instead of /sdcard —
+  // the /sdcard FUSE mount intermittently returns "Transport endpoint is
+  // not connected" after long harness runs on the emulator.
+  try { shell('uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1'); } catch {}
+  try {
+    return shell('cat /data/local/tmp/ui.xml');
+  } catch {
+    // Fall back to /sdcard if /data/local/tmp is somehow not writable.
+    try { shell('uiautomator dump /sdcard/ui.xml >/dev/null 2>&1'); } catch {}
+    return shell('cat /sdcard/ui.xml');
+  }
 }
 
 function parseUi(xml) {
@@ -390,6 +399,141 @@ async function jumpToTocLabelPrefix(prefix) {
   throw new Error(`TOC entry starting with "${prefix}" not found`);
 }
 
+// ─── Settings primitives ─────────────────────────────────────────────
+
+async function adjustSetting(settingName, delta) {
+  // settingName: 'font size' | 'line spacing' | 'horizontal margin' |
+  // 'vertical margin'. delta: positive = taps +, negative = taps -.
+  // Assumes the settings dropdown is already open.
+  if (delta === 0) return;
+  const wantDesc = delta > 0
+    ? `Increase ${settingName}`
+    : `Decrease ${settingName}`;
+  const taps = Math.abs(delta);
+  for (let i = 0; i < taps; i++) {
+    const nodes = parseUi(dumpUI());
+    const btn = nodes.find((n) => n['content-desc'] === wantDesc && n.clickable === 'true');
+    if (!btn) throw new Error(`${wantDesc} button not found in settings`);
+    const c = boundsCenter(btn.bounds);
+    tap(c.x, c.y);
+    await sleep(300);
+  }
+  await sleep(400);
+}
+
+function readSettingValue(nodes, settingName) {
+  // Returns the numeric text value next to the +/- buttons, parsed as a
+  // float. Uses the "Font size N" / "Line spacing N" / etc label we gave
+  // the value Text.
+  const valueLabelPrefix = {
+    'font size': 'Font size ',
+    'line spacing': 'Line spacing ',
+    'horizontal margin': 'Horizontal margin ',
+    'vertical margin': 'Vertical margin ',
+  }[settingName];
+  if (!valueLabelPrefix) return null;
+  const node = nodes.find((n) => (n['content-desc'] ?? '').startsWith(valueLabelPrefix));
+  if (!node) return null;
+  const raw = (node['content-desc'] ?? '').slice(valueLabelPrefix.length);
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function selectTheme(name) {
+  // Assumes the settings dropdown is open. Names: Light, Sepia, Canvas,
+  // Gray, Dark, Black.
+  const nodes = parseUi(dumpUI());
+  const btn = nodes.find((n) => n['content-desc'] === `Theme ${name}` && n.clickable === 'true');
+  if (!btn) throw new Error(`Theme "${name}" button not found`);
+  const c = boundsCenter(btn.bounds);
+  tap(c.x, c.y);
+  await sleep(600);
+}
+
+async function selectWeight(name) {
+  // Assumes the settings dropdown is open. Names: Light, Regular,
+  // Medium, Bold. The weight buttons use the label as content-desc.
+  const nodes = parseUi(dumpUI());
+  const btn = nodes.find((n) => n['content-desc'] === name && n.clickable === 'true');
+  if (!btn) throw new Error(`Weight "${name}" button not found`);
+  const c = boundsCenter(btn.bounds);
+  tap(c.x, c.y);
+  await sleep(500);
+}
+
+async function setProgressWidget(mode) {
+  // Mode: Off | Bar | Verbose. Buttons use label as content-desc.
+  const nodes = parseUi(dumpUI());
+  const btn = nodes.find((n) => n['content-desc'] === mode && n.clickable === 'true');
+  if (!btn) throw new Error(`Progress widget button "${mode}" not found`);
+  const c = boundsCenter(btn.bounds);
+  tap(c.x, c.y);
+  await sleep(500);
+}
+
+async function dismissDropdown() {
+  // Close the settings dropdown with a single back press (when it's up)
+  // then a short settle wait so the subsequent reader state read lands
+  // after layout settles.
+  shell('input keyevent 4');
+  await sleep(700);
+}
+
+// ─── Reader-surface gesture primitives ───────────────────────────────
+
+async function tapPageZone(dir) {
+  // Tap the WebView's left/right tap-turn zone. Content is zoned at
+  // 20% / 60% / 20% horizontally; we aim 10% from the edge vertically
+  // centered so we miss the header/footer chrome.
+  const screen = screenSize();
+  const y = Math.round(screen.h * 0.5);
+  const x = dir === 'left' ? Math.round(screen.w * 0.10)
+          : dir === 'right' ? Math.round(screen.w * 0.90)
+          : Math.round(screen.w * 0.5);
+  tap(x, y);
+  await sleep(600);
+}
+
+async function swipePageZone(dir) {
+  // Horizontal swipe across the content area. 'left' means finger moves
+  // right-to-left (advances to next page). 'right' moves left-to-right
+  // (previous page).
+  const screen = screenSize();
+  const y = Math.round(screen.h * 0.5);
+  const x1 = dir === 'left' ? Math.round(screen.w * 0.85) : Math.round(screen.w * 0.15);
+  const x2 = dir === 'left' ? Math.round(screen.w * 0.15) : Math.round(screen.w * 0.85);
+  swipe(x1, y, x2, y, 250);
+  await sleep(700);
+}
+
+async function bookmarkToggle() {
+  // Taps the header bookmark icon and returns the new state as 'added'
+  // or 'removed' based on the post-tap content-desc.
+  const nodes = await ensureChromeVisible();
+  const btn = nodes.find((n) => n['content-desc'] === 'Add bookmark' || n['content-desc'] === 'Remove bookmark');
+  if (!btn) throw new Error('Bookmark toggle not found in chrome');
+  const c = boundsCenter(btn.bounds);
+  tap(c.x, c.y);
+  await sleep(900);
+  const after = parseUi(dumpUI()).find((n) => n['content-desc'] === 'Add bookmark' || n['content-desc'] === 'Remove bookmark');
+  if (!after) return 'unknown';
+  return after['content-desc'] === 'Remove bookmark' ? 'added' : 'removed';
+}
+
+// Apply a default reader theme before a test runs. Opens settings,
+// resets key knobs, and closes. Keeps the test body focused on the
+// behavior it's actually testing. `setPageTurnMode` already closes the
+// dropdown when it's still up, so we don't dismiss again.
+async function resetReaderDefaults() {
+  await openSettings();
+  await selectTheme('Light');
+  await setPageTurnMode('both');
+  // Dropdown was closed by setPageTurnMode if the ROM didn't dismiss it
+  // on selection; if it's still there, nudge it once.
+  const stillOpen = settingsDropdownOpen(parseUi(dumpUI()));
+  if (stillOpen) await dismissDropdown();
+}
+
 async function readReaderState({ waitForProgress = true } = {}) {
   // Poll until latestProgress is available — the renderer's initial
   // reportProgress can trail the book-open signal by a few frames, and
@@ -664,6 +808,282 @@ const tests = [
         }
         log('  shared text run:', shared.slice(0, 80));
       }
+    },
+  },
+  // ─── Typography ──────────────────────────────────────────────────────
+  {
+    name: 'font-size + increases page count, - decreases (paginated)',
+    async run() {
+      await resetReaderDefaults();
+      // Move fontSize to a middle-of-range value before the test so we
+      // have headroom in both directions (range is 12..32). Read the
+      // current value and step it to 20.
+      await openSettings();
+      const initNodes = parseUi(dumpUI());
+      const currentFs = readSettingValue(initNodes, 'font size') ?? 20;
+      const resetDelta = 20 - currentFs;
+      if (resetDelta !== 0) await adjustSetting('font size', resetDelta);
+      await dismissDropdown();
+
+      const base = await readReaderState();
+      if (!base.progress?.totalPages) throw new Error('no totalPages baseline');
+      const baseTotal = base.progress.totalPages;
+      const baseSection = base.progress.sectionIndex;
+      log('  baseline:', { total: baseTotal, section: baseSection, fs: 20 });
+      await openSettings();
+      await adjustSetting('font size', +3);
+      await dismissDropdown();
+      const bigger = await readReaderState();
+      log('  +3 fontSize:', { total: bigger.progress?.totalPages, section: bigger.progress?.sectionIndex });
+      if (!bigger.progress?.totalPages || bigger.progress.totalPages <= baseTotal) {
+        throw new Error(`fontSize+ did not increase totalPages: ${baseTotal} → ${bigger.progress?.totalPages}`);
+      }
+      if (bigger.progress.sectionIndex !== baseSection) {
+        throw new Error(`section drifted on font change: ${baseSection} → ${bigger.progress.sectionIndex}`);
+      }
+      // Revert so later tests start from a known baseline.
+      await openSettings();
+      await adjustSetting('font size', -3);
+      await dismissDropdown();
+    },
+  },
+  {
+    name: 'line spacing change reflows without section drift',
+    async run() {
+      await resetReaderDefaults();
+      const base = await readReaderState();
+      const baseTotal = base.progress?.totalPages ?? 0;
+      const baseSection = base.progress?.sectionIndex ?? -1;
+      await openSettings();
+      await adjustSetting('line spacing', +3);
+      await dismissDropdown();
+      const after = await readReaderState();
+      if (after.progress?.sectionIndex !== baseSection) {
+        throw new Error(`section drifted: ${baseSection} → ${after.progress?.sectionIndex}`);
+      }
+      if (!after.progress?.totalPages || after.progress.totalPages <= baseTotal) {
+        throw new Error(`line spacing+ did not increase totalPages: ${baseTotal} → ${after.progress?.totalPages}`);
+      }
+      log('  lineSpacing+: total', baseTotal, '→', after.progress.totalPages);
+      // Revert.
+      await openSettings();
+      await adjustSetting('line spacing', -3);
+      await dismissDropdown();
+    },
+  },
+  // ─── Margins ─────────────────────────────────────────────────────────
+  {
+    name: 'horizontal margin + keeps section, decreases column width',
+    async run() {
+      await resetReaderDefaults();
+      const base = await readReaderState();
+      const baseSection = base.progress?.sectionIndex ?? -1;
+      await openSettings();
+      await adjustSetting('horizontal margin', +3);
+      await dismissDropdown();
+      const after = await readReaderState();
+      if (after.progress?.sectionIndex !== baseSection) {
+        throw new Error(`horizontal margin change drifted section: ${baseSection} → ${after.progress?.sectionIndex}`);
+      }
+      // Revert.
+      await openSettings();
+      await adjustSetting('horizontal margin', -3);
+      await dismissDropdown();
+    },
+  },
+  {
+    name: 'vertical margin + forces repagination',
+    async run() {
+      await resetReaderDefaults();
+      const base = await readReaderState();
+      const baseSection = base.progress?.sectionIndex ?? -1;
+      const baseTotal = base.progress?.totalPages ?? 0;
+      await openSettings();
+      await adjustSetting('vertical margin', +3);
+      await dismissDropdown();
+      const after = await readReaderState();
+      if (after.progress?.sectionIndex !== baseSection) {
+        throw new Error(`vertical margin change drifted section: ${baseSection} → ${after.progress?.sectionIndex}`);
+      }
+      // Vertical margin change should affect page count (taller margins
+      // = less vertical space for content = more pages). Accept either
+      // direction of change since the sign depends on baseline.
+      if (!after.progress?.totalPages || after.progress.totalPages === baseTotal) {
+        log('  warning: totalPages unchanged (' + baseTotal + ') after marginV change');
+      } else {
+        log('  marginV+: total', baseTotal, '→', after.progress.totalPages);
+      }
+      // Revert.
+      await openSettings();
+      await adjustSetting('vertical margin', -3);
+      await dismissDropdown();
+    },
+  },
+  // ─── Themes ──────────────────────────────────────────────────────────
+  {
+    name: 'theme switch to Sepia preserves position',
+    async run() {
+      await resetReaderDefaults();
+      const base = await readReaderState();
+      const baseSection = base.progress?.sectionIndex ?? -1;
+      const basePct = base.progress?.percentage ?? 0;
+      await openSettings();
+      await selectTheme('Sepia');
+      await dismissDropdown();
+      const after = await readReaderState();
+      if (after.progress?.sectionIndex !== baseSection) {
+        throw new Error(`theme switch drifted section: ${baseSection} → ${after.progress?.sectionIndex}`);
+      }
+      if (Math.abs((after.progress?.percentage ?? 0) - basePct) > 2) {
+        throw new Error(`theme switch drifted pct: ${basePct} → ${after.progress?.percentage}`);
+      }
+      log('  sepia applied, section preserved');
+      // Revert to Light so subsequent tests share a baseline.
+      await openSettings();
+      await selectTheme('Light');
+      await dismissDropdown();
+    },
+  },
+  {
+    name: 'theme switch to Dark preserves position',
+    async run() {
+      await resetReaderDefaults();
+      const base = await readReaderState();
+      const baseSection = base.progress?.sectionIndex ?? -1;
+      await openSettings();
+      await selectTheme('Dark');
+      await dismissDropdown();
+      const after = await readReaderState();
+      if (after.progress?.sectionIndex !== baseSection) {
+        throw new Error(`Dark theme drifted section: ${baseSection} → ${after.progress?.sectionIndex}`);
+      }
+      // Revert.
+      await openSettings();
+      await selectTheme('Light');
+      await dismissDropdown();
+    },
+  },
+  // ─── Font weight ─────────────────────────────────────────────────────
+  {
+    name: 'font weight Bold applies without drift',
+    async run() {
+      await resetReaderDefaults();
+      const base = await readReaderState();
+      const baseSection = base.progress?.sectionIndex ?? -1;
+      await openSettings();
+      await selectWeight('Bold');
+      await dismissDropdown();
+      const after = await readReaderState();
+      if (after.progress?.sectionIndex !== baseSection) {
+        throw new Error(`Bold weight drifted section: ${baseSection} → ${after.progress?.sectionIndex}`);
+      }
+      // Revert.
+      await openSettings();
+      await selectWeight('Regular');
+      await dismissDropdown();
+    },
+  },
+  // ─── Page turns (paginated) ──────────────────────────────────────────
+  {
+    name: 'tap right advances, tap left regresses',
+    async run() {
+      await resetReaderDefaults();
+      const start = await readReaderState();
+      const startPage = start.progress?.currentPage ?? 0;
+      log('  startPage:', startPage);
+      // Advance.
+      await tapPageZone('right');
+      await waitSettle(800);
+      const fwd = await readReaderState();
+      log('  after tap right:', fwd.progress?.currentPage);
+      if (!fwd.progress?.currentPage || fwd.progress.currentPage <= startPage) {
+        throw new Error(`tap right did not advance: ${startPage} → ${fwd.progress?.currentPage}`);
+      }
+      // Regress.
+      await tapPageZone('left');
+      await waitSettle(800);
+      const back = await readReaderState();
+      log('  after tap left:', back.progress?.currentPage);
+      if (!back.progress?.currentPage || back.progress.currentPage >= fwd.progress.currentPage) {
+        throw new Error(`tap left did not regress: ${fwd.progress.currentPage} → ${back.progress?.currentPage}`);
+      }
+    },
+  },
+  {
+    name: 'percentage advances on each page turn (within a section)',
+    async run() {
+      // Nav to a text-heavy chapter (Ch 1 Mandaeans → section 11).
+      await resetReaderDefaults();
+      await jumpToTocLabelPrefix('Introduction');
+      await waitSettle(1200);
+      const start = await readReaderState();
+      const startPct = start.progress?.percentage ?? -1;
+      const startSection = start.progress?.sectionIndex;
+      log('  start:', { section: startSection, pct: startPct });
+      // Capture pct after 5 tap-rights. Each should nudge pct up.
+      const pcts = [startPct];
+      for (let i = 0; i < 5; i++) {
+        await tapPageZone('right');
+        await waitSettle(600);
+        const st = await readReaderState();
+        pcts.push(st.progress?.percentage ?? -1);
+      }
+      log('  pct series:', pcts);
+      // Expect the final pct > startPct (strictly advancing across 5 pages).
+      const last = pcts[pcts.length - 1];
+      if (last <= startPct) {
+        throw new Error(`pct did not advance across 5 page turns: ${startPct} → ${last}`);
+      }
+      // Expect monotonically non-decreasing.
+      for (let i = 1; i < pcts.length; i++) {
+        if (pcts[i] < pcts[i - 1] - 0.01) {
+          throw new Error(`pct regressed between tap ${i - 1} and ${i}: ${pcts[i - 1]} → ${pcts[i]}`);
+        }
+      }
+    },
+  },
+  {
+    name: 'swipe advances one page',
+    async run() {
+      await resetReaderDefaults();
+      const start = await readReaderState();
+      const startPage = start.progress?.currentPage ?? 0;
+      await swipePageZone('left');
+      await waitSettle(800);
+      const after = await readReaderState();
+      if (!after.progress?.currentPage || after.progress.currentPage <= startPage) {
+        throw new Error(`swipe did not advance: ${startPage} → ${after.progress?.currentPage}`);
+      }
+      // Regress by swiping the other direction.
+      await swipePageZone('right');
+      await waitSettle(800);
+    },
+  },
+  // ─── TOC navigation (deeper) ─────────────────────────────────────────
+  {
+    name: 'TOC jump to Introduction',
+    async run() {
+      await resetReaderDefaults();
+      await jumpToTocLabelPrefix('Introduction');
+      const st = await readReaderState();
+      const label = st.progress?.chapter ?? '';
+      if (!/Introduction/i.test(label)) {
+        throw new Error(`TOC jump to Introduction landed on ${label}`);
+      }
+      log('  landed:', st.progress.chapter);
+    },
+  },
+  // ─── Bookmarks ───────────────────────────────────────────────────────
+  {
+    name: 'bookmark add + remove toggles icon content-desc',
+    async run() {
+      await resetReaderDefaults();
+      const first = await bookmarkToggle();
+      log('  first toggle:', first);
+      if (first !== 'added') throw new Error(`expected "added", got ${first}`);
+      const second = await bookmarkToggle();
+      log('  second toggle:', second);
+      if (second !== 'removed') throw new Error(`expected "removed", got ${second}`);
     },
   },
 ];

@@ -88,6 +88,17 @@ export class RenderHost {
   /** Debounce timer for scroll-driven progress updates. */
   private scrollRaf = 0;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Column pitch for paginated mode. Always the scroll container's
+   * own width — NOT window.innerWidth, which can differ by a few px on
+   * Android WebView and accumulates into whole-column drift hundreds of
+   * pages in. Caller sites like recountPages, scrollToFraction, and the
+   * gesture handlers all route through this getter.
+   */
+  private get pageStep(): number {
+    return this.contentEl.clientWidth || window.innerWidth;
+  }
   /**
    * Wall-clock epoch. While `now() < scrollReportMutedUntil`, scroll
    * events do NOT trigger progress reports. We use this to protect the
@@ -255,6 +266,26 @@ export class RenderHost {
     const prev = this.currentTheme;
     this.currentTheme = theme;
 
+    // Capture an anchor BEFORE applying the CSS. After reflow, the
+    // element's layout position may shift hundreds of columns, leaving
+    // `getBoundingClientRect()` outside the viewport — which breaks both
+    // our "is lastAnchor still in view?" check and any re-probing at
+    // the fixed viewport point. Freezing the anchor pre-change gives
+    // the post-change scrollToAnchor a stable element to seek back to.
+    const willChangeLayout = this.layoutSig(theme) !== this.layoutSig(prev)
+      || (theme.pageTurnMode === 'scroll' ? 'scroll' : 'paginated') !== this.mode;
+    let preAnchor: LayoutAnchor | null = null;
+    let preAnchorSource: 'lastAnchor' | 'capture' = 'capture';
+    if (willChangeLayout) {
+      if (this.lastAnchor?.element?.isConnected) {
+        const r = this.lastAnchor.element.getBoundingClientRect();
+        const inView = r.right > 0 && r.bottom > 0
+          && r.left < window.innerWidth && r.top < window.innerHeight;
+        if (inView) { preAnchor = this.lastAnchor; preAnchorSource = 'lastAnchor'; }
+      }
+      if (!preAnchor) preAnchor = this.captureAnchor();
+    }
+
     // Push CSS variables to shadow :host via the outer host element.
     const hostEl = this.shadowRoot.host as HTMLElement;
     hostEl.style.setProperty('--bg', theme.bg ?? '#fff');
@@ -283,9 +314,8 @@ export class RenderHost {
     // backward by one unit.
     const nextMode: LayoutMode = theme.pageTurnMode === 'scroll' ? 'scroll' : 'paginated';
     if (nextMode !== this.mode) {
-      const anchor = (this.lastAnchor?.element?.isConnected ? this.lastAnchor : null)
-        ?? this.captureAnchor();
-      this.cb.onDebug(`modeFlip anchor section=${anchor?.sectionIndex} el=${anchor?.element?.tagName}`);
+      const anchor = preAnchor;
+      this.cb.onDebug(`modeFlip anchor section=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName}`);
       // Raise a same-bg cover during the flip so the user doesn't see
       // the column reflow + scroll-to-anchor stutter. Faded out a few
       // frames after the programmatic scroll lands.
@@ -309,13 +339,15 @@ export class RenderHost {
     } else {
       const layoutChanged = this.layoutSig(theme) !== this.layoutSig(prev);
       if (layoutChanged) {
-        const anchor = this.captureAnchor();
+        const anchor = preAnchor;
+        this.cb.onDebug(`layoutChange anchor=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName}`);
         this.scrollReportMutedUntil = performance.now() + 3000;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (anchor) this.scrollToAnchor(anchor);
             this.recountPages();
             this.reportProgressFor(anchor, false);
+            this.cb.onDebug(`layoutChange post scrollLeft=${this.contentEl.scrollLeft} reporting sec=${anchor?.sectionIndex}`);
           });
         });
       }
@@ -456,7 +488,7 @@ export class RenderHost {
     const finishPaging = (endX: number) => {
       if (!pagingActive) return;
       pagingActive = false;
-      const pageWidth = window.innerWidth;
+      const pageWidth = this.pageStep;
       const delta = endX - pagingStartX;
       const threshold = Math.max(40, pageWidth * 0.08);
       const startPage = Math.round(pagingStartScrollLeft / pageWidth);
@@ -606,7 +638,7 @@ export class RenderHost {
     // fragment[0] anchors us at the element's actual beginning.
     const fragments = el.getClientRects();
     const rect = fragments.length > 0 ? fragments[0] : el.getBoundingClientRect();
-    const scrollStep = window.innerWidth;
+    const scrollStep = this.pageStep;
     // Nudge 1px into the column so rounding errors at the exact column
     // boundary don't drop us one column short.
     const probeX = rect.left - contentRect.left + this.contentEl.scrollLeft + 1;
@@ -642,7 +674,7 @@ export class RenderHost {
       const pagesBefore = this.sectionPageCounts.slice(0, idx).reduce((a, b) => a + b, 0);
       const pagesInSec = this.sectionPageCounts[idx] ?? 1;
       const pageIdx = pagesBefore + Math.floor(withinSec * pagesInSec);
-      this.contentEl.scrollTo({ left: pageIdx * window.innerWidth, behavior: 'auto' });
+      this.contentEl.scrollTo({ left: pageIdx * this.pageStep, behavior: 'auto' });
     }
   }
 
@@ -667,7 +699,7 @@ export class RenderHost {
     // across columns. Element.getBoundingClientRect only returns the
     // first fragment's box in CSS multi-column, which made every
     // section look like a single page.
-    const scrollStep = window.innerWidth;
+    const scrollStep = this.pageStep;
     const contentLeft = this.contentEl.getBoundingClientRect().left;
     const scrollLeft = this.contentEl.scrollLeft;
     const total = Math.max(1, Math.round(this.contentEl.scrollWidth / scrollStep));
@@ -761,7 +793,7 @@ export class RenderHost {
     if (this.sectionPageCounts.length === this.book.spine.length) {
       totalPages = this.sectionPageCounts.reduce((a, b) => a + b, 0);
       if (this.mode === 'paginated' && this.sectionPageStart.length === this.sectionEls.length) {
-        const scrollStep = window.innerWidth;
+        const scrollStep = this.pageStep;
         const currentColumn = Math.max(0, Math.round(this.contentEl.scrollLeft / scrollStep));
         currentPage = Math.max(1, Math.min(totalPages, currentColumn + 1));
         const secStart = this.sectionPageStart[anchor.sectionIndex] ?? 0;
@@ -821,9 +853,14 @@ export class RenderHost {
       const absAnchorTop = this.contentEl.scrollTop + anchorRect.top - this.contentEl.getBoundingClientRect().top;
       return Math.max(0, Math.min(1, (absAnchorTop - absSecTop) / secHeight));
     }
-    // Paginated: based on column position.
-    const secWidth = sec.offsetWidth;
-    if (secWidth <= 0) return 0;
+    // Paginated: the section's REAL horizontal span across all its
+    // columns, NOT offsetWidth. Chromium returns offsetWidth as the
+    // first-fragment width (~1 column) for block elements in CSS
+    // multi-column, so (anchorX - secStartX) / offsetWidth saturates
+    // at 1 after the first page turn and the reported fraction (and
+    // percentage) stops advancing per-page.
+    const pagesInSec = this.sectionPageCounts[anchor.sectionIndex] ?? 1;
+    const secWidth = Math.max(1, pagesInSec * this.pageStep);
     const contentLeft = this.contentEl.getBoundingClientRect().left;
     const absSecStartX = this.contentEl.scrollLeft + secRect.left - contentLeft;
     const absAnchorX = this.contentEl.scrollLeft + anchorRect.left - contentLeft;
@@ -836,7 +873,7 @@ export class RenderHost {
     if (this.mode === 'scroll') {
       this.contentEl.scrollBy({ top: -window.innerHeight * 0.9, behavior: 'auto' });
     } else {
-      this.contentEl.scrollBy({ left: -window.innerWidth, behavior: 'auto' });
+      this.contentEl.scrollBy({ left: -this.pageStep, behavior: 'auto' });
     }
   }
 
@@ -844,7 +881,7 @@ export class RenderHost {
     if (this.mode === 'scroll') {
       this.contentEl.scrollBy({ top: window.innerHeight * 0.9, behavior: 'auto' });
     } else {
-      this.contentEl.scrollBy({ left: window.innerWidth, behavior: 'auto' });
+      this.contentEl.scrollBy({ left: this.pageStep, behavior: 'auto' });
     }
   }
 

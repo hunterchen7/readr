@@ -241,6 +241,7 @@ function handleRnMessage(
                 // imprecision (land at section start) for a correct
                 // section over the wrong section with "precise" offset.
                 host.scrollToSection(resolved.sectionIndex);
+                post('debug', { msg: `after scrollToSection(${resolved.sectionIndex}) scrollLeft=${host.contentElement.scrollLeft} scrollTop=${host.contentElement.scrollTop}` });
                 handled = true;
               }
             }

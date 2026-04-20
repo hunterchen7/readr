@@ -106,6 +106,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
                 return (
                   <Pressable
                     key={p.label}
+                    accessibilityLabel={`Theme ${p.label}`}
                     style={[
                       styles.themeCell,
                       { backgroundColor: p.bg, borderColor: active ? fg : border },
@@ -123,6 +124,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             {/* Font family — dropdown button */}
             <Text style={[styles.label, { color: muted }]}>Font</Text>
             <Pressable
+              accessibilityLabel="Open font picker"
               style={[styles.dropdownBtn, { borderColor: border, backgroundColor: chipBg }]}
               onPress={() => setFontOpen(true)}
             >
@@ -148,6 +150,7 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
                       return (
                         <Pressable
                           key={f.label}
+                          accessibilityLabel={`Font ${f.label}`}
                           style={[styles.pickerItem, { borderBottomColor: border }, active && { backgroundColor: chipBg }]}
                           onPress={() => { update({ fontFamily: f.value }); setFontOpen(false); }}
                         >
@@ -179,13 +182,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             {/* Font size */}
             <Text style={[styles.label, { color: muted }]}>Size</Text>
             <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.max(12, theme.fontSize - 1) })}>
+              <Pressable accessibilityLabel="Decrease font size" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.max(12, theme.fontSize - 1) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>A-</Text>
               </Pressable>
               <View style={styles.stepperValue}>
-                <Text style={[styles.stepperValueText, { color: fg }]}>{theme.fontSize}px</Text>
+                <Text accessibilityLabel={`Font size ${theme.fontSize}`} style={[styles.stepperValueText, { color: fg }]}>{theme.fontSize}px</Text>
               </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.min(32, theme.fontSize + 1) })}>
+              <Pressable accessibilityLabel="Increase font size" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ fontSize: Math.min(32, theme.fontSize + 1) })}>
                 <Text style={[styles.stepperText, { color: fg, fontWeight: "700" }]}>A+</Text>
               </Pressable>
             </View>
@@ -193,13 +196,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
             {/* Line spacing */}
             <Text style={[styles.label, { color: muted }]}>Line spacing</Text>
             <View style={styles.stepperRow}>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ lineHeight: Math.max(1.2, +(theme.lineHeight - 0.1).toFixed(1)) })}>
+              <Pressable accessibilityLabel="Decrease line spacing" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ lineHeight: Math.max(1.2, +(theme.lineHeight - 0.1).toFixed(1)) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>-</Text>
               </Pressable>
               <View style={styles.stepperValue}>
-                <Text style={[styles.stepperValueText, { color: fg }]}>{theme.lineHeight.toFixed(1)}</Text>
+                <Text accessibilityLabel={`Line spacing ${theme.lineHeight.toFixed(1)}`} style={[styles.stepperValueText, { color: fg }]}>{theme.lineHeight.toFixed(1)}</Text>
               </View>
-              <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ lineHeight: Math.min(2.4, +(theme.lineHeight + 0.1).toFixed(1)) })}>
+              <Pressable accessibilityLabel="Increase line spacing" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ lineHeight: Math.min(2.4, +(theme.lineHeight + 0.1).toFixed(1)) })}>
                 <Text style={[styles.stepperText, { color: fg }]}>+</Text>
               </Pressable>
             </View>
@@ -239,13 +242,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
               const pctH = Math.round((theme.margin / screenWidth) * 100);
               return (
                 <View style={styles.stepperRow}>
-                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.max(0, theme.margin - stepH) })}>
+                  <Pressable accessibilityLabel="Decrease horizontal margin" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.max(0, theme.margin - stepH) })}>
                     <Text style={[styles.stepperText, { color: fg }]}>-</Text>
                   </Pressable>
                   <View style={styles.stepperValue}>
-                    <Text style={[styles.stepperValueText, { color: fg }]}>{pctH}%</Text>
+                    <Text accessibilityLabel={`Horizontal margin ${pctH}`} style={[styles.stepperValueText, { color: fg }]}>{pctH}%</Text>
                   </View>
-                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.min(maxH, theme.margin + stepH) })}>
+                  <Pressable accessibilityLabel="Increase horizontal margin" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ margin: Math.min(maxH, theme.margin + stepH) })}>
                     <Text style={[styles.stepperText, { color: fg }]}>+</Text>
                   </Pressable>
                 </View>
@@ -262,13 +265,13 @@ export function SettingsDropdown({ visible, onClose, theme, onThemeChange }: Set
               const pctV = Math.round((curV / screenHeight) * 100);
               return (
                 <View style={styles.stepperRow}>
-                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.max(0, curV - stepV) })}>
+                  <Pressable accessibilityLabel="Decrease vertical margin" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.max(0, curV - stepV) })}>
                     <Text style={[styles.stepperText, { color: fg }]}>-</Text>
                   </Pressable>
                   <View style={styles.stepperValue}>
-                    <Text style={[styles.stepperValueText, { color: fg }]}>{pctV}%</Text>
+                    <Text accessibilityLabel={`Vertical margin ${pctV}`} style={[styles.stepperValueText, { color: fg }]}>{pctV}%</Text>
                   </View>
-                  <Pressable style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(maxV, curV + stepV) })}>
+                  <Pressable accessibilityLabel="Increase vertical margin" style={[styles.stepperBtn, { borderColor: border }]} onPress={() => update({ marginV: Math.min(maxV, curV + stepV) })}>
                     <Text style={[styles.stepperText, { color: fg }]}>+</Text>
                   </Pressable>
                 </View>
