@@ -343,12 +343,23 @@ async function ensureChromeVisible() {
 }
 
 async function openSettings() {
+  // Idempotent: if the settings dropdown is already up, return
+  // without tapping — an extra tap would close it.
+  const pre = parseUi(dumpUI());
+  if (settingsDropdownOpen(pre)) return;
   const nodes = await ensureChromeVisible();
   const btn = nodes.find((n) => n['content-desc'] === 'Reader settings');
   if (!btn) throw new Error('Reader settings button not found');
   const c = boundsCenter(btn.bounds);
   tap(c.x, c.y);
   await sleep(900);
+  // Belt-and-braces: verify the dropdown actually opened. If the chrome
+  // was mid-fade when we tapped, the tap may have been swallowed.
+  for (let i = 0; i < 3; i++) {
+    if (settingsDropdownOpen(parseUi(dumpUI()))) return;
+    tap(c.x, c.y);
+    await sleep(700);
+  }
 }
 
 async function setPageTurnMode(mode) {
@@ -373,12 +384,20 @@ async function setPageTurnMode(mode) {
 }
 
 async function openToc() {
+  // Idempotent: if the TOC drawer is already up, return.
+  const pre = parseUi(dumpUI());
+  if (tocDrawerOpen(pre)) return;
   const nodes = await ensureChromeVisible();
   const btn = nodes.find((n) => n['content-desc'] === 'Table of contents');
   if (!btn) throw new Error('TOC button not found');
   const c = boundsCenter(btn.bounds);
   tap(c.x, c.y);
   await sleep(900);
+  for (let i = 0; i < 3; i++) {
+    if (tocDrawerOpen(parseUi(dumpUI()))) return;
+    tap(c.x, c.y);
+    await sleep(700);
+  }
 }
 
 async function jumpToTocLabelPrefix(prefix) {
@@ -739,8 +758,15 @@ const tests = [
   {
     name: 'close + reopen resumes to saved position',
     async run() {
+      // Nav somewhere with real content so we're not trivially testing
+      // resume-to-cover (section 0 matches itself by accident).
+      await jumpToTocLabelPrefix('Introduction');
+      await waitSettle(1500);
       const snapshotBefore = await readReaderState();
       if (!snapshotBefore.progress) throw new Error('no progress before close');
+      if (snapshotBefore.progress.sectionIndex === 0) {
+        throw new Error('test needs to start somewhere other than the cover');
+      }
       log('  before close:', {
         section: snapshotBefore.progress.sectionIndex,
         chapter: snapshotBefore.progress.chapter,

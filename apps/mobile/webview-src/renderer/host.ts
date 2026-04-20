@@ -90,6 +90,16 @@ export class RenderHost {
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
+   * True once the initial restore navigation has completed OR the user
+   * has interacted with the book. Until then, setTheme-induced layout
+   * changes DON'T scroll to the captured anchor — that anchor is the
+   * cover (since the host is still at scrollLeft=0 before goToLocation
+   * lands), and its scrollToAnchor fights the concurrent applySavedRestore
+   * on the RN side, yanking the viewport back to section 0.
+   */
+  private navigated = false;
+
+  /**
    * Column pitch for paginated mode. Always the scroll container's
    * own width — NOT window.innerWidth, which can differ by a few px on
    * Android WebView and accumulates into whole-column drift hundreds of
@@ -315,7 +325,8 @@ export class RenderHost {
     const nextMode: LayoutMode = theme.pageTurnMode === 'scroll' ? 'scroll' : 'paginated';
     if (nextMode !== this.mode) {
       const anchor = preAnchor;
-      this.cb.onDebug(`modeFlip anchor section=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName}`);
+      const skipAnchor = !this.navigated;
+      this.cb.onDebug(`modeFlip anchor section=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName} skipAnchor=${skipAnchor}`);
       // Raise a same-bg cover during the flip so the user doesn't see
       // the column reflow + scroll-to-anchor stutter. Faded out a few
       // frames after the programmatic scroll lands.
@@ -325,14 +336,14 @@ export class RenderHost {
       this.scrollReportMutedUntil = performance.now() + 3000;
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (anchor) this.scrollToAnchor(anchor);
+          // Before a goToLocation has landed, an anchor captured at the
+          // cover would scroll us back to 0 — losing the pending restore.
+          // The applySavedRestore path handles positioning; we just let
+          // the CSS apply without fighting for scroll.
+          if (anchor && !skipAnchor) this.scrollToAnchor(anchor);
           this.recountPages();
           this.cb.onDebug(`modeFlip post-anchor section=${anchor?.sectionIndex} scrollLeft=${this.contentEl.scrollLeft} scrollTop=${this.contentEl.scrollTop}`);
-          this.reportProgressFor(anchor, false);
-          // Drop the cover once the scroll has rendered. A single rAF
-          // isn't always enough for scrollTo(behavior:'auto') to land
-          // on Chromium/Android; three gives us ~50ms slack which is
-          // faster than the eye registers the reflow underneath.
+          if (anchor && !skipAnchor) this.reportProgressFor(anchor, false);
           requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => this.hideModeFlipCover())));
         });
       });
@@ -340,13 +351,14 @@ export class RenderHost {
       const layoutChanged = this.layoutSig(theme) !== this.layoutSig(prev);
       if (layoutChanged) {
         const anchor = preAnchor;
-        this.cb.onDebug(`layoutChange anchor=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName}`);
+        const skipAnchor = !this.navigated;
+        this.cb.onDebug(`layoutChange anchor=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName} skipAnchor=${skipAnchor}`);
         this.scrollReportMutedUntil = performance.now() + 3000;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            if (anchor) this.scrollToAnchor(anchor);
+            if (anchor && !skipAnchor) this.scrollToAnchor(anchor);
             this.recountPages();
-            this.reportProgressFor(anchor, false);
+            if (anchor && !skipAnchor) this.reportProgressFor(anchor, false);
             this.cb.onDebug(`layoutChange post scrollLeft=${this.contentEl.scrollLeft} reporting sec=${anchor?.sectionIndex}`);
           });
         });
@@ -598,12 +610,14 @@ export class RenderHost {
       return;
     }
     this.scrollElementIntoView(target);
+    this.navigated = true;
   }
 
   scrollToSection(index: number): void {
     const sec = this.sectionEls[index];
     if (!sec) return;
     this.scrollElementIntoView(sec);
+    this.navigated = true;
   }
 
   scrollToRange(range: Range): void {
@@ -628,7 +642,13 @@ export class RenderHost {
     if (this.mode === 'scroll') {
       const rect = el.getBoundingClientRect();
       const targetTop = rect.top - contentRect.top + this.contentEl.scrollTop;
-      this.contentEl.scrollTo({ left: 0, top: Math.max(0, targetTop), behavior: 'auto' });
+      // Direct assignment is synchronous; scrollTo with behavior: 'auto'
+      // is still async on some Android WebView builds and leaves a
+      // "just requested but not applied" state where a subsequent
+      // captureAnchor would see the OLD scrollLeft — racing any setTheme
+      // fired in the same turn.
+      this.contentEl.scrollLeft = 0;
+      this.contentEl.scrollTop = Math.max(0, targetTop);
       return;
     }
     // Paginated: use the FIRST fragment's rect. getClientRects() returns
@@ -643,7 +663,12 @@ export class RenderHost {
     // boundary don't drop us one column short.
     const probeX = rect.left - contentRect.left + this.contentEl.scrollLeft + 1;
     const page = Math.max(0, Math.floor(probeX / scrollStep));
-    this.contentEl.scrollTo({ left: page * scrollStep, top: 0, behavior: 'auto' });
+    // Direct assignment forces a synchronous scroll; scrollTo({behavior:
+    // 'auto'}) can defer to the next frame on Android WebView, which
+    // races any setTheme fired in the same turn (its captureAnchor would
+    // probe at the OLD scrollLeft and anchor on the wrong section).
+    this.contentEl.scrollLeft = page * scrollStep;
+    this.contentEl.scrollTop = 0;
   }
 
   /** Scroll to a fraction of the whole book (0..1). */
@@ -676,6 +701,7 @@ export class RenderHost {
       const pageIdx = pagesBefore + Math.floor(withinSec * pagesInSec);
       this.contentEl.scrollTo({ left: pageIdx * this.pageStep, behavior: 'auto' });
     }
+    this.navigated = true;
   }
 
   // ─── Page counting ─────────────────────────────────────────────────
@@ -827,6 +853,7 @@ export class RenderHost {
       }
     }
 
+    this.cb.onDebug(`emit progressUpdated sec=${anchor.sectionIndex} frac=${bookFraction.toFixed(4)} transient=${transient} scrollLeft=${this.contentEl.scrollLeft}`);
     this.cb.onProgressUpdated({
       fraction: bookFraction,
       sectionIndex: anchor.sectionIndex,
