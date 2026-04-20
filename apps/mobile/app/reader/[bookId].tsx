@@ -1094,8 +1094,20 @@ export default function ReaderScreen() {
   }
 
   function handleGoToBookmark(bm: Bookmark) {
+    // Pass percentage alongside the CFI so the renderer can resolve
+    // within-section precision (scrollToSectionFraction). Otherwise
+    // spine-only CFIs land on section top and a mid-section bookmark
+    // jumps to the start of the chapter.
+    const fraction =
+      typeof bm.position.percentage === "number"
+        ? bm.position.percentage / 100
+        : undefined;
     if (bm.position.cfi) {
-      sendToWebView("goToLocation", { cfi: bm.position.cfi });
+      const payload: Record<string, unknown> = { cfi: bm.position.cfi };
+      if (fraction != null) payload.fraction = fraction;
+      sendToWebView("goToLocation", payload);
+    } else if (fraction != null) {
+      sendToWebView("goToLocation", { fraction });
     } else if (bm.position.page != null) {
       sendToWebView("goToLocation", { page: bm.position.page });
     }
@@ -1478,16 +1490,24 @@ export default function ReaderScreen() {
         onJumpToBookmark={handleGoToBookmark}
         onDeleteBookmark={(id) => handleDeleteBookmark(id)}
         onJumpToNote={(n) => {
-          if (n.position.cfi)
-            sendToWebView("goToLocation", { cfi: n.position.cfi });
-          else
-            sendToWebView("goToLocation", {
-              fraction: n.position.percentage / 100,
-            });
+          const fraction =
+            typeof n.position.percentage === "number"
+              ? n.position.percentage / 100
+              : undefined;
+          if (n.position.cfi) {
+            const payload: Record<string, unknown> = { cfi: n.position.cfi };
+            if (fraction != null) payload.fraction = fraction;
+            sendToWebView("goToLocation", payload);
+          } else if (fraction != null) {
+            sendToWebView("goToLocation", { fraction });
+          }
         }}
         onDeleteNote={handleDeleteNote}
         onJumpToHighlight={(h) => {
-          if (h.cfiRange) sendToWebView("goToLocation", { cfi: h.cfiRange });
+          if (!h.cfiRange) return;
+          // Range CFI — the renderer resolves it to a real Range, so
+          // no fraction needed for within-section precision.
+          sendToWebView("goToLocation", { cfi: h.cfiRange });
         }}
         onDeleteHighlight={handleDeleteHighlight}
         theme={{ bg: theme.bg, fg: theme.fg }}

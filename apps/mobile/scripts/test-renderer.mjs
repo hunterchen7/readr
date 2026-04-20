@@ -1036,6 +1036,103 @@ const tests = [
     },
   },
   {
+    name: 'close + reopen preserves within-section offset',
+    async run() {
+      // Jump deep, then turn several pages within a section so the
+      // saved state is definitively NOT at section-start. A resume
+      // bug (like "snap to section top") would show section matches
+      // but pct drift > a page.
+      await resetReaderDefaults();
+      await jumpToTocLabelPrefix('Introduction');
+      await waitSettle(1500);
+      for (let i = 0; i < 5; i++) {
+        await tapPageZone('right');
+        await waitSettle(500);
+      }
+      await waitSettle(1000);
+      const before = await readReaderState();
+      if (!before.progress) throw new Error('no progress before close');
+      log('  before close:', { section: before.progress.sectionIndex, pct: before.progress.percentage, page: before.progress.currentPage });
+      const beforeVisible = before.visible.slice(0, 120);
+
+      // Close + reopen via cold-start.
+      shell('am force-stop com.readr.app');
+      await sleep(1500);
+      shell('am start -n com.readr.app/.MainActivity');
+      await sleep(4500);
+      await connectDevClientIfNeeded();
+      await openBookForTesting();
+      await waitSettle(2500);
+      const after = await readReaderState();
+      if (!after.progress) throw new Error('no progress after reopen');
+      log('  after reopen:', { section: after.progress.sectionIndex, pct: after.progress.percentage, page: after.progress.currentPage });
+      const afterVisible = after.visible.slice(0, 120);
+
+      if (after.progress.sectionIndex !== before.progress.sectionIndex) {
+        throw new Error(`section drift: ${before.progress.sectionIndex} → ${after.progress.sectionIndex}`);
+      }
+      const pctDrift = Math.abs((after.progress.percentage ?? 0) - (before.progress.percentage ?? 0));
+      if (pctDrift > 0.5) {
+        throw new Error(`pct drift too large: ${before.progress.percentage} → ${after.progress.percentage} (|Δ|=${pctDrift.toFixed(3)})`);
+      }
+      const overlap = commonSubstring(beforeVisible, afterVisible);
+      if (overlap.length < 40) {
+        throw new Error(`visible text diverged: shared "${overlap.slice(0, 60)}" (${overlap.length} chars)`);
+      }
+      log('  precision OK: pct Δ =', pctDrift.toFixed(3), 'overlap chars =', overlap.length);
+    },
+  },
+  {
+    name: 'mode flip mid-section preserves visible top content',
+    async run() {
+      // Go into Intro, turn several pages so we're MID-section, then
+      // flip to scroll. The top-of-viewport paragraph should stay
+      // visible (content continuity) across the flip.
+      await resetReaderDefaults();
+      await jumpToTocLabelPrefix('Introduction');
+      await waitSettle(1500);
+      for (let i = 0; i < 4; i++) {
+        await tapPageZone('right');
+        await waitSettle(500);
+      }
+      await waitSettle(800);
+      const paginated = await readReaderState();
+      log('  paginated:', { sec: paginated.progress?.sectionIndex, pct: paginated.progress?.percentage });
+      const paginatedVisible = paginated.visible;
+
+      await openSettings();
+      await setPageTurnMode('scroll');
+      await waitSettle(1800);
+
+      const scrolled = await readReaderState();
+      log('  scrolled :', { sec: scrolled.progress?.sectionIndex, pct: scrolled.progress?.percentage });
+      const scrolledVisible = scrolled.visible;
+
+      if (scrolled.progress?.sectionIndex !== paginated.progress?.sectionIndex) {
+        throw new Error(`section drifted on flip: ${paginated.progress?.sectionIndex} → ${scrolled.progress?.sectionIndex}`);
+      }
+      const overlap = commonSubstring(paginatedVisible, scrolledVisible);
+      if (overlap.length < 40) {
+        throw new Error(`visible-text overlap too small: "${overlap.slice(0, 60)}" (${overlap.length} chars)`);
+      }
+      log('  overlap chars =', overlap.length);
+
+      // Flip back to paginated — should also preserve.
+      await openSettings();
+      await setPageTurnMode('both');
+      await waitSettle(1800);
+      const back = await readReaderState();
+      log('  back to pagi:', { sec: back.progress?.sectionIndex, pct: back.progress?.percentage });
+      if (back.progress?.sectionIndex !== scrolled.progress?.sectionIndex) {
+        throw new Error(`section drifted on return flip: ${scrolled.progress?.sectionIndex} → ${back.progress?.sectionIndex}`);
+      }
+      const backOverlap = commonSubstring(scrolledVisible, back.visible);
+      if (backOverlap.length < 40) {
+        throw new Error(`return-flip overlap too small: "${backOverlap.slice(0, 60)}" (${backOverlap.length} chars)`);
+      }
+    },
+  },
+  {
     name: 'percentage advances on each page turn (within a section)',
     async run() {
       // Nav to a text-heavy chapter (Ch 1 Mandaeans → section 11).
