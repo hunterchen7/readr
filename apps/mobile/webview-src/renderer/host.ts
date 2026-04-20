@@ -180,6 +180,28 @@ export class RenderHost {
     el.style.opacity = '0';
   }
 
+  /**
+   * Marker class we put on the captured anchor element when flipping
+   * scroll → paginated. The injected CSS rule forces a column break
+   * before the marked element, so post-reflow it sits at the TOP of
+   * its column instead of mid-column. Without this trick the same
+   * paragraph that was at viewport y=0 in scroll mode lands at
+   * y=(natural-column-y) in paginated, producing a visible vertical
+   * jump even though we scrolled to the right column.
+   */
+  private flipBreakEl: HTMLElement | null = null;
+  private applyFlipBreak(el: HTMLElement): void {
+    this.clearFlipBreak();
+    el.classList.add('readr-flip-break');
+    this.flipBreakEl = el;
+  }
+  private clearFlipBreak(): void {
+    if (this.flipBreakEl) {
+      this.flipBreakEl.classList.remove('readr-flip-break');
+      this.flipBreakEl = null;
+    }
+  }
+
   private hostCss(): string {
     return `
       :host {
@@ -247,6 +269,13 @@ export class RenderHost {
       }
       #book-content[data-mode="paginated"] section.spine-section:first-child {
         break-before: auto;
+      }
+      /* Mode-flip alignment trick: the captured anchor element gets
+       * this class added when flipping scroll → paginated so it lands
+       * at the TOP of a column instead of mid-column. The class is
+       * scoped to paginated mode and removed on the next flip. */
+      #book-content[data-mode="paginated"] .readr-flip-break {
+        break-before: column !important;
       }
       #book-content[data-mode="scroll"] section.spine-section {
         padding: var(--margin-v, 24px) var(--margin-h, 48px);
@@ -331,6 +360,17 @@ export class RenderHost {
       // the column reflow + scroll-to-anchor stutter. Faded out a few
       // frames after the programmatic scroll lands.
       this.showModeFlipCover();
+      // Clear any column-break marker from the previous flip — it
+      // would persist into the new layout and force a stale boundary.
+      this.clearFlipBreak();
+      // Going TO paginated: tag the captured anchor with break-before:
+      // column so it lands at the TOP of its column post-reflow. Without
+      // this the anchor sits wherever its natural column placement puts
+      // it (often mid-column), so the visible content shifts vertically
+      // even though we technically scrolled to the right column.
+      if (nextMode === 'paginated' && anchor && !skipAnchor) {
+        this.applyFlipBreak(anchor.element);
+      }
       this.mode = nextMode;
       this.contentEl.dataset.mode = nextMode;
       this.scrollReportMutedUntil = performance.now() + 3000;
@@ -568,24 +608,30 @@ export class RenderHost {
   // ─── Layout anchors ────────────────────────────────────────────────
 
   captureAnchor(): LayoutAnchor | null {
-    // Find the top-left-most element currently in the viewport. We
-    // prefer text-bearing elements (p, div with text) so the anchor
-    // lands on stable content, not a decorative image or wrapper.
-    // Probe a few points deeper than the outer edge so we clear the
-    // section padding in both modes.
-    const probePoints: Array<[number, number]> = [
-      [window.innerWidth * 0.25, window.innerHeight * 0.1],
-      [window.innerWidth * 0.5, window.innerHeight * 0.2],
-      [window.innerWidth * 0.1, window.innerHeight * 0.05],
-      [2, 2],
+    // Find the topmost element currently in the viewport. Probe along
+    // the top edge first so the captured element is the one whose
+    // SCREEN-Y is closest to 0 — that minimises visual jump on a mode
+    // flip, since `scrollToAnchor` lands the captured element at y=0
+    // in the new layout. Probing deeper (y=10%vh) used to push the
+    // anchor 300px down, so post-flip everything jerked up by 300px.
+    // Sweep across the row at increasing y so we still find content
+    // when the very top is empty (section padding, leading whitespace).
+    const ys = [4, 12, 24, 48, window.innerHeight * 0.1, window.innerHeight * 0.2];
+    const xs = [
+      window.innerWidth * 0.25,
+      window.innerWidth * 0.5,
+      window.innerWidth * 0.75,
+      window.innerWidth * 0.1,
     ];
-    for (const [px, py] of probePoints) {
-      const hit = this.elementAtShadowPoint(px, py);
-      if (!hit) continue;
-      const section = findAncestor(hit, (el) => el.classList?.contains('spine-section'));
-      if (!section) continue;
-      const sectionIdx = Number(section.dataset.idx);
-      return { sectionIndex: sectionIdx, element: hit };
+    for (const py of ys) {
+      for (const px of xs) {
+        const hit = this.elementAtShadowPoint(px, py);
+        if (!hit) continue;
+        const section = findAncestor(hit, (el) => el.classList?.contains('spine-section'));
+        if (!section) continue;
+        const sectionIdx = Number(section.dataset.idx);
+        return { sectionIndex: sectionIdx, element: hit };
+      }
     }
     // Fallback: find the first section whose bounds intersect the
     // current viewport, anchor at its root.
@@ -617,6 +663,49 @@ export class RenderHost {
     const sec = this.sectionEls[index];
     if (!sec) return;
     this.scrollElementIntoView(sec);
+    this.navigated = true;
+  }
+
+  /**
+   * Scroll inside `sectionIndex` to the position corresponding to
+   * `globalFraction` (0..1, book-wide). Used by the resume path: the
+   * saved CFI pins the SECTION (so we never cross a boundary), and
+   * the global fraction supplies within-section precision via the
+   * known per-section start/end fractions.
+   */
+  scrollToSectionFraction(sectionIndex: number, globalFraction: number | undefined): void {
+    const sec = this.sectionEls[sectionIndex];
+    if (!sec) return;
+    if (typeof globalFraction !== 'number') {
+      this.scrollToSection(sectionIndex);
+      return;
+    }
+    const f = Math.max(0, Math.min(1, globalFraction));
+    const secStart = this.sectionStartFractions[sectionIndex] ?? 0;
+    const secEnd = this.sectionStartFractions[sectionIndex + 1] ?? 1;
+    const span = Math.max(0.0001, secEnd - secStart);
+    // Clamp the within-section fraction to [0, 1) — if `f` is past
+    // `secEnd` the saved progress was likely on a section boundary; we
+    // round DOWN to keep the user in this section rather than the next.
+    const withinSec = Math.max(0, Math.min(0.9999, (f - secStart) / span));
+
+    if (this.mode === 'scroll') {
+      const contentRect = this.contentEl.getBoundingClientRect();
+      const secRect = sec.getBoundingClientRect();
+      const absSecTop = this.contentEl.scrollTop + secRect.top - contentRect.top;
+      this.contentEl.scrollLeft = 0;
+      this.contentEl.scrollTop = Math.max(0, absSecTop + withinSec * sec.scrollHeight);
+      this.navigated = true;
+      return;
+    }
+    // Paginated: pick the page within the section.
+    if (this.sectionPageCounts.length !== this.book.spine.length) this.recountPages();
+    const pagesBefore = this.sectionPageCounts.slice(0, sectionIndex).reduce((a, b) => a + b, 0);
+    const pagesInSec = Math.max(1, this.sectionPageCounts[sectionIndex] ?? 1);
+    const pageOffset = Math.min(pagesInSec - 1, Math.floor(withinSec * pagesInSec));
+    const pageIdx = pagesBefore + pageOffset;
+    this.contentEl.scrollLeft = pageIdx * this.pageStep;
+    this.contentEl.scrollTop = 0;
     this.navigated = true;
   }
 

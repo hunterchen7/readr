@@ -234,14 +234,14 @@ function handleRnMessage(
                 try { host.scrollToRange(resolved.range); } catch { /* ignore */ }
                 handled = true;
               } else {
-                // Spine-only CFI — scroll to the RESOLVED section. The
-                // accompanying `fraction` is a global book-percentage,
-                // not within-section, so we can't trust it to land
-                // somewhere inside this section. Accept the slight
-                // imprecision (land at section start) for a correct
-                // section over the wrong section with "precise" offset.
-                host.scrollToSection(resolved.sectionIndex);
-                post('debug', { msg: `after scrollToSection(${resolved.sectionIndex}) scrollLeft=${host.contentElement.scrollLeft} scrollTop=${host.contentElement.scrollTop}` });
+                // Spine-only CFI — anchor to the resolved section first
+                // (so we never cross a section boundary), then refine
+                // within the section using `fraction`. The fraction is
+                // a book-global percentage; convert it to a within-
+                // section offset by clamping with the section's known
+                // start/end fractions, then scroll inside that section.
+                host.scrollToSectionFraction(resolved.sectionIndex, fraction);
+                post('debug', { msg: `after scrollToSectionFraction(${resolved.sectionIndex}, ${fraction}) scrollLeft=${host.contentElement.scrollLeft} scrollTop=${host.contentElement.scrollTop}` });
                 handled = true;
               }
             }
