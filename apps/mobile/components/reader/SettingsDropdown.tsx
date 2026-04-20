@@ -35,7 +35,9 @@ const FONT_FAMILIES = [
   { label: "Nunito", value: "'Nunito', sans-serif" },
   { label: "Fira Mono", value: "'Fira Mono', monospace" },
   { label: "IBM Plex Mono", value: "'IBM Plex Mono', monospace" },
-  { label: "OpenDyslexic", value: "'OpenDyslexic', serif" },
+  // OpenDyslexic removed — the .ttf wasn't bundled, so picking it
+  // silently fell back to the serif fallback and did nothing. Add
+  // the font to android/app/src/main/assets/fonts/ before re-listing.
 ] as const;
 
 const FONT_WEIGHTS = [

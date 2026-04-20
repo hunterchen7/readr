@@ -39,8 +39,10 @@ export class AnnotationLayer {
   /** cfi → record. Used so we can replay after a relayout. */
   private highlights = new Map<string, HighlightRecord>();
   private notes = new Map<string, NoteRecord>();
-  /** cfi → (rect, sectionIdx) for hit testing on tap. */
-  private hitRects: Array<{ cfi: string; kind: 'highlight' | 'note'; noteType?: NoteType; rect: DOMRect; sectionIndex: number }> = [];
+  /** cfi → live range for hit testing on tap. Rects computed lazily
+   * (per-tap) because viewport-relative rects drift with every scroll
+   * and page turn, so we can't cache them at draw time. */
+  private hitRanges: Array<{ cfi: string; kind: 'highlight' | 'note'; noteType?: NoteType; range: Range; sectionIndex: number }> = [];
 
   constructor(host: RenderHost) {
     this.host = host;
@@ -56,7 +58,7 @@ export class AnnotationLayer {
       ov.groups.clear();
       while (ov.el.firstChild) ov.el.removeChild(ov.el.firstChild);
     }
-    this.hitRects = [];
+    this.hitRanges = [];
     for (const [cfi, rec] of this.highlights) this.drawHighlight(cfi, rec.color);
     for (const [cfi, rec] of this.notes) this.drawNote(cfi, rec.noteType);
   }
@@ -113,15 +115,20 @@ export class AnnotationLayer {
         ov.groups.delete(cfi);
       }
     }
-    this.hitRects = this.hitRects.filter((r) => r.cfi !== cfi);
+    this.hitRanges = this.hitRanges.filter((r) => r.cfi !== cfi);
   }
 
-  /** Returns { cfi, kind } if the point hits an annotation; else null. */
+  /** Returns { cfi, kind } if the point hits an annotation; else null.
+   *  Recomputes each range's client rects on every call so scroll /
+   *  page turns don't stale the cache. */
   hitTest(x: number, y: number): { cfi: string; kind: 'highlight' | 'note'; noteType?: NoteType; rect: DOMRect } | null {
-    for (const h of this.hitRects) {
-      const r = h.rect;
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-        return { cfi: h.cfi, kind: h.kind, noteType: h.noteType, rect: r };
+    for (const h of this.hitRanges) {
+      const rects = h.range.getClientRects();
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i];
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          return { cfi: h.cfi, kind: h.kind, noteType: h.noteType, rect: r };
+        }
       }
     }
     return null;
@@ -155,8 +162,8 @@ export class AnnotationLayer {
       rect.setAttribute('fill', HIGHLIGHT_COLORS[color] ?? color);
       rect.setAttribute('fill-opacity', '0.45');
       g.appendChild(rect);
-      this.hitRects.push({ cfi, kind: 'highlight', rect: r, sectionIndex });
     }
+    this.hitRanges.push({ cfi, kind: 'highlight', range: liveRange, sectionIndex });
     ov.el.appendChild(g);
     const prev = ov.groups.get(cfi);
     if (prev) prev.remove();
@@ -191,8 +198,8 @@ export class AnnotationLayer {
       path.setAttribute('stroke-width', '1.5');
       path.setAttribute('fill', 'none');
       g.appendChild(path);
-      this.hitRects.push({ cfi, kind: 'note', noteType, rect: r, sectionIndex });
     }
+    this.hitRanges.push({ cfi, kind: 'note', noteType, range: liveRange, sectionIndex });
     ov.el.appendChild(g);
     const prev = ov.groups.get(cfi);
     if (prev) prev.remove();
