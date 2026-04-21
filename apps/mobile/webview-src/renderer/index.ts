@@ -97,11 +97,18 @@ async function boot(): Promise<void> {
     // round-tripping through RN for every tap.
     wireTapToTurn(host);
 
-    // After a tick, run a first page count (paginated only) and emit
-    // initial progress so RN has something to render before scroll.
+    // After a tick, emit initial progress so RN has something to render
+    // before scroll. DON'T run a full recountPages yet — only section 0
+    // is materialized on boot, so the page count would be wildly wrong
+    // (close to 1-2 pages total regardless of book size). We recompute
+    // when the user navigates AND kick off a background materialize
+    // drain so the full count settles within a few seconds.
     requestAnimationFrame(() => {
-      host.recountPages();
       host.reportProgress(false);
+      // Start idle-time drain ~1.5s after boot so the initial nav /
+      // restore path from RN has settled before we start grabbing
+      // main-thread time.
+      setTimeout(() => host.startBackgroundMaterialize(), 1500);
     });
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
@@ -209,8 +216,13 @@ function handleRnMessage(
       tapToTurn = mode === 'tap' || mode === 'both';
       host.setTheme(t);
       post('scrollModeChanged', { scrollMode });
-      // Any layout change may invalidate highlight rect positions.
-      requestAnimationFrame(() => annotations.rerenderAll());
+      // Annotation rects are laid out via live ranges and re-queried
+      // per-tap (no cache), so we don't need to rebuild them here —
+      // the SVG `<rect>` positions go stale visually though, because
+      // they're written once at draw time in section-relative coords.
+      // Defer the redraw until the mode-flip cover hides (~150ms) so
+      // the laggy bit happens off-screen on e-ink.
+      setTimeout(() => annotations.rerenderAll(), 200);
       break;
     }
     case 'goToLocation': {

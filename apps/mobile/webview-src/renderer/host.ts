@@ -140,6 +140,8 @@ export class RenderHost {
 
     this.computeSectionSizes();
     this.mountSections();
+    // Materialize section 0 immediately so first paint has real content.
+    this.materializeSection(0);
     this.wireListeners();
   }
 
@@ -381,7 +383,13 @@ export class RenderHost {
           // The applySavedRestore path handles positioning; we just let
           // the CSS apply without fighting for scroll.
           if (anchor && !skipAnchor) this.scrollToAnchor(anchor);
-          this.recountPages();
+          // Invalidate page counts instead of recomputing inline — the
+          // next reportProgress call (after the cover hides) will
+          // recount lazily. Eager recount here was the single largest
+          // cost on Supernote e-ink: iterating every materialized
+          // section's getClientRects forced a full layout pass.
+          this.sectionPageCounts = [];
+          this.sectionPageStart = [];
           this.cb.onDebug(`modeFlip post-anchor section=${anchor?.sectionIndex} scrollLeft=${this.contentEl.scrollLeft} scrollTop=${this.contentEl.scrollTop}`);
           if (anchor && !skipAnchor) this.reportProgressFor(anchor, false);
           requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => this.hideModeFlipCover())));
@@ -397,7 +405,9 @@ export class RenderHost {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (anchor && !skipAnchor) this.scrollToAnchor(anchor);
-            this.recountPages();
+            // Invalidate — reportProgressFor recomputes lazily.
+            this.sectionPageCounts = [];
+            this.sectionPageStart = [];
             if (anchor && !skipAnchor) this.reportProgressFor(anchor, false);
             this.cb.onDebug(`layoutChange post scrollLeft=${this.contentEl.scrollLeft} reporting sec=${anchor?.sectionIndex}`);
           });
@@ -474,6 +484,22 @@ export class RenderHost {
     this.sectionStartFractions[this.book.spine.length] = 1;
   }
 
+  /** Spine indices whose innerHTML has been populated. */
+  private materialized = new Set<number>();
+  /** Queue of spine indices to lazy-materialize on idle. */
+  private lazyQueue: number[] = [];
+  private lazyInflight = false;
+
+  /** Callback fired when a section transitions from placeholder to real
+   *  content — used by the annotations layer to replay highlights/notes
+   *  that hadn't yet been drawable. */
+  private onSectionMaterialized: ((index: number) => void) | null = null;
+
+  /** Register a listener for section-materialized events. */
+  setSectionMaterializedHandler(fn: (index: number) => void): void {
+    this.onSectionMaterialized = fn;
+  }
+
   private mountSections(): void {
     // Aggregate book-provided CSS into one <style> element inside the
     // shadow. Each spine item's styles are namespaced to the section
@@ -487,6 +513,12 @@ export class RenderHost {
     }
     this.bookStyle.textContent = allStyles.join('\n\n');
 
+    // Create one placeholder <section> per spine item up front (cheap:
+    // no innerHTML). Real content is populated lazily via
+    // `materializeSection` as the viewport approaches each section.
+    // Benefits: opening a large book no longer forces the browser to
+    // parse + layout every chapter on the main thread. Blocking time
+    // on the e-ink Supernote drops from several seconds to sub-second.
     for (const s of this.book.spine) {
       const el = document.createElement('section');
       el.className = 'spine-section';
@@ -494,9 +526,76 @@ export class RenderHost {
       el.dataset.href = s.href;
       el.dataset.path = s.path;
       el.setAttribute('data-readr-section', String(s.index));
-      el.innerHTML = s.bodyHtml;
+      // Rough size estimate so scroll math has something to work with
+      // before the real content lands. character count → ~1 line per
+      // 80 chars; use the current line-height (fallback 16 × 1.5).
+      const estLines = Math.max(4, Math.ceil(s.bodyHtml.length / 80));
+      const estHeight = estLines * 24;
+      el.style.minHeight = `${estHeight}px`;
+      // Empty body — gets populated on demand.
       this.contentEl.appendChild(el);
       this.sectionEls.push(el);
+    }
+  }
+
+  /** Populate a placeholder section with its actual HTML content.
+   *  Idempotent. */
+  materializeSection(index: number): void {
+    if (this.materialized.has(index)) return;
+    const el = this.sectionEls[index];
+    const spine = this.book.spine[index];
+    if (!el || !spine) return;
+    el.innerHTML = spine.bodyHtml;
+    el.style.minHeight = '';
+    this.materialized.add(index);
+    // Page counts are no longer accurate — drop them so the next
+    // reportProgress recomputes. Cheaper than eagerly remeasuring on
+    // every single materialize tick.
+    this.sectionPageCounts = [];
+    this.sectionPageStart = [];
+    if (this.onSectionMaterialized) {
+      try { this.onSectionMaterialized(index); } catch { /* ignore */ }
+    }
+  }
+
+  /** Ensure the target section and `radius` neighbors on each side are
+   *  materialized. Called from navigation + scroll-settle paths. */
+  ensureMaterializedAround(center: number, radius = 1): void {
+    const lo = Math.max(0, center - radius);
+    const hi = Math.min(this.book.spine.length - 1, center + radius);
+    for (let i = lo; i <= hi; i++) this.materializeSection(i);
+  }
+
+  /** Kick off a background drain that materializes remaining sections
+   *  during browser idle time. Runs one at a time so it never stalls
+   *  input events. */
+  startBackgroundMaterialize(): void {
+    if (this.lazyInflight) return;
+    this.lazyQueue = [];
+    for (let i = 0; i < this.book.spine.length; i++) {
+      if (!this.materialized.has(i)) this.lazyQueue.push(i);
+    }
+    if (this.lazyQueue.length === 0) return;
+    this.lazyInflight = true;
+    const drain = () => {
+      const next = this.lazyQueue.shift();
+      if (next == null) { this.lazyInflight = false; return; }
+      this.materializeSection(next);
+      this.scheduleIdle(drain);
+    };
+    this.scheduleIdle(drain);
+  }
+
+  private scheduleIdle(fn: () => void): void {
+    // Prefer requestIdleCallback — Chromium supports it in WebView.
+    // Fall back to requestAnimationFrame on older WebView builds.
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      w.requestIdleCallback(fn, { timeout: 500 });
+    } else {
+      requestAnimationFrame(() => requestAnimationFrame(fn));
     }
   }
 
@@ -583,6 +682,10 @@ export class RenderHost {
         this.scrollRaf = 0;
         if (performance.now() < this.scrollReportMutedUntil) return;
         this.reportProgress(true);
+        // As the user scrolls, keep the window of materialized sections
+        // in front of them. Uses the anchor's section as the center.
+        const anchor = this.captureAnchor();
+        if (anchor) this.ensureMaterializedAround(anchor.sectionIndex, 1);
       });
       if (this.settleTimer) clearTimeout(this.settleTimer);
       this.settleTimer = setTimeout(() => {
@@ -650,6 +753,7 @@ export class RenderHost {
   }
 
   scrollToAnchor(anchor: LayoutAnchor): void {
+    this.ensureMaterializedAround(anchor.sectionIndex, 1);
     const target = anchor.element;
     if (!target?.isConnected) {
       this.scrollToSection(anchor.sectionIndex);
@@ -660,6 +764,7 @@ export class RenderHost {
   }
 
   scrollToSection(index: number): void {
+    this.ensureMaterializedAround(index, 1);
     const sec = this.sectionEls[index];
     if (!sec) return;
     this.scrollElementIntoView(sec);
@@ -674,6 +779,7 @@ export class RenderHost {
    * known per-section start/end fractions.
    */
   scrollToSectionFraction(sectionIndex: number, globalFraction: number | undefined): void {
+    this.ensureMaterializedAround(sectionIndex, 1);
     const sec = this.sectionEls[sectionIndex];
     if (!sec) return;
     if (typeof globalFraction !== 'number') {
@@ -772,6 +878,7 @@ export class RenderHost {
       const end = this.sectionStartFractions[i + 1] ?? 1;
       if (f >= start && f < end) { idx = i; break; }
     }
+    this.ensureMaterializedAround(idx, 1);
     const sec = this.sectionEls[idx];
     if (!sec) return;
     const start = this.sectionStartFractions[idx] ?? 0;

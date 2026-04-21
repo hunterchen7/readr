@@ -49,6 +49,27 @@ export class AnnotationLayer {
     this.ensureOverlays();
     // Re-render on resize (e.g. orientation change or keyboard appearance).
     window.addEventListener('resize', () => this.rerenderAll());
+    // When a lazy-mounted section becomes real content, any highlights
+    // or notes in that section couldn't resolve before (the sanitized
+    // doc existed but the LIVE DOM didn't). Replay them now.
+    host.setSectionMaterializedHandler((index) => {
+      this.ensureOverlays();
+      this.replayForSection(index);
+    });
+  }
+
+  /** Draw any stored highlights/notes whose CFI resolves into the
+   *  given section. Idempotent: removes any existing group for the
+   *  cfi first via the draw methods. */
+  private replayForSection(sectionIndex: number): void {
+    for (const [cfi, rec] of this.highlights) {
+      const resolved = tryResolveSection(cfi, this.host);
+      if (resolved === sectionIndex) this.drawHighlight(cfi, rec.color);
+    }
+    for (const [cfi, rec] of this.notes) {
+      const resolved = tryResolveSection(cfi, this.host);
+      if (resolved === sectionIndex) this.drawNote(cfi, rec.noteType);
+    }
   }
 
   /** Tear down and rebuild all overlay SVGs from scratch. */
@@ -257,6 +278,14 @@ function walkPath(root: Node, path: number[]): Node | null {
     cur = cur.childNodes[i] ?? null;
   }
   return cur;
+}
+
+/** Returns the section index a CFI resolves to, or null if un-parseable.
+ *  Fast path: pick the spine step without recomputing the range. */
+function tryResolveSection(cfi: string, host: RenderHost): number | null {
+  const sections = host.book.spine.map((s) => ({ index: s.index, doc: s.doc }));
+  const r = resolveCfi(cfi, sections);
+  return r ? r.sectionIndex : null;
 }
 
 function squigglyPath(x1: number, x2: number, y: number): string {
