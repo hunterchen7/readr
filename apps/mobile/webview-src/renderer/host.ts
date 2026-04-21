@@ -100,16 +100,6 @@ export class RenderHost {
   private navigated = false;
 
   /**
-   * Column pitch for paginated mode. Always the scroll container's
-   * own width — NOT window.innerWidth, which can differ by a few px on
-   * Android WebView and accumulates into whole-column drift hundreds of
-   * pages in. Caller sites like recountPages, scrollToFraction, and the
-   * gesture handlers all route through this getter.
-   */
-  private get pageStep(): number {
-    return this.contentEl.clientWidth || window.innerWidth;
-  }
-  /**
    * Wall-clock epoch. While `now() < scrollReportMutedUntil`, scroll
    * events do NOT trigger progress reports. We use this to protect the
    * mode-flip's anchor-based report from being immediately overwritten
@@ -147,63 +137,6 @@ export class RenderHost {
 
   // ─── Theme / CSS-variable layer ────────────────────────────────────
 
-  private modeFlipCoverEl: HTMLElement | null = null;
-
-  private ensureModeFlipCover(): HTMLElement {
-    if (this.modeFlipCoverEl && this.modeFlipCoverEl.isConnected) return this.modeFlipCoverEl;
-    const el = document.createElement('div');
-    el.id = 'readr-mode-cover';
-    el.style.cssText = [
-      'position:fixed',
-      'inset:0',
-      'background:var(--bg,#fff)',
-      'opacity:0',
-      'pointer-events:none',
-      'z-index:99999',
-      'transition:opacity 80ms ease-out',
-    ].join(';');
-    this.shadowRoot.appendChild(el);
-    this.modeFlipCoverEl = el;
-    return el;
-  }
-
-  private showModeFlipCover(): void {
-    const el = this.ensureModeFlipCover();
-    el.style.transition = 'none';
-    el.style.opacity = '1';
-    // Force style flush so the opacity change lands before we continue.
-    void el.offsetHeight;
-  }
-
-  private hideModeFlipCover(): void {
-    const el = this.modeFlipCoverEl;
-    if (!el) return;
-    el.style.transition = 'opacity 120ms ease-out';
-    el.style.opacity = '0';
-  }
-
-  /**
-   * Marker class we put on the captured anchor element when flipping
-   * scroll → paginated. The injected CSS rule forces a column break
-   * before the marked element, so post-reflow it sits at the TOP of
-   * its column instead of mid-column. Without this trick the same
-   * paragraph that was at viewport y=0 in scroll mode lands at
-   * y=(natural-column-y) in paginated, producing a visible vertical
-   * jump even though we scrolled to the right column.
-   */
-  private flipBreakEl: HTMLElement | null = null;
-  private applyFlipBreak(el: HTMLElement): void {
-    this.clearFlipBreak();
-    el.classList.add('readr-flip-break');
-    this.flipBreakEl = el;
-  }
-  private clearFlipBreak(): void {
-    if (this.flipBreakEl) {
-      this.flipBreakEl.classList.remove('readr-flip-break');
-      this.flipBreakEl = null;
-    }
-  }
-
   private hostCss(): string {
     return `
       :host {
@@ -226,58 +159,33 @@ export class RenderHost {
         margin: 0;
         outline: none;
       }
-      #book-content[data-mode="scroll"] {
+      /* Layout is identical in both modes — block flow, vertical
+       * scroll. Mode toggle only changes the snap behavior + tap/swipe
+       * handling. Zero CSS reflow on mode flip (the single biggest
+       * source of lag on e-ink Supernote) and no multi-column math
+       * anywhere — each "page" is simply one viewport height tall. */
+      #book-content {
         overflow-y: auto;
         overflow-x: hidden;
-        column-count: initial;
-        column-width: auto;
-      }
-      #book-content[data-mode="paginated"] {
-        overflow-x: auto;
-        overflow-y: hidden;
-        /* Prevent native horizontal panning — our touch handler snaps
-         * to exactly one page per swipe instead. touch-action: pan-y
-         * keeps vertical panning handled natively (e.g. dragging a
-         * selection handle) but blocks the browser's fling-scroll
-         * that would otherwise skip many pages per swipe. */
-        touch-action: pan-y;
-        /* Vertical margin applied to the scroll CONTAINER (not each
-         * section) so every visible column has consistent top/bottom
-         * breathing room — break-inside:avoid-column makes the
-         * section's padding-top/bottom only appear at chapter
-         * boundaries, not mid-chapter where the user needs it most. */
-        padding-top: var(--margin-v, 24px);
-        padding-bottom: var(--margin-v, 24px);
-        /* Column flow fills the REDUCED content area (container height
-         * minus top/bottom padding), so every column gets the same
-         * vertical gutter on every page. */
-        column-width: 100vw;
-        column-gap: 0;
-        column-fill: auto;
         scroll-behavior: auto;
       }
-      /* Section inset — horizontal-only in paginated mode so the
-       * per-page vertical margin comes from the container; a
-       * symmetric top/bottom in scroll mode so chapter breaks
-       * breathe. */
+      #book-content[data-mode="paginated"] {
+        /* Snap each page boundary to the top of the viewport so the
+         * page turn feels discrete. scroll-padding-top + scroll-margin
+         * aren't needed because section spacing is internal. */
+        scroll-snap-type: y mandatory;
+        /* No horizontal drag — the tap/swipe layer provides page
+         * advance. Keep pan-y so the native vertical gesture still
+         * drives the snap scroller. */
+        touch-action: pan-y;
+      }
       section.spine-section {
         box-sizing: border-box;
+        /* Vertical paragraph breathing only; horizontal handled by the
+         * per-paragraph padding below. */
       }
       #book-content[data-mode="paginated"] section.spine-section {
-        padding: 0 var(--margin-h, 48px);
-        break-before: column;
-        break-inside: avoid-column;
-        scroll-snap-align: start;
-      }
-      #book-content[data-mode="paginated"] section.spine-section:first-child {
-        break-before: auto;
-      }
-      /* Mode-flip alignment trick: the captured anchor element gets
-       * this class added when flipping scroll → paginated so it lands
-       * at the TOP of a column instead of mid-column. The class is
-       * scoped to paginated mode and removed on the next flip. */
-      #book-content[data-mode="paginated"] .readr-flip-break {
-        break-before: column !important;
+        padding: var(--margin-v, 24px) var(--margin-h, 48px);
       }
       #book-content[data-mode="scroll"] section.spine-section {
         padding: var(--margin-v, 24px) var(--margin-h, 48px);
@@ -316,13 +224,12 @@ export class RenderHost {
     const willChangeLayout = this.layoutSig(theme) !== this.layoutSig(prev)
       || (theme.pageTurnMode === 'scroll' ? 'scroll' : 'paginated') !== this.mode;
     let preAnchor: LayoutAnchor | null = null;
-    let preAnchorSource: 'lastAnchor' | 'capture' = 'capture';
     if (willChangeLayout) {
       if (this.lastAnchor?.element?.isConnected) {
         const r = this.lastAnchor.element.getBoundingClientRect();
         const inView = r.right > 0 && r.bottom > 0
           && r.left < window.innerWidth && r.top < window.innerHeight;
-        if (inView) { preAnchor = this.lastAnchor; preAnchorSource = 'lastAnchor'; }
+        if (inView) preAnchor = this.lastAnchor;
       }
       if (!preAnchor) preAnchor = this.captureAnchor();
     }
@@ -355,61 +262,36 @@ export class RenderHost {
     // backward by one unit.
     const nextMode: LayoutMode = theme.pageTurnMode === 'scroll' ? 'scroll' : 'paginated';
     if (nextMode !== this.mode) {
-      const anchor = preAnchor;
-      const skipAnchor = !this.navigated;
-      this.cb.onDebug(`modeFlip anchor section=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName} skipAnchor=${skipAnchor}`);
-      // Raise a same-bg cover during the flip so the user doesn't see
-      // the column reflow + scroll-to-anchor stutter. Faded out a few
-      // frames after the programmatic scroll lands.
-      this.showModeFlipCover();
-      // Clear any column-break marker from the previous flip — it
-      // would persist into the new layout and force a stale boundary.
-      this.clearFlipBreak();
-      // Going TO paginated: tag the captured anchor with break-before:
-      // column so it lands at the TOP of its column post-reflow. Without
-      // this the anchor sits wherever its natural column placement puts
-      // it (often mid-column), so the visible content shifts vertically
-      // even though we technically scrolled to the right column.
-      if (nextMode === 'paginated' && anchor && !skipAnchor) {
-        this.applyFlipBreak(anchor.element);
-      }
       this.mode = nextMode;
       this.contentEl.dataset.mode = nextMode;
-      this.scrollReportMutedUntil = performance.now() + 3000;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          // Before a goToLocation has landed, an anchor captured at the
-          // cover would scroll us back to 0 — losing the pending restore.
-          // The applySavedRestore path handles positioning; we just let
-          // the CSS apply without fighting for scroll.
-          if (anchor && !skipAnchor) this.scrollToAnchor(anchor);
-          // Invalidate page counts instead of recomputing inline — the
-          // next reportProgress call (after the cover hides) will
-          // recount lazily. Eager recount here was the single largest
-          // cost on Supernote e-ink: iterating every materialized
-          // section's getClientRects forced a full layout pass.
-          this.sectionPageCounts = [];
-          this.sectionPageStart = [];
-          this.cb.onDebug(`modeFlip post-anchor section=${anchor?.sectionIndex} scrollLeft=${this.contentEl.scrollLeft} scrollTop=${this.contentEl.scrollTop}`);
-          if (anchor && !skipAnchor) this.reportProgressFor(anchor, false);
-          requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => this.hideModeFlipCover())));
-        });
-      });
+      // Layout is identical in both modes (block flow, overflow-y:
+      // auto); only the snap CSS + tap/swipe handling differ. So the
+      // user's visible content is UNCHANGED across the flip — no
+      // reflow, no cover, no anchor dance. If we're going into
+      // paginated, snap the current scrollTop to the nearest vh so
+      // subsequent taps land on clean boundaries.
+      if (nextMode === 'paginated') {
+        this.snapToNearestPage();
+      }
+      this.cb.onDebug(`modeFlip to=${nextMode} scrollTop=${this.contentEl.scrollTop}`);
+      // Still invalidate page counts so the next report recomputes
+      // (currentPage/totalPages depend on vh, which may differ if the
+      // keyboard is open etc.).
+      this.sectionPageCounts = [];
+      this.sectionPageStart = [];
+      this.reportProgress(false);
     } else {
       const layoutChanged = this.layoutSig(theme) !== this.layoutSig(prev);
       if (layoutChanged) {
         const anchor = preAnchor;
         const skipAnchor = !this.navigated;
-        this.cb.onDebug(`layoutChange anchor=${anchor?.sectionIndex} from=${preAnchorSource} el=${anchor?.element?.tagName} skipAnchor=${skipAnchor}`);
         this.scrollReportMutedUntil = performance.now() + 3000;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (anchor && !skipAnchor) this.scrollToAnchor(anchor);
-            // Invalidate — reportProgressFor recomputes lazily.
             this.sectionPageCounts = [];
             this.sectionPageStart = [];
             if (anchor && !skipAnchor) this.reportProgressFor(anchor, false);
-            this.cb.onDebug(`layoutChange post scrollLeft=${this.contentEl.scrollLeft} reporting sec=${anchor?.sectionIndex}`);
           });
         });
       }
@@ -513,12 +395,13 @@ export class RenderHost {
     }
     this.bookStyle.textContent = allStyles.join('\n\n');
 
-    // Create one placeholder <section> per spine item up front (cheap:
-    // no innerHTML). Real content is populated lazily via
-    // `materializeSection` as the viewport approaches each section.
-    // Benefits: opening a large book no longer forces the browser to
-    // parse + layout every chapter on the main thread. Blocking time
-    // on the e-ink Supernote drops from several seconds to sub-second.
+    // Mount every spine section's HTML up-front. Lazy-mount was tried
+    // and reverted — empty placeholder sections with estimated heights
+    // don't give the scroll container enough total height for paging
+    // to work (nextPage would clamp to scrollHeight - vh, which with
+    // ~100px placeholders was often smaller than vh itself). Re-add
+    // lazy materialization only after page counts + anchor math have
+    // been proven robust against it.
     for (const s of this.book.spine) {
       const el = document.createElement('section');
       el.className = 'spine-section';
@@ -526,15 +409,10 @@ export class RenderHost {
       el.dataset.href = s.href;
       el.dataset.path = s.path;
       el.setAttribute('data-readr-section', String(s.index));
-      // Rough size estimate so scroll math has something to work with
-      // before the real content lands. character count → ~1 line per
-      // 80 chars; use the current line-height (fallback 16 × 1.5).
-      const estLines = Math.max(4, Math.ceil(s.bodyHtml.length / 80));
-      const estHeight = estLines * 24;
-      el.style.minHeight = `${estHeight}px`;
-      // Empty body — gets populated on demand.
+      el.innerHTML = s.bodyHtml;
       this.contentEl.appendChild(el);
       this.sectionEls.push(el);
+      this.materialized.add(s.index);
     }
   }
 
@@ -610,53 +488,16 @@ export class RenderHost {
       this.cb.onTap(zone);
     });
 
-    // One-page-per-swipe in paginated mode. Without this the native
-    // horizontal fling can skip three or four pages per flick; we
-    // swallow the default, follow the finger for a visual drag, and
-    // snap to exactly ±1 page on release.
-    let pagingActive = false;
-    let pagingStartX = 0;
-    let pagingStartScrollLeft = 0;
-    let pagingMoved = false;
-    this.contentEl.addEventListener('touchstart', (e) => {
+    // Paginated mode: snap the vertical scroll to vh multiples on
+    // touchend. The layout is identical to scroll mode (block flow,
+    // overflow-y: auto) so mode-flip has zero reflow cost — only the
+    // snap behavior differs. We listen to touchend (not scrollend) so
+    // the snap happens after the user's fling naturally decelerates,
+    // consistent with Kindle/Apple Books behaviour.
+    this.contentEl.addEventListener('touchend', () => {
       if (this.mode !== 'paginated') return;
-      if (!e.touches[0]) return;
-      pagingActive = true;
-      pagingMoved = false;
-      pagingStartX = e.touches[0].clientX;
-      pagingStartScrollLeft = this.contentEl.scrollLeft;
-    }, { passive: true });
-    this.contentEl.addEventListener('touchmove', (e) => {
-      if (!pagingActive || this.mode !== 'paginated') return;
-      if (!e.touches[0]) return;
-      const delta = e.touches[0].clientX - pagingStartX;
-      if (!pagingMoved && Math.abs(delta) > 6) pagingMoved = true;
-      if (pagingMoved) {
-        e.preventDefault();
-        this.contentEl.scrollLeft = pagingStartScrollLeft - delta;
-      }
-    }, { passive: false });
-    const finishPaging = (endX: number) => {
-      if (!pagingActive) return;
-      pagingActive = false;
-      const pageWidth = this.pageStep;
-      const delta = endX - pagingStartX;
-      const threshold = Math.max(40, pageWidth * 0.08);
-      const startPage = Math.round(pagingStartScrollLeft / pageWidth);
-      let target = startPage;
-      if (delta <= -threshold) target = startPage + 1;
-      else if (delta >= threshold) target = startPage - 1;
-      target = Math.max(0, target);
-      this.contentEl.scrollTo({ left: target * pageWidth, behavior: 'auto' });
-    };
-    this.contentEl.addEventListener('touchend', (e) => {
-      if (!pagingMoved) { pagingActive = false; return; }
-      const x = e.changedTouches[0]?.clientX ?? pagingStartX;
-      finishPaging(x);
-    }, { passive: true });
-    this.contentEl.addEventListener('touchcancel', () => {
-      pagingActive = false;
-      pagingMoved = false;
+      // Let the browser's inertia finish first, then snap.
+      requestAnimationFrame(() => requestAnimationFrame(() => this.snapToNearestPage()));
     }, { passive: true });
 
     // Selection — debounced via selectionchange.
@@ -795,23 +636,19 @@ export class RenderHost {
     // round DOWN to keep the user in this section rather than the next.
     const withinSec = Math.max(0, Math.min(0.9999, (f - secStart) / span));
 
-    if (this.mode === 'scroll') {
-      const contentRect = this.contentEl.getBoundingClientRect();
-      const secRect = sec.getBoundingClientRect();
-      const absSecTop = this.contentEl.scrollTop + secRect.top - contentRect.top;
-      this.contentEl.scrollLeft = 0;
-      this.contentEl.scrollTop = Math.max(0, absSecTop + withinSec * sec.scrollHeight);
-      this.navigated = true;
-      return;
-    }
-    // Paginated: pick the page within the section.
-    if (this.sectionPageCounts.length !== this.book.spine.length) this.recountPages();
-    const pagesBefore = this.sectionPageCounts.slice(0, sectionIndex).reduce((a, b) => a + b, 0);
-    const pagesInSec = Math.max(1, this.sectionPageCounts[sectionIndex] ?? 1);
-    const pageOffset = Math.min(pagesInSec - 1, Math.floor(withinSec * pagesInSec));
-    const pageIdx = pagesBefore + pageOffset;
-    this.contentEl.scrollLeft = pageIdx * this.pageStep;
-    this.contentEl.scrollTop = 0;
+    // Both modes now share block layout; position is just scrollTop.
+    // Paginated additionally snaps the resulting scrollTop to the
+    // nearest vh boundary so we land cleanly on a page edge.
+    const contentRect = this.contentEl.getBoundingClientRect();
+    const secRect = sec.getBoundingClientRect();
+    const absSecTop = this.contentEl.scrollTop + secRect.top - contentRect.top;
+    const raw = Math.max(0, absSecTop + withinSec * sec.offsetHeight);
+    const vh = window.innerHeight;
+    const target = this.mode === 'paginated'
+      ? Math.round(raw / vh) * vh
+      : raw;
+    this.contentEl.scrollLeft = 0;
+    this.contentEl.scrollTop = target;
     this.navigated = true;
   }
 
@@ -834,36 +671,17 @@ export class RenderHost {
    */
   private scrollElementIntoView(el: HTMLElement): void {
     const contentRect = this.contentEl.getBoundingClientRect();
-    if (this.mode === 'scroll') {
-      const rect = el.getBoundingClientRect();
-      const targetTop = rect.top - contentRect.top + this.contentEl.scrollTop;
-      // Direct assignment is synchronous; scrollTo with behavior: 'auto'
-      // is still async on some Android WebView builds and leaves a
-      // "just requested but not applied" state where a subsequent
-      // captureAnchor would see the OLD scrollLeft — racing any setTheme
-      // fired in the same turn.
-      this.contentEl.scrollLeft = 0;
-      this.contentEl.scrollTop = Math.max(0, targetTop);
-      return;
-    }
-    // Paginated: use the FIRST fragment's rect. getClientRects() returns
-    // one rect per CSS-column fragment; the element's own getBoundingClientRect
-    // spans ALL fragments (which for a multi-column section gives a huge
-    // bounding box whose center can land inside the NEXT section). Taking
-    // fragment[0] anchors us at the element's actual beginning.
-    const fragments = el.getClientRects();
-    const rect = fragments.length > 0 ? fragments[0] : el.getBoundingClientRect();
-    const scrollStep = this.pageStep;
-    // Nudge 1px into the column so rounding errors at the exact column
-    // boundary don't drop us one column short.
-    const probeX = rect.left - contentRect.left + this.contentEl.scrollLeft + 1;
-    const page = Math.max(0, Math.floor(probeX / scrollStep));
-    // Direct assignment forces a synchronous scroll; scrollTo({behavior:
-    // 'auto'}) can defer to the next frame on Android WebView, which
-    // races any setTheme fired in the same turn (its captureAnchor would
-    // probe at the OLD scrollLeft and anchor on the wrong section).
-    this.contentEl.scrollLeft = page * scrollStep;
-    this.contentEl.scrollTop = 0;
+    const rect = el.getBoundingClientRect();
+    const targetTop = rect.top - contentRect.top + this.contentEl.scrollTop;
+    // Paginated mode: snap to the nearest full-page boundary so the
+    // element lands at the top of a page. In scroll mode: land the
+    // element exactly at viewport top (no snap).
+    const vh = window.innerHeight;
+    const finalTop = this.mode === 'paginated'
+      ? Math.max(0, Math.round(targetTop / vh) * vh)
+      : Math.max(0, targetTop);
+    this.contentEl.scrollLeft = 0;
+    this.contentEl.scrollTop = finalTop;
   }
 
   /** Scroll to a fraction of the whole book (0..1). */
@@ -885,70 +703,49 @@ export class RenderHost {
     const end = this.sectionStartFractions[idx + 1] ?? 1;
     const withinSec = end > start ? (f - start) / (end - start) : 0;
 
-    if (this.mode === 'scroll') {
-      const rect = sec.getBoundingClientRect();
-      const absTop = this.contentEl.scrollTop + rect.top - this.contentEl.getBoundingClientRect().top;
-      const target = absTop + withinSec * sec.scrollHeight;
-      this.contentEl.scrollTo({ top: target, behavior: 'auto' });
-    } else {
-      // Paginated: interpolate within section's page range.
-      const pagesBefore = this.sectionPageCounts.slice(0, idx).reduce((a, b) => a + b, 0);
-      const pagesInSec = this.sectionPageCounts[idx] ?? 1;
-      const pageIdx = pagesBefore + Math.floor(withinSec * pagesInSec);
-      this.contentEl.scrollTo({ left: pageIdx * this.pageStep, behavior: 'auto' });
-    }
+    // Both modes share block layout — compute the target scrollTop and
+    // snap to vh in paginated.
+    const rect = sec.getBoundingClientRect();
+    const absTop = this.contentEl.scrollTop + rect.top - this.contentEl.getBoundingClientRect().top;
+    const raw = Math.max(0, absTop + withinSec * sec.offsetHeight);
+    const vh = window.innerHeight;
+    const target = this.mode === 'paginated' ? Math.round(raw / vh) * vh : raw;
+    this.contentEl.scrollLeft = 0;
+    this.contentEl.scrollTop = target;
     this.navigated = true;
   }
 
   // ─── Page counting ─────────────────────────────────────────────────
 
-  /** Per-section column-range bounds, computed in recountPages(). */
+  /** Per-section start-page index (in the book-wide page count). */
   private sectionPageStart: number[] = [];
 
   recountPages(): void {
-    if (this.mode !== 'paginated') {
-      this.totalPages = Math.max(1, Math.ceil(this.contentEl.scrollHeight / window.innerHeight));
-      const counts: number[] = this.book.spine.map((_, i) => {
-        const el = this.sectionEls[i];
-        if (!el) return 1;
-        return Math.max(1, Math.ceil(el.offsetHeight / window.innerHeight));
-      });
-      this.sectionPageCounts = counts;
-      this.sectionPageStart = [];
-      return;
-    }
-    // Paginated — use a Range per section to get ALL fragment rects
-    // across columns. Element.getBoundingClientRect only returns the
-    // first fragment's box in CSS multi-column, which made every
-    // section look like a single page.
-    const scrollStep = this.pageStep;
-    const contentLeft = this.contentEl.getBoundingClientRect().left;
-    const scrollLeft = this.contentEl.scrollLeft;
-    const total = Math.max(1, Math.round(this.contentEl.scrollWidth / scrollStep));
-    this.totalPages = total;
+    // Both modes share block layout: a "page" is one viewport height
+    // worth of scroll. Pure scrollHeight / clientHeight math — no
+    // Range scanning, no getClientRects loops. Orders of magnitude
+    // cheaper than the old multi-column traversal.
+    const vh = window.innerHeight;
+    if (vh <= 0) return;
+    const totalHeight = this.contentEl.scrollHeight;
+    this.totalPages = Math.max(1, Math.ceil(totalHeight / vh));
 
     const sectionPages: number[] = [];
     const sectionStart: number[] = [];
+    const contentTop = this.contentEl.getBoundingClientRect().top;
+    const scrollTop = this.contentEl.scrollTop;
+    let runningPage = 0;
     for (let i = 0; i < this.sectionEls.length; i++) {
       const el = this.sectionEls[i];
-      if (!el) { sectionPages.push(1); sectionStart.push(0); continue; }
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const rects = Array.from(range.getClientRects());
-      if (rects.length === 0) { sectionPages.push(1); sectionStart.push(0); continue; }
-      let minX = Infinity, maxX = -Infinity;
-      for (const r of rects) {
-        if (r.width === 0 && r.height === 0) continue;
-        if (r.left < minX) minX = r.left;
-        if (r.right > maxX) maxX = r.right;
-      }
-      if (!isFinite(minX)) { sectionPages.push(1); sectionStart.push(0); continue; }
-      const startX = minX - contentLeft + scrollLeft;
-      const endX = maxX - contentLeft + scrollLeft;
-      const startPage = Math.max(0, Math.floor(startX / scrollStep + 0.001));
-      const endPage = Math.max(startPage, Math.ceil(endX / scrollStep - 0.001) - 1);
+      if (!el) { sectionPages.push(1); sectionStart.push(runningPage); runningPage += 1; continue; }
+      const rect = el.getBoundingClientRect();
+      const absTop = rect.top - contentTop + scrollTop;
+      const startPage = Math.max(0, Math.floor(absTop / vh));
       sectionStart.push(startPage);
-      sectionPages.push(Math.max(1, endPage - startPage + 1));
+      const secHeight = el.offsetHeight;
+      const secPages = Math.max(1, Math.ceil(secHeight / vh));
+      sectionPages.push(secPages);
+      runningPage = startPage + secPages;
     }
     this.sectionPageCounts = sectionPages;
     this.sectionPageStart = sectionStart;
@@ -1013,39 +810,23 @@ export class RenderHost {
       this.recountPages();
     }
     if (this.sectionPageCounts.length === this.book.spine.length) {
-      totalPages = this.sectionPageCounts.reduce((a, b) => a + b, 0);
-      if (this.mode === 'paginated' && this.sectionPageStart.length === this.sectionEls.length) {
-        const scrollStep = this.pageStep;
-        const currentColumn = Math.max(0, Math.round(this.contentEl.scrollLeft / scrollStep));
-        currentPage = Math.max(1, Math.min(totalPages, currentColumn + 1));
-        const secStart = this.sectionPageStart[anchor.sectionIndex] ?? 0;
+      totalPages = Math.max(1, Math.ceil(this.contentEl.scrollHeight / window.innerHeight));
+      const vh = window.innerHeight;
+      const scrollTop = this.contentEl.scrollTop;
+      // Both modes use the same scroll-axis math now: a page is one
+      // viewport height. Paginated snaps scrollTop to vh boundaries,
+      // so floor(scrollTop / vh) + 1 always lands on the expected
+      // page number. Scroll mode uses the same formula — it's just
+      // not snapped, so the reported page advances smoothly.
+      currentPage = Math.max(1, Math.min(totalPages, Math.floor(scrollTop / vh) + 1));
+      const sec = this.sectionEls[anchor.sectionIndex];
+      if (sec) {
+        const contentTop = this.contentEl.getBoundingClientRect().top;
+        const secRect = sec.getBoundingClientRect();
+        const absSecTop = scrollTop + secRect.top - contentTop;
         const secPages = this.sectionPageCounts[anchor.sectionIndex] ?? 1;
-        pageInSection = Math.max(1, Math.min(secPages, currentColumn - secStart + 1));
+        pageInSection = Math.max(1, Math.min(secPages, Math.floor((scrollTop - absSecTop) / vh) + 1));
         pagesInSection = secPages;
-      } else if (this.mode === 'scroll') {
-        // Scroll-mode pages are derived from scrollTop / viewport
-        // height, the same way the user actually experiences them.
-        const vh = window.innerHeight;
-        const scrollTop = this.contentEl.scrollTop;
-        const cpGlobal = Math.max(1, Math.min(totalPages, Math.floor(scrollTop / vh) + 1));
-        currentPage = cpGlobal;
-        const sec = this.sectionEls[anchor.sectionIndex];
-        if (sec) {
-          const contentTop = this.contentEl.getBoundingClientRect().top;
-          const secRect = sec.getBoundingClientRect();
-          const absSecTop = scrollTop + secRect.top - contentTop;
-          const secPages = this.sectionPageCounts[anchor.sectionIndex] ?? 1;
-          pageInSection = Math.max(1, Math.min(secPages, Math.floor((scrollTop - absSecTop) / vh) + 1));
-          pagesInSection = secPages;
-        }
-      } else {
-        const pagesBefore = this.sectionPageCounts.slice(0, anchor.sectionIndex).reduce((a, b) => a + b, 0);
-        const secPages = this.sectionPageCounts[anchor.sectionIndex] ?? 1;
-        const pis = Math.max(1, Math.min(secPages, Math.floor(withinSec * secPages) + 1));
-        pageInSection = pis;
-        pagesInSection = secPages;
-        const cp = pagesBefore + pis;
-        currentPage = Math.max(1, Math.min(totalPages, cp));
       }
     }
 
@@ -1066,45 +847,50 @@ export class RenderHost {
   private anchorFractionWithinSection(anchor: LayoutAnchor): number {
     const sec = this.sectionEls[anchor.sectionIndex];
     if (!sec) return 0;
+    const secHeight = sec.offsetHeight;
+    if (secHeight <= 0) return 0;
     const anchorRect = anchor.element.getBoundingClientRect();
     const secRect = sec.getBoundingClientRect();
-    if (this.mode === 'scroll') {
-      const secHeight = sec.offsetHeight;
-      if (secHeight <= 0) return 0;
-      // Anchor y relative to section top, absolute in scroll coords.
-      const absSecTop = this.contentEl.scrollTop + secRect.top - this.contentEl.getBoundingClientRect().top;
-      const absAnchorTop = this.contentEl.scrollTop + anchorRect.top - this.contentEl.getBoundingClientRect().top;
-      return Math.max(0, Math.min(1, (absAnchorTop - absSecTop) / secHeight));
-    }
-    // Paginated: the section's REAL horizontal span across all its
-    // columns, NOT offsetWidth. Chromium returns offsetWidth as the
-    // first-fragment width (~1 column) for block elements in CSS
-    // multi-column, so (anchorX - secStartX) / offsetWidth saturates
-    // at 1 after the first page turn and the reported fraction (and
-    // percentage) stops advancing per-page.
-    const pagesInSec = this.sectionPageCounts[anchor.sectionIndex] ?? 1;
-    const secWidth = Math.max(1, pagesInSec * this.pageStep);
-    const contentLeft = this.contentEl.getBoundingClientRect().left;
-    const absSecStartX = this.contentEl.scrollLeft + secRect.left - contentLeft;
-    const absAnchorX = this.contentEl.scrollLeft + anchorRect.left - contentLeft;
-    return Math.max(0, Math.min(1, (absAnchorX - absSecStartX) / secWidth));
+    const contentTop = this.contentEl.getBoundingClientRect().top;
+    const absSecTop = this.contentEl.scrollTop + secRect.top - contentTop;
+    const absAnchorTop = this.contentEl.scrollTop + anchorRect.top - contentTop;
+    return Math.max(0, Math.min(1, (absAnchorTop - absSecTop) / secHeight));
   }
 
   // ─── Prev/next page ────────────────────────────────────────────────
 
   prevPage(): void {
-    if (this.mode === 'scroll') {
-      this.contentEl.scrollBy({ top: -window.innerHeight * 0.9, behavior: 'auto' });
-    } else {
-      this.contentEl.scrollBy({ left: -this.pageStep, behavior: 'auto' });
-    }
+    const vh = window.innerHeight;
+    // Paginated: jump exactly one viewport up, landing on a snap
+    // boundary. Scroll mode: shorter step so the user can see a bit
+    // of overlap between pages.
+    const step = this.mode === 'paginated' ? vh : vh * 0.9;
+    const current = this.contentEl.scrollTop;
+    const target = this.mode === 'paginated'
+      ? Math.max(0, Math.round(current / vh) * vh - vh)
+      : Math.max(0, current - step);
+    this.contentEl.scrollTop = target;
   }
 
   nextPage(): void {
-    if (this.mode === 'scroll') {
-      this.contentEl.scrollBy({ top: window.innerHeight * 0.9, behavior: 'auto' });
-    } else {
-      this.contentEl.scrollBy({ left: this.pageStep, behavior: 'auto' });
+    const vh = window.innerHeight;
+    const step = this.mode === 'paginated' ? vh : vh * 0.9;
+    const current = this.contentEl.scrollTop;
+    const target = this.mode === 'paginated'
+      ? Math.round(current / vh) * vh + vh
+      : current + step;
+    this.contentEl.scrollTop = target;
+  }
+
+  /** Align scrollTop to the nearest `vh` boundary. Called on touchend
+   *  in paginated mode so the user always lands cleanly on a page. */
+  private snapToNearestPage(): void {
+    const vh = window.innerHeight;
+    if (vh <= 0) return;
+    const current = this.contentEl.scrollTop;
+    const snapped = Math.round(current / vh) * vh;
+    if (Math.abs(current - snapped) > 0.5) {
+      this.contentEl.scrollTop = snapped;
     }
   }
 
