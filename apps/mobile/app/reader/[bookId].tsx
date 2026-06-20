@@ -172,6 +172,12 @@ export default function ReaderScreen() {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [showNotesPanel, setShowNotesPanel] = useState(false);
+  const readerStateRef = useRef<{
+    theme: ReaderTheme;
+    highlights: Highlight[];
+    notes: Note[];
+  } | null>(null);
+  const webViewReadyRef = useRef(false);
 
   // In-book search state
   const [searchResults, setSearchResults] = useState<
@@ -272,6 +278,14 @@ export default function ReaderScreen() {
   const [readerVisible, setReaderVisible] = useState(false);
   useEffect(() => {
     setReaderVisible(false);
+    savedPositionRef.current = null;
+    hasLoadedSavedRef.current = false;
+    hasRestoredRef.current = false;
+    pendingReadyRestoreRef.current = false;
+    readerStateRef.current = null;
+    webViewReadyRef.current = false;
+    lastAnchorFracRef.current = null;
+    anchorMuteUntilRef.current = 0;
   }, [bookId]);
   // Safety net: if 'restored' never arrives (stale bundle, nav error,
   // etc.) reveal anyway after 2s so the user isn't stuck behind a
@@ -414,56 +428,38 @@ export default function ReaderScreen() {
     [_sourceUrl, _format],
   );
 
-  // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
-  useEffect(() => {
-    if (!bookId) return;
-    async function load() {
-      const [
-        savedProgress,
-        savedBookmarks,
-        savedHighlights,
-        savedNotes,
-        savedPrefs,
-      ] = await Promise.all([
-        getProgress(bookId!),
-        getBookmarks(bookId!),
-        getHighlights(bookId!),
-        getNotes(bookId!),
-        loadReaderPrefs(),
-      ]);
-      if (savedProgress) {
-        savedPositionRef.current = savedProgress.position;
-        setProgress(savedProgress.position.percentage);
-        setCurrentPosition(savedProgress.position);
-        finishedRef.current =
-          savedProgress.position.finished === true ||
-          (savedProgress.position.percentage ?? 0) >= 100;
-      }
-      hasLoadedSavedRef.current = true;
-      setBookmarks(savedBookmarks);
-      setHighlights(savedHighlights);
-      setNotes(savedNotes);
-      if (savedPrefs?.theme) {
-        // Merge with defaults so newly-added fields get sane values when
-        // loading prefs saved by an older version.
-        const base = display.isEink ? EINK_THEME : DEFAULT_THEME;
-        setTheme({ ...base, ...savedPrefs.theme });
-      }
-      // If the WebView's `ready` already arrived while we were loading,
-      // it set a pending flag instead of restoring — do it now.
-      if (pendingReadyRestoreRef.current) {
-        pendingReadyRestoreRef.current = false;
-        applySavedRestore();
-      }
-    }
-    load();
-  }, [bookId]);
-
   const sendToWebView = useCallback(
     (type: string, payload: Record<string, unknown>) => {
       webviewRef.current?.postMessage(JSON.stringify({ type, payload }));
     },
     [],
+  );
+
+  const replayReaderState = useCallback(
+    (state = readerStateRef.current) => {
+      if (!state) return;
+      sendToWebView("setTheme", { ...state.theme, isEink: display.isEink });
+
+      for (const h of state.highlights) {
+        sendToWebView("addHighlight", {
+          cfi: h.cfiRange,
+          color: h.color,
+        });
+      }
+
+      const seenNoteCfis = new Map<string, "typed" | "handwritten">();
+      for (const n of state.notes) {
+        const cfi = n.position.cfi;
+        if (!cfi) continue;
+        const existing = seenNoteCfis.get(cfi);
+        if (existing === "handwritten") continue;
+        seenNoteCfis.set(cfi, n.noteType);
+      }
+      for (const [cfi, noteType] of seenNoteCfis) {
+        sendToWebView("addNote", { cfi, noteType });
+      }
+    },
+    [display.isEink, sendToWebView],
   );
 
   // Issue the initial restore navigation from the saved position. Safe
@@ -501,6 +497,61 @@ export default function ReaderScreen() {
       setReaderVisible(true);
     }
   }, [sendToWebView]);
+
+  // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
+  useEffect(() => {
+    if (!bookId) return;
+    async function load() {
+      const [
+        savedProgress,
+        savedBookmarks,
+        savedHighlights,
+        savedNotes,
+        savedPrefs,
+      ] = await Promise.all([
+        getProgress(bookId!),
+        getBookmarks(bookId!),
+        getHighlights(bookId!),
+        getNotes(bookId!),
+        loadReaderPrefs(),
+      ]);
+      if (savedProgress) {
+        savedPositionRef.current = savedProgress.position;
+        setProgress(savedProgress.position.percentage);
+        setCurrentPosition(savedProgress.position);
+        finishedRef.current =
+          savedProgress.position.finished === true ||
+          (savedProgress.position.percentage ?? 0) >= 100;
+      }
+      hasLoadedSavedRef.current = true;
+      setBookmarks(savedBookmarks);
+      setHighlights(savedHighlights);
+      setNotes(savedNotes);
+      let loadedTheme = display.isEink ? EINK_THEME : DEFAULT_THEME;
+      if (savedPrefs?.theme) {
+        // Merge with defaults so newly-added fields get sane values when
+        // loading prefs saved by an older version.
+        const base = display.isEink ? EINK_THEME : DEFAULT_THEME;
+        loadedTheme = { ...base, ...savedPrefs.theme };
+        setTheme(loadedTheme);
+      }
+      readerStateRef.current = {
+        theme: loadedTheme,
+        highlights: savedHighlights,
+        notes: savedNotes,
+      };
+      if (webViewReadyRef.current) {
+        replayReaderState(readerStateRef.current);
+      }
+      // If the WebView's `ready` already arrived while we were loading,
+      // it set a pending flag instead of restoring — do it now.
+      if (pendingReadyRestoreRef.current) {
+        pendingReadyRestoreRef.current = false;
+        applySavedRestore();
+      }
+    }
+    load();
+  }, [bookId, display.isEink, applySavedRestore, replayReaderState]);
 
   // Tap- and drag-to-seek on the bottom progress bar. We claim the
   // gesture on touchdown so a tap anywhere along the bar jumps
@@ -618,36 +669,13 @@ export default function ReaderScreen() {
           console.error("[WebView Error]", msg.payload?.message);
           break;
         case "ready":
-          sendToWebView("setTheme", themeForWebView);
+          webViewReadyRef.current = true;
           if (
             typeof msg.payload?.totalPages === "number" &&
             msg.payload.totalPages > 0
           ) {
             setTotalPages(msg.payload.totalPages);
             setCurrentPage((page) => page ?? 1);
-          }
-          // Replay saved highlights so they're visible when reopening.
-          // The WebView ignores any it's already drawn.
-          for (const h of highlights) {
-            sendToWebView("addHighlight", {
-              cfi: h.cfiRange,
-              color: h.color,
-            });
-          }
-          // Replay note markers. Multiple notes on the same passage
-          // share one marker — dedupe by cfi to avoid double-drawing.
-          // If a passage has both a typed note and a drawing, the
-          // drawing wins visually (more salient indigo underline).
-          const seenNoteCfis = new Map<string, "typed" | "handwritten">();
-          for (const n of notes) {
-            const cfi = n.position.cfi;
-            if (!cfi) continue;
-            const existing = seenNoteCfis.get(cfi);
-            if (existing === "handwritten") continue;
-            seenNoteCfis.set(cfi, n.noteType);
-          }
-          for (const [cfi, noteType] of seenNoteCfis) {
-            sendToWebView("addNote", { cfi, noteType });
           }
           // Restore saved position via fraction, not CFI. Each device
           // lays the book out differently (font, margin, viewport), so
@@ -660,6 +688,7 @@ export default function ReaderScreen() {
           // let load() fire it when savedPositionRef is populated —
           // otherwise we'd race and skip the restore entirely.
           if (hasLoadedSavedRef.current) {
+            replayReaderState();
             applySavedRestore();
           } else {
             pendingReadyRestoreRef.current = true;
@@ -1128,6 +1157,19 @@ export default function ReaderScreen() {
             setWebViewError(null);
             webviewRef.current?.reload();
           }}
+        />
+      </View>
+    );
+  }
+
+  if (!_sourceUrl) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.bg }]}>
+        <ErrorFallback
+          title="Book is not available offline"
+          message="Download this book before opening it without a fresh server download URL."
+          retryLabel="Retry"
+          onRetry={() => refetch()}
         />
       </View>
     );
