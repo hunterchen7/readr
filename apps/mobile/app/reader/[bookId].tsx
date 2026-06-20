@@ -1061,6 +1061,10 @@ export default function ReaderScreen() {
   function handleGoToBookmark(bm: Bookmark) {
     if (bm.position.cfi) {
       sendToWebView("goToLocation", { cfi: bm.position.cfi });
+    } else if (typeof bm.position.percentage === "number") {
+      sendToWebView("goToLocation", {
+        fraction: bm.position.percentage / 100,
+      });
     } else if (bm.position.page != null) {
       sendToWebView("goToLocation", { page: bm.position.page });
     }

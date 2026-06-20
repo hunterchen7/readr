@@ -304,8 +304,17 @@ function handleRNMessage(data: RNMessage): void {
     case 'getPageText': {
       // Return the visible section's plain text for TTS. Fall back to
       // empty string if the section hasn't loaded yet.
+      const doc = getFocalSectionDoc();
+      if (!doc) {
+        setTimeout(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const text = (getFocalSectionDoc()?.body as any)?.innerText?.trim() ?? '';
+          post('pageText', { text });
+        }, 250);
+        break;
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const text = (getFocalSectionDoc()?.body as any)?.innerText?.trim() ?? '';
+      const text = (doc.body as any)?.innerText?.trim() ?? '';
       post('pageText', { text });
       break;
     }
@@ -501,6 +510,7 @@ function getFocalSectionDoc(): Document | null {
     if (typeof focalIndex === 'number') {
       const focal = contents.find((c) => c.index === focalIndex);
       if (focal?.doc) return focal.doc;
+      return null;
     }
     return contents[0]?.doc ?? currentSectionDoc;
   } catch {
@@ -1234,14 +1244,20 @@ async function init(): Promise<void> {
     // matches the newly-created overlay, so firing every registered
     // annotation here is cheap and always correct.
     view.addEventListener('create-overlay', () => {
-      if (!view?.addAnnotation) return;
+      const annotationView = view;
+      if (!annotationView?.addAnnotation) return;
+      const replay = (annotation: Record<string, unknown>) => {
+        try {
+          Promise.resolve(annotationView.addAnnotation?.(annotation)).catch(() => { /* ignore */ });
+        } catch {
+          // Ignore individual bad CFIs so the rest still replay.
+        }
+      };
       for (const [cfi, color] of highlightRegistry) {
-        Promise.resolve(view.addAnnotation({ value: cfi, color, kind: 'highlight' }))
-          .catch(() => { /* ignore */ });
+        replay({ value: cfi, color, kind: 'highlight' });
       }
       for (const [cfi, noteType] of noteCfis) {
-        Promise.resolve(view.addAnnotation({ value: cfi, kind: 'note', noteType }))
-          .catch(() => { /* ignore */ });
+        replay({ value: cfi, kind: 'note', noteType });
       }
     });
 

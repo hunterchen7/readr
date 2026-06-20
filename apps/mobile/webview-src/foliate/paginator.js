@@ -1228,7 +1228,7 @@ export class Paginator extends HTMLElement {
             // Mount the section (idempotent) and make it focal. Scroll
             // to the anchor inside the outer continuous container.
             this.#focalIdx = index
-            await this.#mountSection(index, { src, onLoad })
+            await this.#mountSection(index, { src, onLoad, suppressRelocate: true })
             // Await slide-window so all neighbor mounts settle (each goes
             // placeholder→actual height) before we compute scroll target.
             // Without awaiting, section.offsetTop shifts out from under
@@ -1381,7 +1381,6 @@ export class Paginator extends HTMLElement {
             const src = opts.src ?? await Promise.resolve(this.sections[index].load())
                 .catch(e => { console.warn(e); return null })
             if (!this.#stacked || generation !== this.#stackGeneration) {
-                this.sections[index]?.unload?.()
                 return
             }
             if (!src) return
@@ -1401,7 +1400,6 @@ export class Paginator extends HTMLElement {
             await view.load(src, afterLoad, beforeRender)
             if (!this.#stacked || generation !== this.#stackGeneration) {
                 try { view.destroy() } catch { /* ignore */ }
-                this.sections[index]?.unload?.()
                 return
             }
             this.dispatchEvent(new CustomEvent('create-overlayer', {
@@ -1414,6 +1412,11 @@ export class Paginator extends HTMLElement {
             // stacked sections render with the active theme.
             this.#applyStylesToDoc(view.document)
             this.#measureSection(index)
+            if (index === this.#focalIdx && !opts.suppressRelocate) {
+                this.#view = view
+                this.#index = index
+                this.#afterScroll('scroll')
+            }
         })()
         this.#mountPromises.set(index, task)
         try { await task } finally { this.#mountPromises.delete(index) }
