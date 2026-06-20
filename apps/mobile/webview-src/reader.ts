@@ -36,7 +36,6 @@ interface FoliateTocItem {
 interface FoliateBook {
   sections: Array<{ id?: string; createDocument(): Promise<Document> }>;
   toc?: FoliateTocItem[];
-  search?(q: string): AsyncIterable<{ cfi: string; excerpt: string; label: string }>;
 }
 interface FoliateOverlayer {
   highlight: unknown;
@@ -57,6 +56,17 @@ interface FoliateView extends HTMLElement {
   prev(): Promise<unknown>;
   next(): Promise<unknown>;
   clearSearch?(): void;
+  search?(q: { query: string; index?: number }): AsyncIterable<
+    | string
+    | { progress?: number }
+    | {
+        label?: string;
+        cfi?: string;
+        excerpt?: SearchExcerpt;
+        index?: number;
+        subitems?: Array<{ cfi: string; excerpt: SearchExcerpt }>;
+      }
+  >;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   addAnnotation?(ann: any, remove?: boolean): void;
   getCFI?(index: number, range: Range): string;
@@ -82,6 +92,7 @@ interface Theme {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type RNMessage = { type: string; payload?: any };
+type SearchExcerpt = string | { pre?: string; match?: string; post?: string };
 
 // ─── Module state ─────────────────────────────────────────────────────
 
@@ -133,6 +144,7 @@ let lastAnnotationTapAt = 0;
 // when the user navigates away and back we have to replay everything
 // on the `create-overlay` event. Same for notes (stored in noteCfis).
 const highlightRegistry = new Map<string, string>();
+let searchSeq = 0;
 
 // ─── postMessage helpers ─────────────────────────────────────────────
 
@@ -271,6 +283,8 @@ function handleRNMessage(data: RNMessage): void {
       (async (): Promise<void> => {
         try {
           if (data.payload.cfi) await v.goTo(data.payload.cfi);
+          else if (typeof data.payload.page === 'number')
+            await goToPage(data.payload.page);
           else if (data.payload.fraction != null)
             await v.goToFraction(data.payload.fraction);
         } catch { /* ignore */ }
@@ -298,6 +312,7 @@ function handleRNMessage(data: RNMessage): void {
       performSearch(data.payload.query);
       break;
     case 'clearSearch':
+      searchSeq++;
       if (view.clearSearch) view.clearSearch();
       break;
     case 'getPageText': {
@@ -818,18 +833,88 @@ async function measureOnce(mySeq: number): Promise<boolean> {
 // ─── Search ──────────────────────────────────────────────────────────
 
 async function performSearch(query: string): Promise<void> {
-  if (!book || !query || !book.search) return;
+  const seq = ++searchSeq;
+  const trimmed = query?.trim();
+  if (!view?.search || !trimmed) {
+    if (seq === searchSeq) {
+      post('searchResults', { results: [], query: trimmed ?? query ?? '' });
+    }
+    return;
+  }
   try {
     const results: Array<{ cfi: string; excerpt: string; section: string }> = [];
-    for await (const result of book.search(query)) {
-      results.push({ cfi: result.cfi, excerpt: result.excerpt, section: result.label });
+    for await (const result of view.search({ query: trimmed })) {
+      if (seq !== searchSeq) return;
+      if (result === 'done') break;
+      if (typeof result === 'string') continue;
+      const item = result as {
+        progress?: number;
+        label?: string;
+        cfi?: string;
+        excerpt?: SearchExcerpt;
+        subitems?: Array<{ cfi: string; excerpt: SearchExcerpt }>;
+      };
+      if (item.progress != null && !item.subitems && !item.cfi) continue;
+
+      if (Array.isArray(item.subitems)) {
+        const section = item.label ?? '';
+        for (const subitem of item.subitems) {
+          results.push({ cfi: subitem.cfi, excerpt: formatSearchExcerpt(subitem.excerpt), section });
+          if (results.length >= 100) break;
+        }
+      } else if (item.cfi) {
+        results.push({
+          cfi: item.cfi,
+          excerpt: formatSearchExcerpt(item.excerpt),
+          section: item.label ?? '',
+        });
+      }
       if (results.length >= 100) break;
     }
-    post('searchResults', { results, query });
+    if (seq === searchSeq) post('searchResults', { results, query: trimmed });
   } catch (err) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    post('searchResults', { results: [], query, error: (err as any)?.message });
+    if (seq === searchSeq) {
+      post('searchResults', { results: [], query: trimmed, error: (err as any)?.message });
+    }
   }
+}
+
+function formatSearchExcerpt(excerpt: SearchExcerpt | undefined): string {
+  if (!excerpt) return '';
+  if (typeof excerpt === 'string') return excerpt;
+  return `${excerpt.pre ?? ''}${excerpt.match ?? ''}${excerpt.post ?? ''}`;
+}
+
+async function goToPage(page: number): Promise<void> {
+  if (!view || !Number.isFinite(page)) return;
+
+  const targetPage = Math.max(1, Math.floor(page));
+  const totalSections = book?.sections?.length ?? 0;
+  if (sectionPageCountsLocked && totalSections > 0) {
+    const sectionFractions = view.getSectionFractions?.() ?? [];
+    let pagesBefore = 0;
+    for (let i = 0; i < totalSections; i++) {
+      const count = Math.max(1, sectionPageCounts[i] ?? 1);
+      if (targetPage <= pagesBefore + count) {
+        const sectionStart = sectionFractions[i] ?? (i / totalSections);
+        const sectionEnd = sectionFractions[i + 1] ?? ((i + 1) / totalSections);
+        const sectionSpan = Math.max(0, sectionEnd - sectionStart);
+        const pageInSection = Math.max(0, targetPage - pagesBefore - 1);
+        const sectionFraction = count > 1
+          ? Math.min(1 - Number.EPSILON, (pageInSection + 0.5) / count)
+          : 0;
+        await view.goToFraction(sectionStart + sectionFraction * sectionSpan);
+        return;
+      }
+      pagesBefore += count;
+    }
+  }
+
+  const estimatedTotal = Math.max(1, lastRelocateDetail?.location?.total ?? targetPage);
+  const denominator = Math.max(1, estimatedTotal - 1);
+  const fraction = estimatedTotal <= 1 ? 0 : (targetPage - 1) / denominator;
+  await view.goToFraction(Math.max(0, Math.min(1, fraction)));
 }
 
 // ─── File fetching (file:// needs XHR, not fetch) ────────────────────
