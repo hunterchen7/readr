@@ -211,6 +211,7 @@ export const notes = pgTable(
       }[]
     >(),
     penConfig: jsonb("pen_config").$type<{ color: string; width: number }>(),
+    canvasImage: text("canvas_image"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
     deletedAt: timestamp("deleted_at"),

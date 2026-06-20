@@ -77,6 +77,7 @@ export const createNoteSchema = z.object({
   textContent: z.string().optional(),
   strokes: z.array(strokeSchema).optional(),
   penConfig: penConfigSchema.optional(),
+  canvasImage: z.string().nullable().optional(),
 });
 
 export const updateAnnotationSchema = z.object({
@@ -86,6 +87,7 @@ export const updateAnnotationSchema = z.object({
   textContent: z.string().optional(),
   strokes: z.array(strokeSchema).optional(),
   penConfig: penConfigSchema.optional(),
+  canvasImage: z.string().nullable().optional(),
 });
 
 // === Sync ===

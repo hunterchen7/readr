@@ -161,6 +161,7 @@ app.patch("/annotations/:id", async (c) => {
   if (body.textContent !== undefined) noteUpdate.textContent = body.textContent;
   if (body.strokes) noteUpdate.strokes = body.strokes;
   if (body.penConfig) noteUpdate.penConfig = body.penConfig;
+  if (body.canvasImage !== undefined) noteUpdate.canvasImage = body.canvasImage;
 
   const [note] = await db
     .update(schema.notes)

@@ -306,6 +306,10 @@ async function applyNoteChange(
       sets.unshift("pen_config = ?");
       params.unshift(jsonOrNull(payload.penConfig));
     }
+    if (hasKey(payload, "canvasImage")) {
+      sets.unshift("canvas_image = ?");
+      params.unshift((payload.canvasImage as string | null) ?? null);
+    }
     params.push(change.entityId);
     await database.runAsync(
       `UPDATE notes SET ${sets.join(", ")} WHERE id = ?`,
@@ -319,8 +323,8 @@ async function applyNoteChange(
   const now = change.timestamp;
   await database.runAsync(
     `INSERT OR REPLACE INTO notes
-       (id, book_id, position, note_type, text_content, strokes, pen_config, created_at, updated_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+       (id, book_id, position, note_type, text_content, strokes, pen_config, canvas_image, created_at, updated_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       change.entityId,
       payload.bookId as string,
@@ -329,6 +333,7 @@ async function applyNoteChange(
       (payload.textContent as string) ?? null,
       jsonOrNull(payload.strokes),
       jsonOrNull(payload.penConfig),
+      (payload.canvasImage as string | null) ?? null,
       now,
       now,
     ],

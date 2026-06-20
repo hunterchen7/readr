@@ -285,8 +285,9 @@ async function buildAnnotationPayload(
     text_content: string | null;
     strokes: string | null;
     pen_config: string | null;
+    canvas_image: string | null;
   }>(
-    "SELECT book_id, position, note_type, text_content, strokes, pen_config FROM notes WHERE id = ?",
+    "SELECT book_id, position, note_type, text_content, strokes, pen_config, canvas_image FROM notes WHERE id = ?",
     [id],
   );
   if (!row) return null;
@@ -297,6 +298,7 @@ async function buildAnnotationPayload(
     textContent: row.text_content,
     strokes: row.strokes ? JSON.parse(row.strokes) : null,
     penConfig: row.pen_config ? JSON.parse(row.pen_config) : null,
+    canvasImage: row.canvas_image,
   };
 }
 
@@ -652,6 +654,7 @@ export async function createNote(
     textContent,
     strokes,
     penConfig,
+    canvasImage,
   });
 
   return {
