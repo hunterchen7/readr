@@ -62,9 +62,9 @@ interface FoliateView extends HTMLElement {
     | {
         label?: string;
         cfi?: string;
-        excerpt?: string;
+        excerpt?: SearchExcerpt;
         index?: number;
-        subitems?: Array<{ cfi: string; excerpt: string }>;
+        subitems?: Array<{ cfi: string; excerpt: SearchExcerpt }>;
       }
   >;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,6 +92,7 @@ interface Theme {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type RNMessage = { type: string; payload?: any };
+type SearchExcerpt = string | { pre?: string; match?: string; post?: string };
 
 // ─── Module state ─────────────────────────────────────────────────────
 
@@ -143,6 +144,7 @@ let lastAnnotationTapAt = 0;
 // when the user navigates away and back we have to replay everything
 // on the `create-overlay` event. Same for notes (stored in noteCfis).
 const highlightRegistry = new Map<string, string>();
+let searchSeq = 0;
 
 // ─── postMessage helpers ─────────────────────────────────────────────
 
@@ -310,6 +312,7 @@ function handleRNMessage(data: RNMessage): void {
       performSearch(data.payload.query);
       break;
     case 'clearSearch':
+      searchSeq++;
       if (view.clearSearch) view.clearSearch();
       break;
     case 'getPageText': {
@@ -830,45 +833,57 @@ async function measureOnce(mySeq: number): Promise<boolean> {
 // ─── Search ──────────────────────────────────────────────────────────
 
 async function performSearch(query: string): Promise<void> {
+  const seq = ++searchSeq;
   const trimmed = query?.trim();
   if (!view?.search || !trimmed) {
-    post('searchResults', { results: [], query: trimmed ?? query ?? '' });
+    if (seq === searchSeq) {
+      post('searchResults', { results: [], query: trimmed ?? query ?? '' });
+    }
     return;
   }
   try {
     const results: Array<{ cfi: string; excerpt: string; section: string }> = [];
     for await (const result of view.search({ query: trimmed })) {
+      if (seq !== searchSeq) return;
       if (result === 'done') break;
       if (typeof result === 'string') continue;
       const item = result as {
         progress?: number;
         label?: string;
         cfi?: string;
-        excerpt?: string;
-        subitems?: Array<{ cfi: string; excerpt: string }>;
+        excerpt?: SearchExcerpt;
+        subitems?: Array<{ cfi: string; excerpt: SearchExcerpt }>;
       };
       if (item.progress != null && !item.subitems && !item.cfi) continue;
 
       if (Array.isArray(item.subitems)) {
         const section = item.label ?? '';
         for (const subitem of item.subitems) {
-          results.push({ cfi: subitem.cfi, excerpt: subitem.excerpt, section });
+          results.push({ cfi: subitem.cfi, excerpt: formatSearchExcerpt(subitem.excerpt), section });
           if (results.length >= 100) break;
         }
       } else if (item.cfi) {
         results.push({
           cfi: item.cfi,
-          excerpt: item.excerpt ?? '',
+          excerpt: formatSearchExcerpt(item.excerpt),
           section: item.label ?? '',
         });
       }
       if (results.length >= 100) break;
     }
-    post('searchResults', { results, query: trimmed });
+    if (seq === searchSeq) post('searchResults', { results, query: trimmed });
   } catch (err) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    post('searchResults', { results: [], query: trimmed, error: (err as any)?.message });
+    if (seq === searchSeq) {
+      post('searchResults', { results: [], query: trimmed, error: (err as any)?.message });
+    }
   }
+}
+
+function formatSearchExcerpt(excerpt: SearchExcerpt | undefined): string {
+  if (!excerpt) return '';
+  if (typeof excerpt === 'string') return excerpt;
+  return `${excerpt.pre ?? ''}${excerpt.match ?? ''}${excerpt.post ?? ''}`;
 }
 
 async function goToPage(page: number): Promise<void> {
@@ -886,15 +901,20 @@ async function goToPage(page: number): Promise<void> {
         const sectionEnd = sectionFractions[i + 1] ?? ((i + 1) / totalSections);
         const sectionSpan = Math.max(0, sectionEnd - sectionStart);
         const pageInSection = Math.max(0, targetPage - pagesBefore - 1);
-        await view.goToFraction(sectionStart + (pageInSection / count) * sectionSpan);
+        const sectionFraction = count > 1
+          ? Math.min(1 - Number.EPSILON, (pageInSection + 0.5) / count)
+          : 0;
+        await view.goToFraction(sectionStart + sectionFraction * sectionSpan);
         return;
       }
       pagesBefore += count;
     }
   }
 
-  const estimatedTotal = lastRelocateDetail?.location?.total ?? targetPage;
-  await view.goToFraction(Math.max(0, Math.min(1, (targetPage - 1) / estimatedTotal)));
+  const estimatedTotal = Math.max(1, lastRelocateDetail?.location?.total ?? targetPage);
+  const denominator = Math.max(1, estimatedTotal - 1);
+  const fraction = estimatedTotal <= 1 ? 0 : (targetPage - 1) / denominator;
+  await view.goToFraction(Math.max(0, Math.min(1, fraction)));
 }
 
 // ─── File fetching (file:// needs XHR, not fetch) ────────────────────

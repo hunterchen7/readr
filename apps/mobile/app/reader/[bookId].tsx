@@ -580,6 +580,7 @@ export default function ReaderScreen() {
   function handleSearch(query: string) {
     if (!query.trim()) {
       setSearchResults([]);
+      setSearchLoading(false);
       sendToWebView("clearSearch", {});
       return;
     }
