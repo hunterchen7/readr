@@ -30,11 +30,8 @@ function mergePayload(
  */
 export function deduplicateQueue(entries: SyncLogEntry[]): SyncLogEntry[] {
   const collapsed = new Map<string, SyncLogEntry>();
-  const sorted = [...entries].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
 
-  for (const entry of sorted) {
+  for (const entry of entries) {
     const key = `${entry.entityType}:${entry.entityId}`;
     const existing = collapsed.get(key);
 
@@ -46,10 +43,15 @@ export function deduplicateQueue(entries: SyncLogEntry[]): SyncLogEntry[] {
     if (existing.operation === "delete") continue;
 
     if (entry.operation === "delete") {
-      collapsed.set(key, { ...entry, payload: null });
+      collapsed.delete(key);
+      collapsed.set(key, {
+        ...entry,
+        payload: existing.operation === "create" ? existing.payload : null,
+      });
       continue;
     }
 
+    collapsed.delete(key);
     collapsed.set(key, {
       ...entry,
       operation: existing.operation === "create" ? "create" : entry.operation,
@@ -57,9 +59,7 @@ export function deduplicateQueue(entries: SyncLogEntry[]): SyncLogEntry[] {
     });
   }
 
-  return Array.from(collapsed.values()).sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
+  return Array.from(collapsed.values());
 }
 
 /**

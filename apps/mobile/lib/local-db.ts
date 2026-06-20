@@ -755,7 +755,7 @@ export async function getSyncQueue(): Promise<SyncLogEntry[]> {
     payload: string | null;
     device_id: string | null;
     timestamp: string;
-  }>("SELECT * FROM sync_queue ORDER BY timestamp ASC");
+  }>("SELECT * FROM sync_queue ORDER BY id ASC");
 
   return rows.map((row) => ({
     id: row.id,

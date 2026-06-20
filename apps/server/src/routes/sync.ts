@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
-import { eq, and, gt, lt, sql } from "drizzle-orm";
+import { eq, and, gt, lt, sql, desc } from "drizzle-orm";
 import { syncPullQuerySchema, syncPushSchema } from "@readr/shared";
 import { lwwMerge, setMerge, type ExistingEntity } from "@readr/sync-engine";
 import { scopeToUser } from "../middleware/user-scope.js";
@@ -189,6 +189,7 @@ async function handleAnnotationSync(
 
   if (mergeResult.action === "skip") {
     if (operation === "delete" && mergeResult.reason === "not_found") {
+      await insertTombstoneEntity(entityType, entityId, userId, payload, timestamp);
       await db.insert(schema.syncLog).values({
         userId,
         entityType,
@@ -198,6 +199,14 @@ async function handleAnnotationSync(
         deviceId: entry.deviceId,
         timestamp: new Date(timestamp),
       });
+      return { accepted: true };
+    }
+    if (
+      mergeResult.reason === "already_exists" ||
+      mergeResult.reason === "already_deleted" ||
+      mergeResult.reason === "stale_update" ||
+      mergeResult.reason === "tombstoned"
+    ) {
       return { accepted: true };
     }
     return { accepted: false };
@@ -240,7 +249,7 @@ async function lookupEntity(
         .from(schema.bookmarks)
         .where(and(eq(schema.bookmarks.id, entityId), scopeToUser.bookmarks(userId)))
         .limit(1);
-      if (!rows[0]) return null;
+      if (!rows[0]) return lookupSyncTombstone(entityType, entityId, userId);
       return { id: rows[0].id, deletedAt: rows[0].deletedAt?.toISOString() ?? null, createdAt: rows[0].createdAt?.toISOString() ?? null };
     }
     case "highlight": {
@@ -249,7 +258,7 @@ async function lookupEntity(
         .from(schema.highlights)
         .where(and(eq(schema.highlights.id, entityId), scopeToUser.highlights(userId)))
         .limit(1);
-      if (!rows[0]) return null;
+      if (!rows[0]) return lookupSyncTombstone(entityType, entityId, userId);
       return { id: rows[0].id, deletedAt: rows[0].deletedAt?.toISOString() ?? null, createdAt: rows[0].createdAt?.toISOString() ?? null };
     }
     case "note": {
@@ -258,12 +267,34 @@ async function lookupEntity(
         .from(schema.notes)
         .where(and(eq(schema.notes.id, entityId), scopeToUser.notes(userId)))
         .limit(1);
-      if (!rows[0]) return null;
+      if (!rows[0]) return lookupSyncTombstone(entityType, entityId, userId);
       return { id: rows[0].id, deletedAt: rows[0].deletedAt?.toISOString() ?? null, updatedAt: rows[0].updatedAt?.toISOString() ?? null };
     }
     default:
       return null;
   }
+}
+
+async function lookupSyncTombstone(
+  entityType: string,
+  entityId: string,
+  userId: string,
+): Promise<ExistingEntity | null> {
+  const rows = await db
+    .select({ timestamp: schema.syncLog.timestamp })
+    .from(schema.syncLog)
+    .where(
+      and(
+        eq(schema.syncLog.userId, userId),
+        eq(schema.syncLog.entityType, entityType),
+        eq(schema.syncLog.entityId, entityId),
+        eq(schema.syncLog.operation, "delete"),
+      ),
+    )
+    .orderBy(desc(schema.syncLog.timestamp))
+    .limit(1);
+  const deletedAt = rows[0]?.timestamp?.toISOString();
+  return deletedAt ? { id: entityId, deletedAt } : null;
 }
 
 async function insertEntity(
@@ -312,6 +343,63 @@ async function insertEntity(
         createdAt: new Date(timestamp),
         updatedAt: new Date(timestamp),
       });
+      break;
+  }
+}
+
+async function insertTombstoneEntity(
+  entityType: string,
+  entityId: string,
+  userId: string,
+  payload: Record<string, unknown> | null,
+  timestamp: string,
+): Promise<void> {
+  if (!payload || typeof payload.bookId !== "string") return;
+  const deletedAt = new Date(timestamp);
+
+  switch (entityType) {
+    case "bookmark":
+      if (!payload.position) return;
+      await db.insert(schema.bookmarks).values({
+        id: entityId,
+        bookId: payload.bookId,
+        userId,
+        position: payload.position as object,
+        label: (payload.label as string) ?? null,
+        createdAt: deletedAt,
+        deletedAt,
+      }).onConflictDoNothing();
+      break;
+    case "highlight":
+      if (typeof payload.cfiRange !== "string") return;
+      await db.insert(schema.highlights).values({
+        id: entityId,
+        bookId: payload.bookId,
+        userId,
+        cfiRange: payload.cfiRange,
+        textContent: (payload.textContent as string) ?? null,
+        color: (payload.color as string) ?? "yellow",
+        chapterLabel: (payload.chapterLabel as string) ?? null,
+        percentage: (payload.percentage as number) ?? null,
+        createdAt: deletedAt,
+        deletedAt,
+      }).onConflictDoNothing();
+      break;
+    case "note":
+      if (!payload.position) return;
+      await db.insert(schema.notes).values({
+        id: entityId,
+        bookId: payload.bookId,
+        userId,
+        position: payload.position as object,
+        noteType: (payload.noteType as string) ?? "typed",
+        textContent: (payload.textContent as string) ?? null,
+        strokes: (payload.strokes ?? null) as typeof schema.notes.$inferInsert.strokes,
+        penConfig: (payload.penConfig ?? null) as typeof schema.notes.$inferInsert.penConfig,
+        createdAt: deletedAt,
+        updatedAt: deletedAt,
+        deletedAt,
+      }).onConflictDoNothing();
       break;
   }
 }

@@ -358,6 +358,10 @@ export async function pushPending(): Promise<{ pushed: number; conflicts: SyncCo
     (pushResult.acceptedEntities ?? []).map((entry) => `${entry.entityType}:${entry.entityId}`),
   );
   if (acceptedKeys.size > 0) {
+    await applyRemoteChanges(
+      deduplicated.filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`)),
+    );
+
     const db = await getDb();
     const idsToRemove = queue
       .filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`))
@@ -437,6 +441,10 @@ export async function runSync(): Promise<{
       );
 
       if (acceptedKeys.size > 0) {
+        await applyRemoteChanges(
+          deduplicated.filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`)),
+        );
+
         const db = await getDb();
         const idsToRemove = queue
           .filter((entry) => acceptedKeys.has(`${entry.entityType}:${entry.entityId}`))
