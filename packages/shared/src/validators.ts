@@ -71,13 +71,20 @@ export const penConfigSchema = z.object({
   width: z.number().positive(),
 });
 
+export const canvasImageSchema = z
+  .string()
+  .max(2_000_000)
+  .regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/, {
+    message: "canvasImage must be a PNG data URI",
+  });
+
 export const createNoteSchema = z.object({
   position: bookPositionSchema,
   noteType: z.enum(["typed", "handwritten"]),
   textContent: z.string().optional(),
   strokes: z.array(strokeSchema).optional(),
   penConfig: penConfigSchema.optional(),
-  canvasImage: z.string().nullable().optional(),
+  canvasImage: canvasImageSchema.nullable().optional(),
 });
 
 export const updateAnnotationSchema = z.object({
@@ -87,7 +94,7 @@ export const updateAnnotationSchema = z.object({
   textContent: z.string().optional(),
   strokes: z.array(strokeSchema).optional(),
   penConfig: penConfigSchema.optional(),
-  canvasImage: z.string().nullable().optional(),
+  canvasImage: canvasImageSchema.nullable().optional(),
 });
 
 // === Sync ===

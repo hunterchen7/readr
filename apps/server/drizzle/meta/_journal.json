@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1712770740000,
+      "tag": "0001_decouple-token-from-pk",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1712806440000,
+      "tag": "0002_add-md5-column",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1712822760000,
+      "tag": "0003_highlight-chapter-label",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1713227040000,
+      "tag": "0004_finished-flag-backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781914620000,
+      "tag": "0005_note-canvas-image",
+      "breakpoints": true
+    }
+  ]
+}

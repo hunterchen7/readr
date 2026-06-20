@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 import { eq, and, gt, lt, sql, desc } from "drizzle-orm";
-import { syncPullQuerySchema, syncPushSchema } from "@readr/shared";
+import { canvasImageSchema, syncPullQuerySchema, syncPushSchema } from "@readr/shared";
 import { lwwMerge, setMerge, type ExistingEntity } from "@readr/sync-engine";
 import { scopeToUser } from "../middleware/user-scope.js";
 import type { SyncLogEntry, SyncConflict, BookPosition } from "@readr/shared";
@@ -340,12 +340,18 @@ async function insertEntity(
         textContent: (payload.textContent as string) ?? null,
         strokes: (payload.strokes ?? null) as typeof schema.notes.$inferInsert.strokes,
         penConfig: (payload.penConfig ?? null) as typeof schema.notes.$inferInsert.penConfig,
-        canvasImage: (payload.canvasImage as string) ?? null,
+        canvasImage: parseCanvasImage(payload.canvasImage) ?? null,
         createdAt: new Date(timestamp),
         updatedAt: new Date(timestamp),
       });
       break;
   }
+}
+
+function parseCanvasImage(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return canvasImageSchema.parse(value);
 }
 
 async function insertTombstoneEntity(
@@ -437,7 +443,7 @@ async function updateEntity(
           strokes: (payload.strokes as typeof schema.notes.$inferInsert.strokes) ?? undefined,
           penConfig: (payload.penConfig as typeof schema.notes.$inferInsert.penConfig) ?? undefined,
           canvasImage: Object.prototype.hasOwnProperty.call(payload, "canvasImage")
-            ? (payload.canvasImage as string | null)
+            ? parseCanvasImage(payload.canvasImage)
             : undefined,
           updatedAt: new Date(timestamp),
         })

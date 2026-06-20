@@ -118,6 +118,16 @@ app.post("/books/:id/notes", async (c) => {
     .values({ bookId, userId, ...body })
     .returning();
 
+  await db.insert(schema.syncLog).values({
+    userId,
+    entityType: "note",
+    entityId: note.id,
+    operation: "create",
+    payload: { bookId, ...body },
+    deviceId: null,
+    timestamp: note.createdAt ?? new Date(),
+  });
+
   return c.json({ note }, 201);
 });
 
@@ -168,7 +178,18 @@ app.patch("/annotations/:id", async (c) => {
     .set(noteUpdate)
     .where(and(eq(schema.notes.id, annotationId), scopeToUser.notes(userId)))
     .returning();
-  if (note) return c.json({ annotation: note });
+  if (note) {
+    await db.insert(schema.syncLog).values({
+      userId,
+      entityType: "note",
+      entityId: note.id,
+      operation: "update",
+      payload: body,
+      deviceId: null,
+      timestamp: note.updatedAt ?? new Date(),
+    });
+    return c.json({ annotation: note });
+  }
 
   throw notFound("Annotation not found");
 });
