@@ -454,7 +454,9 @@ export class Paginator extends HTMLElement {
     #heights = []              // measured content height per section
     #mountPromises = new Map() // in-flight mount avoids duplication
     #focalIdx = -1             // current focal section (viewport midpoint)
-    #windowRadius = 1          // mount [focal-R, focal+R]
+    #windowRadius = 2          // mount [focal-R, focal+R]
+    #slideSeq = 0              // cancels stale async preload windows
+    #stackGeneration = 0       // invalidates in-flight section mounts
     #stackScrollHandler = null
     #programmaticScroll = false // suppresses focal-update during scrollTo
     // Pin focal during mode switch + its settling window. #onStackScroll
@@ -1163,7 +1165,7 @@ export class Paginator extends HTMLElement {
             // local to the focal section's iframe. getVisibleRange walks
             // text nodes inside that single doc, so negative/out-of-range
             // local bounds just return empty — exactly what we want.
-            const view = this.#views.get(this.#focalIdx) ?? this.#view
+            const view = this.#views.get(this.#focalIdx)
             const doc = view?.document
             if (!doc) return
             const iframe = doc.defaultView?.frameElement
@@ -1185,13 +1187,14 @@ export class Paginator extends HTMLElement {
     }
     #afterScroll(reason) {
         const range = this.#getVisibleRange()
+        if (this.#stacked && !range) return
         this.#lastVisibleRange = range
         // don't set new anchor if relocation was to scroll to anchor
         if (reason !== 'selection' && reason !== 'navigation' && reason !== 'anchor')
             this.#anchor = range
         else this.#justAnchored = true
 
-        const index = this.#index
+        const index = this.#stacked ? this.#focalIdx : this.#index
         const detail = { reason, range, index }
         if (this.scrolled) {
             // Stacked mode: report SECTION-RELATIVE fraction so view.js's
@@ -1277,6 +1280,7 @@ export class Paginator extends HTMLElement {
     #initStack() {
         if (this.#stacked || !this.sections) return
         this.#stacked = true
+        this.#stackGeneration++
         // Focal view (this.#view) STAYS exactly where it is in
         // #container — we never touch it. We only insert placeholder
         // <div>s for the other sections as SIBLINGS, before the focal
@@ -1298,12 +1302,14 @@ export class Paginator extends HTMLElement {
         const makePlaceholder = i => {
             const ph = document.createElement('div')
             ph.dataset.sectionIndex = String(i)
+            const h = this.#heights[i] || estH
+            this.#heights[i] = h
             // Plain block spacer — no content-visibility:auto. That
             // optimization triggered blank-until-interaction bugs
             // because initial layout + scrollToAnchor ran before the
             // browser materialized reserved sizes for skipped content.
             ph.style.cssText =
-                `display:block;width:100%;min-height:${estH}px;` +
+                `display:block;width:100%;min-height:${h}px;` +
                 `position:relative;`
             return ph
         }
@@ -1329,6 +1335,7 @@ export class Paginator extends HTMLElement {
     }
     #teardownStack() {
         if (!this.#stacked) return
+        this.#stackGeneration++
         if (this.#stackScrollHandler) {
             this.#container.removeEventListener('scroll', this.#stackScrollHandler)
             this.#stackScrollHandler = null
@@ -1345,6 +1352,7 @@ export class Paginator extends HTMLElement {
                     this.#container.removeChild(v.element)
                 }
                 v.destroy()
+                this.sections[idx]?.unload?.()
             } catch { /* ignore */ }
         }
         for (let i = 0; i < this.#hosts.length; i++) {
@@ -1368,9 +1376,14 @@ export class Paginator extends HTMLElement {
         if (this.#views.has(index)) return
         const pending = this.#mountPromises.get(index)
         if (pending) return pending
+        const generation = this.#stackGeneration
         const task = (async () => {
             const src = opts.src ?? await Promise.resolve(this.sections[index].load())
                 .catch(e => { console.warn(e); return null })
+            if (!this.#stacked || generation !== this.#stackGeneration) {
+                this.sections[index]?.unload?.()
+                return
+            }
             if (!src) return
             const view = this.#createView(index)
             const afterLoad = doc => {
@@ -1386,6 +1399,11 @@ export class Paginator extends HTMLElement {
             }
             const beforeRender = this.#beforeRender.bind(this)
             await view.load(src, afterLoad, beforeRender)
+            if (!this.#stacked || generation !== this.#stackGeneration) {
+                try { view.destroy() } catch { /* ignore */ }
+                this.sections[index]?.unload?.()
+                return
+            }
             this.dispatchEvent(new CustomEvent('create-overlayer', {
                 detail: {
                     doc: view.document, index,
@@ -1408,6 +1426,7 @@ export class Paginator extends HTMLElement {
         // the measured height so offsets stay stable.
         const oldEl = this.#hosts[index]
         const h = this.#heights[index] || this.#estSectionHeight()
+        this.#heights[index] = h
         const ph = document.createElement('div')
         ph.dataset.sectionIndex = String(index)
         ph.style.cssText =
@@ -1418,21 +1437,34 @@ export class Paginator extends HTMLElement {
         }
         this.#hosts[index] = ph
         try { view.destroy() } catch { /* ignore */ }
+        this.sections[index]?.unload?.()
         this.#views.delete(index)
     }
     async #slideWindow(focal) {
+        const seq = ++this.#slideSeq
         const R = this.#windowRadius
         const lo = Math.max(0, focal - R)
         const hi = Math.min(this.#hosts.length - 1, focal + R)
-        for (const k of Array.from(this.#views.keys())) {
-            if (k < lo || k > hi) this.#unmountSection(k)
-        }
+        this.#trimWindow(lo, hi)
         const toMount = []
         for (let i = lo; i <= hi; i++) {
             if (!this.#views.has(i) && !this.#mountPromises.has(i))
                 toMount.push(this.#mountSection(i))
         }
         if (toMount.length > 0) await Promise.all(toMount)
+        if (seq !== this.#slideSeq) {
+            const current = this.#focalIdx >= 0 ? this.#focalIdx : focal
+            const currentLo = Math.max(0, current - R)
+            const currentHi = Math.min(this.#hosts.length - 1, current + R)
+            this.#trimWindow(currentLo, currentHi)
+            return
+        }
+        this.#trimWindow(lo, hi)
+    }
+    #trimWindow(lo, hi) {
+        for (const k of Array.from(this.#views.keys())) {
+            if (k < lo || k > hi) this.#unmountSection(k)
+        }
     }
     #measureSection(index) {
         // Record the mounted section's actual layout height so

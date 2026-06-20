@@ -46,6 +46,7 @@ interface FoliateOverlayer {
 interface FoliateRenderer extends HTMLElement {
   page?: number;
   pages?: number;
+  focalIndex?: number;
   setStyles?(styles: string | [string, string]): void;
   getContents?(): Array<{ doc: Document; index: number }>;
 }
@@ -304,7 +305,7 @@ function handleRNMessage(data: RNMessage): void {
       // Return the visible section's plain text for TTS. Fall back to
       // empty string if the section hasn't loaded yet.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const text = (currentSectionDoc?.body as any)?.innerText?.trim() ?? '';
+      const text = (getFocalSectionDoc()?.body as any)?.innerText?.trim() ?? '';
       post('pageText', { text });
       break;
     }
@@ -493,6 +494,20 @@ function injectThemeIntoAllDocs(): void {
   if (currentSectionDoc) injectThemeIntoDoc(currentSectionDoc);
 }
 
+function getFocalSectionDoc(): Document | null {
+  try {
+    const contents = view?.renderer?.getContents?.() ?? [];
+    const focalIndex = view?.renderer?.focalIndex;
+    if (typeof focalIndex === 'number') {
+      const focal = contents.find((c) => c.index === focalIndex);
+      if (focal?.doc) return focal.doc;
+    }
+    return contents[0]?.doc ?? currentSectionDoc;
+  } catch {
+    return currentSectionDoc;
+  }
+}
+
 function applyThemeStyles(): void {
   if (!currentThemeCSS) return;
   try {
@@ -520,18 +535,32 @@ function layoutSignature(t: Theme): string {
     t.pageTurnMode ?? null,
   ]);
 }
+function pageCountSignature(t: Theme): string {
+  return JSON.stringify([
+    t.margin ?? null,
+    t.marginV ?? null,
+    t.fontSize ?? null,
+    t.fontFamily ?? null,
+    t.fontWeight ?? null,
+    t.lineHeight ?? null,
+  ]);
+}
 let lastLayoutSig: string | null = null;
+let lastPageCountSig: string | null = null;
 
 function applyTheme(theme: Theme): void {
   const prevTheme = currentTheme;
   currentTheme = theme;
   const sig = layoutSignature(theme);
+  const pageSig = pageCountSignature(theme);
   // First call (lastLayoutSig null) ALWAYS runs the full path so
   // margins/gap/etc get initially applied. Subsequent calls only
   // reflow when the signature changed; colour-only changes skip.
   const isFirst = lastLayoutSig == null;
   const layoutChanged = isFirst || sig !== lastLayoutSig;
+  const pageCountChanged = lastPageCountSig == null || pageSig !== lastPageCountSig;
   lastLayoutSig = sig;
+  lastPageCountSig = pageSig;
   post('debug', { msg: `applyTheme isFirst=${isFirst} layoutChanged=${layoutChanged} prevBg=${prevTheme.bg} newBg=${theme.bg}` });
 
   // ── Colour work (always, cheap, no reflow) ───────────────────────
@@ -594,14 +623,17 @@ function applyTheme(theme: Theme): void {
   renderer.setAttribute('max-inline-size', '99999px');
   renderer.setAttribute('max-block-size', '99999px');
   renderer.setAttribute('margin', `${theme.marginV ?? 24}px`);
-  // Page-count measurement is paginated-only. When entering scroll
-  // mode, KEEP the previous run's counts so total pages still display
-  // — they're correct as long as the layout (margin/font) hasn't
-  // changed, which is exactly what the layoutChanged guard ensures.
-  if (mode === 'scroll') return;
-  sectionPageCounts = {};
-  sectionPageCountsLocked = false;
-  _measureSeq++;
+  // Page counts are measured in a hidden paginated view even when
+  // the visible reader is in scrolled/article mode. Invalidate them
+  // whenever typography or margins change; changing only the page-turn
+  // mode can keep existing counts.
+  if (pageCountChanged) {
+    sectionPageCounts = {};
+    sectionPageCountsLocked = false;
+    _measureSeq++;
+  }
+  if (mode === 'scroll' && !pageCountChanged && sectionPageCountsLocked) return;
+  if (!pageCountChanged && sectionPageCountsLocked) return;
   post('debug', {
     msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily} mode=${mode}`,
   });
@@ -1204,20 +1236,18 @@ async function init(): Promise<void> {
     view.addEventListener('create-overlay', () => {
       if (!view?.addAnnotation) return;
       for (const [cfi, color] of highlightRegistry) {
-        try {
-          view.addAnnotation({ value: cfi, color, kind: 'highlight' });
-        } catch { /* ignore */ }
+        Promise.resolve(view.addAnnotation({ value: cfi, color, kind: 'highlight' }))
+          .catch(() => { /* ignore */ });
       }
       for (const [cfi, noteType] of noteCfis) {
-        try {
-          view.addAnnotation({ value: cfi, kind: 'note', noteType });
-        } catch { /* ignore */ }
+        Promise.resolve(view.addAnnotation({ value: cfi, kind: 'note', noteType }))
+          .catch(() => { /* ignore */ });
       }
     });
 
     // Foliate fires 'load' with { doc, index } for every newly-loaded
-    // section. We keep a pointer to the current doc (TTS scrapes it),
-    // inject theme CSS, and wire up tap handlers.
+    // section. We keep a fallback pointer, inject theme CSS, and wire
+    // up tap handlers.
     view.addEventListener('load', (e) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const detail = (e as CustomEvent).detail as any;
