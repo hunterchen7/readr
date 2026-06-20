@@ -27,6 +27,14 @@ interface PushResponse {
   conflicts: SyncConflict[];
 }
 
+function hasKey(payload: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(payload, key);
+}
+
+function jsonOrNull(value: unknown): string | null {
+  return value == null ? null : JSON.stringify(value);
+}
+
 // 30s upper bound on every sync request so a hung server doesn't keep
 // a fetch alive indefinitely. The bare `fetch` calls below can't borrow
 // apiFetch's wrapper because they read the JSON body manually and want
@@ -161,6 +169,26 @@ async function applyBookmarkChange(
   const payload = change.payload;
   if (!payload) return;
 
+  if (change.operation === "update") {
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+    if (hasKey(payload, "label")) {
+      sets.push("label = ?");
+      params.push((payload.label as string | null) ?? null);
+    }
+    sets.push("synced = 1");
+    if (params.length > 0) {
+      params.push(change.entityId);
+      await database.runAsync(
+        `UPDATE bookmarks SET ${sets.join(", ")} WHERE id = ?`,
+        params,
+      );
+    }
+    return;
+  }
+
+  if (typeof payload.bookId !== "string" || !payload.position) return;
+
   await database.runAsync(
     `INSERT OR REPLACE INTO bookmarks (id, book_id, position, label, created_at, synced)
      VALUES (?, ?, ?, ?, ?, 1)`,
@@ -189,9 +217,51 @@ async function applyHighlightChange(
   const payload = change.payload;
   if (!payload) return;
 
+  if (change.operation === "update") {
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+    if (hasKey(payload, "textContent")) {
+      sets.push("text_content = ?");
+      params.push((payload.textContent as string | null) ?? null);
+    }
+    if (hasKey(payload, "note")) {
+      sets.push("note = ?");
+      params.push((payload.note as string | null) ?? null);
+    }
+    if (hasKey(payload, "color")) {
+      sets.push("color = ?");
+      params.push((payload.color as string | null) ?? "yellow");
+    }
+    if (hasKey(payload, "chapterLabel")) {
+      sets.push("chapter_label = ?");
+      params.push((payload.chapterLabel as string | null) ?? null);
+    }
+    if (hasKey(payload, "percentage")) {
+      sets.push("percentage = ?");
+      params.push((payload.percentage as number | null) ?? null);
+    }
+    sets.push("synced = 1");
+    if (params.length > 0) {
+      params.push(change.entityId);
+      await database.runAsync(
+        `UPDATE highlights SET ${sets.join(", ")} WHERE id = ?`,
+        params,
+      );
+    }
+    return;
+  }
+
+  if (
+    typeof payload.bookId !== "string" ||
+    typeof payload.cfiRange !== "string"
+  ) {
+    return;
+  }
+
   await database.runAsync(
-    `INSERT OR REPLACE INTO highlights (id, book_id, cfi_range, text_content, note, color, created_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+    `INSERT OR REPLACE INTO highlights
+       (id, book_id, cfi_range, text_content, note, color, chapter_label, percentage, created_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       change.entityId,
       payload.bookId as string,
@@ -199,6 +269,8 @@ async function applyHighlightChange(
       (payload.textContent as string) ?? null,
       (payload.note as string) ?? null,
       (payload.color as string) ?? "yellow",
+      (payload.chapterLabel as string) ?? null,
+      (payload.percentage as number) ?? null,
       change.timestamp,
     ],
   );
@@ -219,9 +291,35 @@ async function applyNoteChange(
   const payload = change.payload;
   if (!payload) return;
 
+  if (change.operation === "update") {
+    const sets: string[] = ["updated_at = ?", "synced = 1"];
+    const params: (string | null)[] = [change.timestamp];
+    if (hasKey(payload, "textContent")) {
+      sets.unshift("text_content = ?");
+      params.unshift((payload.textContent as string | null) ?? null);
+    }
+    if (hasKey(payload, "strokes")) {
+      sets.unshift("strokes = ?");
+      params.unshift(jsonOrNull(payload.strokes));
+    }
+    if (hasKey(payload, "penConfig")) {
+      sets.unshift("pen_config = ?");
+      params.unshift(jsonOrNull(payload.penConfig));
+    }
+    params.push(change.entityId);
+    await database.runAsync(
+      `UPDATE notes SET ${sets.join(", ")} WHERE id = ?`,
+      params,
+    );
+    return;
+  }
+
+  if (typeof payload.bookId !== "string" || !payload.position) return;
+
   const now = change.timestamp;
   await database.runAsync(
-    `INSERT OR REPLACE INTO notes (id, book_id, position, note_type, text_content, strokes, pen_config, created_at, updated_at, synced)
+    `INSERT OR REPLACE INTO notes
+       (id, book_id, position, note_type, text_content, strokes, pen_config, created_at, updated_at, synced)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       change.entityId,
@@ -229,8 +327,8 @@ async function applyNoteChange(
       JSON.stringify(payload.position),
       (payload.noteType as string) ?? "typed",
       (payload.textContent as string) ?? null,
-      payload.strokes ? JSON.stringify(payload.strokes) : null,
-      payload.penConfig ? JSON.stringify(payload.penConfig) : null,
+      jsonOrNull(payload.strokes),
+      jsonOrNull(payload.penConfig),
       now,
       now,
     ],

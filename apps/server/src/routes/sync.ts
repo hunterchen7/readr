@@ -188,6 +188,18 @@ async function handleAnnotationSync(
   );
 
   if (mergeResult.action === "skip") {
+    if (operation === "delete" && mergeResult.reason === "not_found") {
+      await db.insert(schema.syncLog).values({
+        userId,
+        entityType,
+        entityId,
+        operation,
+        payload,
+        deviceId: entry.deviceId,
+        timestamp: new Date(timestamp),
+      });
+      return { accepted: true };
+    }
     return { accepted: false };
   }
 
