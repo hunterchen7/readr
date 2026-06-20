@@ -285,8 +285,9 @@ async function buildAnnotationPayload(
     text_content: string | null;
     strokes: string | null;
     pen_config: string | null;
+    canvas_image: string | null;
   }>(
-    "SELECT book_id, position, note_type, text_content, strokes, pen_config FROM notes WHERE id = ?",
+    "SELECT book_id, position, note_type, text_content, strokes, pen_config, canvas_image FROM notes WHERE id = ?",
     [id],
   );
   if (!row) return null;
@@ -297,6 +298,7 @@ async function buildAnnotationPayload(
     textContent: row.text_content,
     strokes: row.strokes ? JSON.parse(row.strokes) : null,
     penConfig: row.pen_config ? JSON.parse(row.pen_config) : null,
+    canvasImage: row.canvas_image,
   };
 }
 
@@ -652,6 +654,7 @@ export async function createNote(
     textContent,
     strokes,
     penConfig,
+    canvasImage,
   });
 
   return {
@@ -757,15 +760,41 @@ export async function getSyncQueue(): Promise<SyncLogEntry[]> {
     timestamp: string;
   }>("SELECT * FROM sync_queue ORDER BY id ASC");
 
-  return rows.map((row) => ({
-    id: row.id,
-    entityType: row.entity_type as SyncLogEntry["entityType"],
-    entityId: row.entity_id,
-    operation: row.operation as SyncLogEntry["operation"],
-    payload: row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : null,
-    deviceId: row.device_id,
-    timestamp: row.timestamp,
-  }));
+  const entries: SyncLogEntry[] = [];
+  for (const row of rows) {
+    const payload = row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : null;
+
+    if (
+      row.entity_type === "note" &&
+      row.operation === "create" &&
+      payload &&
+      !Object.prototype.hasOwnProperty.call(payload, "canvasImage")
+    ) {
+      const note = await database.getFirstAsync<{ canvas_image: string | null }>(
+        "SELECT canvas_image FROM notes WHERE id = ?",
+        [row.entity_id],
+      );
+      if (note?.canvas_image) {
+        payload.canvasImage = note.canvas_image;
+        await database.runAsync(
+          "UPDATE sync_queue SET payload = ? WHERE id = ?",
+          [JSON.stringify(payload), row.id],
+        );
+      }
+    }
+
+    entries.push({
+      id: row.id,
+      entityType: row.entity_type as SyncLogEntry["entityType"],
+      entityId: row.entity_id,
+      operation: row.operation as SyncLogEntry["operation"],
+      payload,
+      deviceId: row.device_id,
+      timestamp: row.timestamp,
+    });
+  }
+
+  return entries;
 }
 
 export async function clearSyncQueue(upToId: number): Promise<void> {
