@@ -454,7 +454,7 @@ export class Paginator extends HTMLElement {
     #heights = []              // measured content height per section
     #mountPromises = new Map() // in-flight mount avoids duplication
     #focalIdx = -1             // current focal section (viewport midpoint)
-    #windowRadius = 1          // mount [focal-R, focal+R]
+    #windowRadius = 2          // mount [focal-R, focal+R]
     #stackScrollHandler = null
     #programmaticScroll = false // suppresses focal-update during scrollTo
     // Pin focal during mode switch + its settling window. #onStackScroll
