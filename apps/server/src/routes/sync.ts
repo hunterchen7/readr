@@ -309,6 +309,7 @@ async function insertEntity(
         textContent: (payload.textContent as string) ?? null,
         strokes: (payload.strokes ?? null) as typeof schema.notes.$inferInsert.strokes,
         penConfig: (payload.penConfig ?? null) as typeof schema.notes.$inferInsert.penConfig,
+        canvasImage: (payload.canvasImage as string) ?? null,
         createdAt: new Date(timestamp),
         updatedAt: new Date(timestamp),
       });
@@ -347,6 +348,9 @@ async function updateEntity(
           textContent: (payload.textContent as string) ?? undefined,
           strokes: (payload.strokes as typeof schema.notes.$inferInsert.strokes) ?? undefined,
           penConfig: (payload.penConfig as typeof schema.notes.$inferInsert.penConfig) ?? undefined,
+          canvasImage: Object.prototype.hasOwnProperty.call(payload, "canvasImage")
+            ? (payload.canvasImage as string | null)
+            : undefined,
           updatedAt: new Date(timestamp),
         })
         .where(eq(schema.notes.id, entityId));

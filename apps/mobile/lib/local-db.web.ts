@@ -137,6 +137,7 @@ export async function createNote(
   textContent?: string,
   strokes?: Stroke[],
   penConfig?: PenConfig,
+  canvasImage?: string | null,
 ): Promise<Note> {
   const now = new Date().toISOString();
   return {
@@ -148,7 +149,7 @@ export async function createNote(
     textContent: textContent ?? null,
     strokes: strokes ?? null,
     penConfig: penConfig ?? null,
-    canvasImage: null,
+    canvasImage: canvasImage ?? null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -161,6 +162,7 @@ export async function updateNote(
     textContent?: string;
     strokes?: Stroke[];
     penConfig?: PenConfig;
+    canvasImage?: string | null;
   },
 ): Promise<void> {
   // No-op on web.
