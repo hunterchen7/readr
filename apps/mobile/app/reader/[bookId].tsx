@@ -1571,14 +1571,7 @@ export default function ReaderScreen() {
         progressPct={progress}
         onClose={() => setShowGotoDialog(false)}
         onGoToPage={(page) => {
-          if (format === "pdf") {
-            sendToWebView("goToLocation", { page });
-            return;
-          }
-          if (totalPages && totalPages > 0) {
-            const fraction = totalPages > 1 ? (page - 1) / (totalPages - 1) : 0;
-            sendToWebView("goToLocation", { fraction });
-          }
+          sendToWebView("goToLocation", { page });
         }}
         onGoToFraction={(frac) => {
           sendToWebView("goToLocation", { fraction: frac });
