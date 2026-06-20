@@ -63,6 +63,101 @@ describe("deduplicateQueue", () => {
     ];
     expect(deduplicateQueue(entries)).toHaveLength(2);
   });
+
+  it("collapses create then update into a merged create", () => {
+    const entries: SyncLogEntry[] = [
+      {
+        entityType: "note",
+        entityId: "n1",
+        operation: "create",
+        payload: {
+          bookId: "book-1",
+          position: { percentage: 10 },
+          noteType: "typed",
+          textContent: "draft",
+        },
+        deviceId: "d1",
+        timestamp: "2024-01-01T00:00:00Z",
+      },
+      {
+        entityType: "note",
+        entityId: "n1",
+        operation: "update",
+        payload: { textContent: "final" },
+        deviceId: "d1",
+        timestamp: "2024-01-01T00:01:00Z",
+      },
+    ];
+
+    const [result] = deduplicateQueue(entries);
+    expect(result.operation).toBe("create");
+    expect(result.timestamp).toBe("2024-01-01T00:01:00Z");
+    expect(result.payload).toEqual({
+      bookId: "book-1",
+      position: { percentage: 10 },
+      noteType: "typed",
+      textContent: "final",
+    });
+  });
+
+  it("collapses create then delete into a delete", () => {
+    const entries: SyncLogEntry[] = [
+      {
+        entityType: "highlight",
+        entityId: "h1",
+        operation: "create",
+        payload: { bookId: "book-1", cfiRange: "epubcfi(/6/2)", color: "yellow" },
+        deviceId: "d1",
+        timestamp: "2024-01-01T00:00:00Z",
+      },
+      {
+        entityType: "highlight",
+        entityId: "h1",
+        operation: "delete",
+        payload: null,
+        deviceId: "d1",
+        timestamp: "2024-01-01T00:01:00Z",
+      },
+    ];
+
+    const [result] = deduplicateQueue(entries);
+    expect(result.operation).toBe("delete");
+    expect(result.payload).toEqual({
+      bookId: "book-1",
+      cfiRange: "epubcfi(/6/2)",
+      color: "yellow",
+    });
+  });
+
+  it("uses queue order instead of wall-clock order", () => {
+    const entries: SyncLogEntry[] = [
+      {
+        entityType: "note",
+        entityId: "n1",
+        operation: "create",
+        payload: { bookId: "book-1", position: { percentage: 10 }, textContent: "draft" },
+        deviceId: "d1",
+        timestamp: "2024-01-01T00:02:00Z",
+      },
+      {
+        entityType: "note",
+        entityId: "n1",
+        operation: "update",
+        payload: { textContent: "final" },
+        deviceId: "d1",
+        timestamp: "2024-01-01T00:01:00Z",
+      },
+    ];
+
+    const [result] = deduplicateQueue(entries);
+    expect(result.operation).toBe("create");
+    expect(result.timestamp).toBe("2024-01-01T00:01:00Z");
+    expect(result.payload).toEqual({
+      bookId: "book-1",
+      position: { percentage: 10 },
+      textContent: "final",
+    });
+  });
 });
 
 describe("partitionByType", () => {
