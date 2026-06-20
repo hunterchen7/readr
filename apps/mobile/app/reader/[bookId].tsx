@@ -689,9 +689,10 @@ export default function ReaderScreen() {
           // never cleared on pct drop, so re-reading past the end
           // doesn't lose the milestone.
           if (pct >= 100) finishedRef.current = true;
+          const isTransient = !!msg.payload.transient;
           const position: BookPosition = {
             percentage: pct,
-            cfi: msg.payload.cfi,
+            cfi: isTransient ? undefined : msg.payload.cfi,
             chapter: msg.payload.sectionIndex,
             chapterLabel: msg.payload.chapter,
             page: msg.payload.currentPage ?? msg.payload.page,
@@ -740,7 +741,7 @@ export default function ReaderScreen() {
           // transient (rAF-driven) updates during scroll — we'd hammer
           // the DB at 60fps otherwise. The next non-transient relocate
           // (fired by foliate after scroll settles) will persist.
-          if (bookId && hasRestoredRef.current && !msg.payload.transient) {
+          if (bookId && hasRestoredRef.current && !isTransient) {
             upsertProgress(bookId, position);
           }
           break;
@@ -1060,6 +1061,10 @@ export default function ReaderScreen() {
   function handleGoToBookmark(bm: Bookmark) {
     if (bm.position.cfi) {
       sendToWebView("goToLocation", { cfi: bm.position.cfi });
+    } else if (typeof bm.position.percentage === "number") {
+      sendToWebView("goToLocation", {
+        fraction: bm.position.percentage / 100,
+      });
     } else if (bm.position.page != null) {
       sendToWebView("goToLocation", { page: bm.position.page });
     }
