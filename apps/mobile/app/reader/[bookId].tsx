@@ -282,18 +282,11 @@ export default function ReaderScreen() {
     hasLoadedSavedRef.current = false;
     hasRestoredRef.current = false;
     pendingReadyRestoreRef.current = false;
+    finishedRef.current = false;
     readerStateRef.current = null;
     webViewReadyRef.current = false;
     lastAnchorFracRef.current = null;
     anchorMuteUntilRef.current = 0;
-  }, [bookId]);
-  // Safety net: if 'restored' never arrives (stale bundle, nav error,
-  // etc.) reveal anyway after 2s so the user isn't stuck behind a
-  // blank curtain. 2s is long enough to cover a legit restore, short
-  // enough that a degraded experience still feels responsive.
-  useEffect(() => {
-    const t = setTimeout(() => setReaderVisible(true), 2000);
-    return () => clearTimeout(t);
   }, [bookId]);
   const fractionFromPageX = useCallback((pageX: number) => {
     const w = trackWidthRef.current;
@@ -428,6 +421,20 @@ export default function ReaderScreen() {
     [_sourceUrl, _format],
   );
 
+  // The WebView can remount for the same book when the preferred source
+  // changes from a server URL to a local file path. Treat each source as
+  // a fresh reader instance so initial relocate events cannot persist
+  // before the restore handshake runs for that instance.
+  useEffect(() => {
+    if (!_sourceUrl) return;
+    setReaderVisible(false);
+    hasRestoredRef.current = false;
+    pendingReadyRestoreRef.current = false;
+    webViewReadyRef.current = false;
+    const t = setTimeout(() => setReaderVisible(true), 2000);
+    return () => clearTimeout(t);
+  }, [bookId, _sourceUrl]);
+
   const sendToWebView = useCallback(
     (type: string, payload: Record<string, unknown>) => {
       webviewRef.current?.postMessage(JSON.stringify({ type, payload }));
@@ -461,6 +468,11 @@ export default function ReaderScreen() {
     },
     [display.isEink, sendToWebView],
   );
+
+  useEffect(() => {
+    if (!hasLoadedSavedRef.current) return;
+    readerStateRef.current = { theme, highlights, notes };
+  }, [theme, highlights, notes]);
 
   // Issue the initial restore navigation from the saved position. Safe
   // to call multiple times — marks `hasRestoredRef` so progressUpdated
@@ -501,6 +513,8 @@ export default function ReaderScreen() {
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
   useEffect(() => {
     if (!bookId) return;
+    const loadBookId = bookId;
+    let cancelled = false;
     async function load() {
       const [
         savedProgress,
@@ -509,12 +523,13 @@ export default function ReaderScreen() {
         savedNotes,
         savedPrefs,
       ] = await Promise.all([
-        getProgress(bookId!),
-        getBookmarks(bookId!),
-        getHighlights(bookId!),
-        getNotes(bookId!),
+        getProgress(loadBookId),
+        getBookmarks(loadBookId),
+        getHighlights(loadBookId),
+        getNotes(loadBookId),
         loadReaderPrefs(),
       ]);
+      if (cancelled) return;
       if (savedProgress) {
         savedPositionRef.current = savedProgress.position;
         setProgress(savedProgress.position.percentage);
@@ -522,6 +537,8 @@ export default function ReaderScreen() {
         finishedRef.current =
           savedProgress.position.finished === true ||
           (savedProgress.position.percentage ?? 0) >= 100;
+      } else {
+        finishedRef.current = false;
       }
       hasLoadedSavedRef.current = true;
       setBookmarks(savedBookmarks);
@@ -551,6 +568,9 @@ export default function ReaderScreen() {
       }
     }
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [bookId, display.isEink, applySavedRestore, replayReaderState]);
 
   // Tap- and drag-to-seek on the bottom progress bar. We claim the
