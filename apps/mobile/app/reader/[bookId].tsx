@@ -58,10 +58,14 @@ import {
   deleteNote,
   getCachedBook,
   upsertCachedBook,
+  getReaderMeasurementCache,
+  upsertReaderMeasurementCache,
+  type ReaderMeasurementCacheDescriptor,
+  type ReaderMeasurementCacheLookup,
 } from "../../lib/local-db";
 import type { Highlight, Note } from "@readr/shared";
 import { loadReaderPrefs, saveReaderPrefs } from "../../lib/reader-prefs";
-import { getDownloadedBook } from "../../lib/book-cache";
+import { getDownloadedBook, type DownloadedBook } from "../../lib/book-cache";
 import * as Brightness from "expo-brightness";
 import { DEFAULT_LOOKUP_PROVIDERS } from "@readr/shared";
 import * as Linking from "expo-linking";
@@ -70,6 +74,15 @@ interface TocItem {
   label: string;
   href: string;
   depth: number;
+}
+
+interface ReaderCacheContext {
+  sessionId: string;
+  contentKey: string;
+  bookId: string;
+  fileId: string | null;
+  format: string;
+  fileSize: number | null;
 }
 
 export default function ReaderScreen() {
@@ -379,21 +392,69 @@ export default function ReaderScreen() {
   const book = data?.book;
 
   // Resolve the local file path for downloaded books.
-  const [localFileUrl, setLocalFileUrl] = useState<string | null>(null);
+  const [downloadedBook, setDownloadedBook] = useState<DownloadedBook | null>(
+    null,
+  );
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
+    setDownloadedBook(null);
     (async () => {
       const downloaded = await getDownloadedBook(bookId);
-      if (!cancelled) setLocalFileUrl(downloaded?.localPath ?? null);
+      if (!cancelled) setDownloadedBook(downloaded);
     })();
     return () => {
       cancelled = true;
     };
   }, [bookId]);
 
-  const _format = data?.book?.format ?? "epub";
+  const activeDownloadedBook =
+    downloadedBook?.bookId === bookId ? downloadedBook : null;
+  const localFileUrl = activeDownloadedBook?.localPath ?? null;
+  const _format = activeDownloadedBook?.format ?? data?.book?.format ?? "epub";
   const _sourceUrl = localFileUrl ?? data?.book?.downloadUrl ?? "";
+  const readerFileId = activeDownloadedBook?.fileId ?? data?.book?.fileId ?? null;
+  const readerFileSize =
+    activeDownloadedBook?.sizeBytes ?? data?.book?.fileSize ?? null;
+  const readerContentKey = useMemo(
+    () =>
+      JSON.stringify([
+        bookId ?? "",
+        _format,
+        readerFileId ?? "",
+        readerFileSize ?? null,
+      ]),
+    [bookId, _format, readerFileId, readerFileSize],
+  );
+  const readerSessionId = useMemo(
+    () =>
+      `${readerContentKey}:${Date.now().toString(36)}:${Math.random()
+        .toString(36)
+        .slice(2, 8)}`,
+    [readerContentKey, _sourceUrl],
+  );
+  const readerCacheContextRef = useRef<ReaderCacheContext | null>(null);
+  useEffect(() => {
+    if (!bookId) {
+      readerCacheContextRef.current = null;
+      return;
+    }
+    readerCacheContextRef.current = {
+      sessionId: readerSessionId,
+      contentKey: readerContentKey,
+      bookId,
+      fileId: readerFileId,
+      format: _format,
+      fileSize: readerFileSize,
+    };
+  }, [
+    bookId,
+    readerSessionId,
+    readerContentKey,
+    readerFileId,
+    _format,
+    readerFileSize,
+  ]);
   // IMPORTANT: memoize on source+format ONLY — never on theme. The
   // WebView's `source` prop is compared by reference; if this string
   // changes react-native-webview tears down and rebuilds the entire
@@ -407,11 +468,14 @@ export default function ReaderScreen() {
       _sourceUrl
         ? _format === "pdf"
           ? getPdfReaderHtml(_sourceUrl)
-          : getReaderHtml(_sourceUrl, theme.bg, theme.fg)
+          : getReaderHtml(_sourceUrl, theme.bg, theme.fg, {
+              sessionId: readerSessionId,
+              contentKey: readerContentKey,
+            })
         : "",
     // Only rebuild HTML when source/format change — NOT on theme.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [_sourceUrl, _format],
+    [_sourceUrl, _format, readerSessionId, readerContentKey],
   );
 
   // Load saved progress, bookmarks, highlights, notes, and reader prefs on mount
@@ -465,6 +529,28 @@ export default function ReaderScreen() {
     },
     [],
   );
+
+  function buildMeasurementCacheLookup(
+    descriptor: ReaderMeasurementCacheDescriptor | undefined,
+  ): ReaderMeasurementCacheLookup | null {
+    const context = readerCacheContextRef.current;
+    if (
+      !descriptor ||
+      !context ||
+      context.format !== "epub" ||
+      descriptor.sessionId !== context.sessionId ||
+      descriptor.contentKey !== context.contentKey
+    ) {
+      return null;
+    }
+    return {
+      ...descriptor,
+      bookId: context.bookId,
+      fileId: context.fileId,
+      format: context.format,
+      fileSize: context.fileSize,
+    };
+  }
 
   // Issue the initial restore navigation from the saved position. Safe
   // to call multiple times — marks `hasRestoredRef` so progressUpdated
@@ -617,6 +703,84 @@ export default function ReaderScreen() {
         case "error":
           console.error("[WebView Error]", msg.payload?.message);
           break;
+        case "measurementCacheRequest": {
+          const descriptor = msg.payload
+            ?.descriptor as ReaderMeasurementCacheDescriptor | undefined;
+          const lookup = buildMeasurementCacheLookup(descriptor);
+          if (!lookup) {
+            if (descriptor) {
+              sendToWebView("hydrateMeasurementCache", {
+                descriptor,
+                entry: null,
+              });
+            }
+            break;
+          }
+          void getReaderMeasurementCache(lookup)
+            .then((entry) => {
+              if (!mountedRef.current) return;
+              const current = readerCacheContextRef.current;
+              if (
+                !current ||
+                current.sessionId !== lookup.sessionId ||
+                current.contentKey !== lookup.contentKey
+              ) {
+                return;
+              }
+              sendToWebView("hydrateMeasurementCache", {
+                descriptor,
+                entry: entry
+                  ? {
+                      pageCounts: entry.pageCounts,
+                      sectionHeights: entry.sectionHeights,
+                      totalPages: entry.totalPages,
+                    }
+                  : null,
+              });
+            })
+            .catch((err) => {
+              console.warn("getReaderMeasurementCache failed:", err);
+              const current = readerCacheContextRef.current;
+              if (mountedRef.current) {
+                if (
+                  !current ||
+                  current.sessionId !== lookup.sessionId ||
+                  current.contentKey !== lookup.contentKey
+                ) {
+                  return;
+                }
+                sendToWebView("hydrateMeasurementCache", {
+                  descriptor,
+                  entry: null,
+                });
+              }
+            });
+          break;
+        }
+        case "measurementCacheSave": {
+          const descriptor = msg.payload
+            ?.descriptor as ReaderMeasurementCacheDescriptor | undefined;
+          const lookup = buildMeasurementCacheLookup(descriptor);
+          if (!lookup) break;
+          const pageCounts = Array.isArray(msg.payload?.pageCounts)
+            ? (msg.payload.pageCounts as number[])
+            : null;
+          const sectionHeights = Array.isArray(msg.payload?.sectionHeights)
+            ? (msg.payload.sectionHeights as number[])
+            : null;
+          void upsertReaderMeasurementCache({
+            ...lookup,
+            pageCounts,
+            sectionHeights,
+            totalPages:
+              typeof msg.payload?.totalPages === "number"
+                ? msg.payload.totalPages
+                : null,
+          }).catch((err) => {
+            console.warn("upsertReaderMeasurementCache failed:", err);
+          });
+          break;
+        }
         case "ready":
           sendToWebView("setTheme", themeForWebView);
           if (

@@ -469,6 +469,8 @@ export class Paginator extends HTMLElement {
     #hosts = []                // one div per section, in book order
     #views = new Map()         // section index → View (only mounted ones)
     #heights = []              // measured content height per section
+    #heightCache = []          // persisted placeholder heights, if hydrated
+    #measuredHeights = []      // true only after live section measurement
     #mountPromises = new Map() // in-flight mount avoids duplication
     #focalIdx = -1             // current focal section (viewport midpoint)
     #preloadBefore = 2         // sections to keep mounted before focal
@@ -1332,6 +1334,8 @@ export class Paginator extends HTMLElement {
         const focalIdx = this.#index ?? 0
         this.#hosts = new Array(this.sections.length)
         this.#heights = new Array(this.sections.length).fill(0)
+            .map((_, i) => this.#heightCache[i] || 0)
+        this.#measuredHeights = new Array(this.sections.length).fill(false)
         this.#views = new Map()
         const estH = this.#estSectionHeight()
         const focalEl = this.#view?.element ?? null
@@ -1406,6 +1410,7 @@ export class Paginator extends HTMLElement {
         this.#views = new Map()
         this.#hosts = []
         this.#heights = []
+        this.#measuredHeights = []
         this.#mountPromises.clear()
         this.#stacked = false
         this.#focalIdx = -1
@@ -1620,7 +1625,16 @@ export class Paginator extends HTMLElement {
         if (h <= 0) return
         h = Math.max(h, this.size)
         const prev = this.#heights[index] || 0
-        if (Math.abs(h - prev) < 2) return
+        const wasMeasured = this.#measuredHeights[index]
+        this.#measuredHeights[index] = true
+        if (Math.abs(h - prev) < 2) {
+            if (!wasMeasured) {
+                this.dispatchEvent(new CustomEvent('section-heights-changed', {
+                    detail: { heights: this.getMeasuredSectionHeights() },
+                }))
+            }
+            return
+        }
         const el = this.#hosts[index]
         if (!el) { this.#heights[index] = h; return }
         const rect = el.getBoundingClientRect()
@@ -1632,6 +1646,32 @@ export class Paginator extends HTMLElement {
             this.#container.scrollTop += (h - prev)
             this.#programmaticScroll = false
         }
+        this.#heightCache = this.getSectionHeights()
+        this.dispatchEvent(new CustomEvent('section-heights-changed', {
+            detail: { heights: this.getMeasuredSectionHeights() },
+        }))
+    }
+    setSectionHeights(heights) {
+        if (!Array.isArray(heights)) return
+        this.#heightCache = heights
+            .map(value => Math.round(Number(value)))
+            .map(value => Number.isFinite(value) && value > 0 ? value : 0)
+        if (!this.#stacked) return
+        const len = Math.min(this.#hosts.length, this.#heightCache.length)
+        for (let i = 0; i < len; i++) {
+            const h = this.#heightCache[i]
+            if (!h) continue
+            this.#heights[i] = h
+            const host = this.#hosts[i]
+            if (host && !this.#views.has(i)) host.style.minHeight = `${h}px`
+        }
+    }
+    getSectionHeights() {
+        return this.#heights.map(value => Math.round(Number(value)) || 0)
+    }
+    getMeasuredSectionHeights() {
+        return this.#heights.map((value, index) =>
+            this.#measuredHeights[index] ? Math.round(Number(value)) || 0 : 0)
     }
     #applyStylesToDoc(doc) {
         const styles = this.#styles

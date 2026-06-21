@@ -122,11 +122,34 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
       last_synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS reader_measurement_cache (
+      cache_key TEXT PRIMARY KEY,
+      book_id TEXT NOT NULL,
+      file_id TEXT,
+      content_key TEXT,
+      format TEXT NOT NULL,
+      file_size INTEGER,
+      viewport_width INTEGER NOT NULL,
+      viewport_height INTEGER NOT NULL,
+      layout_signature TEXT NOT NULL,
+      section_count INTEGER NOT NULL,
+      user_agent TEXT,
+      page_counts_json TEXT,
+      section_heights_json TEXT,
+      total_pages INTEGER,
+      algorithm_version INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_progress_book ON reading_progress(book_id);
     CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
     CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id);
     CREATE INDEX IF NOT EXISTS idx_notes_book ON notes(book_id);
     CREATE INDEX IF NOT EXISTS idx_sync_queue_ts ON sync_queue(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_reader_measurement_book ON reader_measurement_cache(book_id);
+    CREATE INDEX IF NOT EXISTS idx_reader_measurement_file ON reader_measurement_cache(file_id);
+    CREATE INDEX IF NOT EXISTS idx_reader_measurement_used ON reader_measurement_cache(last_used_at);
   `);
 
   // Additive migrations for columns added after v1. SQLite doesn't
@@ -143,6 +166,10 @@ async function runMigrations(database: SQLite.SQLiteDatabase): Promise<void> {
   await addColumnIfMissing(database, "books", "metadata_json", "TEXT");
   await addColumnIfMissing(database, "books", "download_url", "TEXT");
   await addColumnIfMissing(database, "notes", "canvas_image", "TEXT");
+  await addColumnIfMissing(database, "reader_measurement_cache", "content_key", "TEXT");
+  await database.execAsync(
+    "CREATE INDEX IF NOT EXISTS idx_reader_measurement_content ON reader_measurement_cache(content_key);",
+  );
 
   // One-time migration for entities created before `generateId()` was
   // switched to UUID v4. Legacy IDs look like `1775770007700-eia8fhb`
@@ -946,4 +973,196 @@ export async function upsertCachedBook(
   book: import("@readr/shared").Book,
 ): Promise<void> {
   await upsertCachedBooks([book]);
+}
+
+// ─── Reader Measurement Cache ─────────────────────────────────────────
+//
+// Local-only cache for expensive EPUB layout measurements. These values
+// are tied to the local WebView, viewport, fonts, and reader layout, so
+// they must never enter sync_queue or cross devices.
+
+export interface ReaderMeasurementCacheDescriptor {
+  requestId?: number;
+  sessionId: string;
+  contentKey: string;
+  algorithmVersion: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  layoutSignature: string;
+  sectionCount: number;
+  userAgent?: string | null;
+}
+
+export interface ReaderMeasurementCacheLookup extends ReaderMeasurementCacheDescriptor {
+  bookId: string;
+  fileId?: string | null;
+  format: string;
+  fileSize?: number | null;
+}
+
+export interface ReaderMeasurementCacheEntry extends ReaderMeasurementCacheLookup {
+  cacheKey: string;
+  pageCounts: number[] | null;
+  sectionHeights: number[] | null;
+  totalPages: number | null;
+  updatedAt: string;
+  lastUsedAt: string;
+}
+
+export interface ReaderMeasurementCacheSave extends ReaderMeasurementCacheLookup {
+  pageCounts?: number[] | null;
+  sectionHeights?: number[] | null;
+  totalPages?: number | null;
+}
+
+function measurementCacheKey(input: ReaderMeasurementCacheLookup): string {
+  return JSON.stringify([
+    input.algorithmVersion,
+    input.contentKey,
+    input.fileId || input.bookId,
+    input.format,
+    input.fileSize ?? null,
+    input.sectionCount,
+    input.viewportWidth,
+    input.viewportHeight,
+    input.layoutSignature,
+    input.userAgent ?? null,
+  ]);
+}
+
+function sanitizeNumbers(values: unknown, min: 0 | 1): number[] | null {
+  if (!Array.isArray(values)) return null;
+  const out: number[] = [];
+  for (const value of values) {
+    const parsed = Math.round(Number(value));
+    if (!Number.isFinite(parsed) || parsed < min) return null;
+    out.push(parsed);
+  }
+  return out;
+}
+
+export async function getReaderMeasurementCache(
+  input: ReaderMeasurementCacheLookup,
+): Promise<ReaderMeasurementCacheEntry | null> {
+  if (input.format !== "epub") return null;
+  const database = await getDb();
+  const cacheKey = measurementCacheKey(input);
+  const row = await database.getFirstAsync<{
+    page_counts_json: string | null;
+    section_heights_json: string | null;
+    total_pages: number | null;
+    updated_at: string;
+    last_used_at: string;
+  }>(
+    `SELECT page_counts_json, section_heights_json, total_pages, updated_at, last_used_at
+       FROM reader_measurement_cache
+      WHERE cache_key = ?
+        AND algorithm_version = ?
+        AND viewport_width = ?
+        AND viewport_height = ?
+        AND layout_signature = ?
+        AND section_count = ?`,
+    [
+      cacheKey,
+      input.algorithmVersion,
+      input.viewportWidth,
+      input.viewportHeight,
+      input.layoutSignature,
+      input.sectionCount,
+    ],
+  );
+  if (!row) return null;
+
+  const now = new Date().toISOString();
+  await database.runAsync(
+    "UPDATE reader_measurement_cache SET last_used_at = ? WHERE cache_key = ?",
+    [now, cacheKey],
+  );
+
+  let pageCounts: number[] | null = null;
+  let sectionHeights: number[] | null = null;
+  try {
+    pageCounts = sanitizeNumbers(
+      row.page_counts_json ? JSON.parse(row.page_counts_json) : null,
+      1,
+    );
+  } catch {
+    pageCounts = null;
+  }
+  try {
+    sectionHeights = sanitizeNumbers(
+      row.section_heights_json ? JSON.parse(row.section_heights_json) : null,
+      0,
+    );
+  } catch {
+    sectionHeights = null;
+  }
+
+  if (pageCounts && pageCounts.length !== input.sectionCount) pageCounts = null;
+  if (sectionHeights && sectionHeights.length !== input.sectionCount) {
+    sectionHeights = null;
+  }
+  if (!pageCounts && !sectionHeights) return null;
+
+  return {
+    ...input,
+    cacheKey,
+    pageCounts,
+    sectionHeights,
+    totalPages: row.total_pages,
+    updatedAt: row.updated_at,
+    lastUsedAt: now,
+  };
+}
+
+export async function upsertReaderMeasurementCache(
+  input: ReaderMeasurementCacheSave,
+): Promise<void> {
+  if (input.format !== "epub") return;
+  const pageCounts = sanitizeNumbers(input.pageCounts, 1);
+  const sectionHeights = sanitizeNumbers(input.sectionHeights, 0);
+  if (!pageCounts && !sectionHeights) return;
+  if (pageCounts && pageCounts.length !== input.sectionCount) return;
+  if (sectionHeights && sectionHeights.length !== input.sectionCount) return;
+
+  const database = await getDb();
+  const cacheKey = measurementCacheKey(input);
+  const now = new Date().toISOString();
+  const totalPages = pageCounts
+    ? pageCounts.reduce((sum, count) => sum + count, 0)
+    : (input.totalPages ?? null);
+
+  await database.runAsync(
+    `INSERT INTO reader_measurement_cache
+       (cache_key, book_id, file_id, format, file_size, viewport_width,
+        content_key, viewport_height, layout_signature, section_count, user_agent,
+        page_counts_json, section_heights_json, total_pages,
+        algorithm_version, updated_at, last_used_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(cache_key) DO UPDATE SET
+       page_counts_json = COALESCE(excluded.page_counts_json, reader_measurement_cache.page_counts_json),
+       section_heights_json = COALESCE(excluded.section_heights_json, reader_measurement_cache.section_heights_json),
+       total_pages = COALESCE(excluded.total_pages, reader_measurement_cache.total_pages),
+       updated_at = excluded.updated_at,
+       last_used_at = excluded.last_used_at`,
+    [
+      cacheKey,
+      input.bookId,
+      input.fileId ?? null,
+      input.format,
+      input.fileSize ?? null,
+      input.viewportWidth,
+      input.contentKey,
+      input.viewportHeight,
+      input.layoutSignature,
+      input.sectionCount,
+      input.userAgent ?? null,
+      pageCounts ? JSON.stringify(pageCounts) : null,
+      sectionHeights ? JSON.stringify(sectionHeights) : null,
+      totalPages,
+      input.algorithmVersion,
+      now,
+      now,
+    ],
+  );
 }

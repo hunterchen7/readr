@@ -74,10 +74,20 @@ const POLYFILLS = `
 })();
 `;
 
-export function getReaderHtml(bookUrl: string, initialBg?: string, initialFg?: string): string {
+export interface ReaderHtmlCacheConfig {
+  sessionId: string;
+  contentKey: string;
+}
+
+export function getReaderHtml(
+  bookUrl: string,
+  initialBg?: string,
+  initialFg?: string,
+  cache?: ReaderHtmlCacheConfig,
+): string {
   const bg = initialBg || '#fff';
   const fg = initialFg || '#111';
-  const config = JSON.stringify({ bookUrl });
+  const config = JSON.stringify({ bookUrl, cache });
   return `<!DOCTYPE html>
 <html style="background:${bg};color:${fg}">
 <head>
