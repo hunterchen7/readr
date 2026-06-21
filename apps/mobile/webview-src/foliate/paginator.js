@@ -1,5 +1,17 @@
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+const parseBoundedInt = (value, fallback, min, max) => {
+    const parsed = Number.parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return fallback
+    return Math.max(min, Math.min(max, parsed))
+}
+
+const nextIdle = () => new Promise(resolve => {
+    const idle = globalThis.requestIdleCallback
+    if (typeof idle === 'function') idle(resolve, { timeout: 250 })
+    else setTimeout(resolve, 32)
+})
+
 const debounce = (f, wait, immediate) => {
     let timeout
     return (...args) => {
@@ -335,6 +347,9 @@ class View {
         const vertical = this.#vertical
         const doc = this.document
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
+            if (el.localName?.toLowerCase() === 'img') {
+                el.setAttribute('decoding', 'async')
+            }
             // preserve max size if they are already set
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
             setStylesImportant(el, {
@@ -417,6 +432,8 @@ export class Paginator extends HTMLElement {
     static observedAttributes = [
         'flow', 'gap', 'margin',
         'max-inline-size', 'max-block-size', 'max-column-count',
+        'preload-before', 'preload-after', 'preload-concurrency',
+        'max-mounted-sections',
     ]
     #root = this.attachShadow({ mode: 'closed' })
     #observer = new ResizeObserver(() => this.render())
@@ -454,7 +471,12 @@ export class Paginator extends HTMLElement {
     #heights = []              // measured content height per section
     #mountPromises = new Map() // in-flight mount avoids duplication
     #focalIdx = -1             // current focal section (viewport midpoint)
-    #windowRadius = 2          // mount [focal-R, focal+R]
+    #preloadBefore = 2         // sections to keep mounted before focal
+    #preloadAfter = 2          // sections to keep mounted after focal
+    #preloadConcurrency = 2    // neighbor iframe loads per preload batch
+    #maxMountedSections = 5    // hard cap including focal section
+    #stackDirection = 1        // 1 = forward/down, -1 = backward/up
+    #lastStackStart = 0
     #slideSeq = 0              // cancels stale async preload windows
     #stackGeneration = 0       // invalidates in-flight section mounts
     #stackScrollHandler = null
@@ -683,6 +705,24 @@ export class Paginator extends HTMLElement {
                 // needs explicit `render()` as it doesn't necessarily resize
                 this.#top.style.setProperty('--_' + name, value)
                 this.render()
+                break
+            case 'preload-before':
+                this.#preloadBefore = parseBoundedInt(value, this.#preloadBefore, 0, 6)
+                if (this.#stacked && this.#focalIdx >= 0)
+                    void this.#slideWindow(this.#focalIdx)
+                break
+            case 'preload-after':
+                this.#preloadAfter = parseBoundedInt(value, this.#preloadAfter, 0, 6)
+                if (this.#stacked && this.#focalIdx >= 0)
+                    void this.#slideWindow(this.#focalIdx)
+                break
+            case 'preload-concurrency':
+                this.#preloadConcurrency = parseBoundedInt(value, this.#preloadConcurrency, 1, 4)
+                break
+            case 'max-mounted-sections':
+                this.#maxMountedSections = parseBoundedInt(value, this.#maxMountedSections, 1, 13)
+                if (this.#stacked && this.#focalIdx >= 0)
+                    void this.#slideWindow(this.#focalIdx)
                 break
         }
     }
@@ -1235,7 +1275,7 @@ export class Paginator extends HTMLElement {
             // the scrollToAnchor below and we land far off-target — a
             // big TOC jump (e.g. Ch6 → Ch1) can end up at the END of the
             // target chapter instead of the start.
-            await this.#slideWindow(index)
+            await this.#slideWindow(index, { immediate: true })
             const view = this.#views.get(index)
             if (!view) return
             const hasFocus = view.document?.hasFocus()
@@ -1329,6 +1369,7 @@ export class Paginator extends HTMLElement {
             this.#hosts[i] = ph
         }
         this.#focalIdx = focalIdx
+        this.#lastStackStart = this.start
         this.#stackScrollHandler = () => this.#onStackScroll()
         this.#container.addEventListener('scroll',
             this.#stackScrollHandler, { passive: true })
@@ -1377,10 +1418,18 @@ export class Paginator extends HTMLElement {
         const pending = this.#mountPromises.get(index)
         if (pending) return pending
         const generation = this.#stackGeneration
+        const isStalePreload = () => opts.slideSeq != null
+            && opts.slideSeq !== this.#slideSeq
+            && index !== this.#focalIdx
         const task = (async () => {
+            if (isStalePreload()) return
             const src = opts.src ?? await Promise.resolve(this.sections[index].load())
                 .catch(e => { console.warn(e); return null })
             if (!this.#stacked || generation !== this.#stackGeneration) {
+                return
+            }
+            if (isStalePreload()) {
+                this.sections[index]?.unload?.()
                 return
             }
             if (!src) return
@@ -1398,8 +1447,13 @@ export class Paginator extends HTMLElement {
             }
             const beforeRender = this.#beforeRender.bind(this)
             await view.load(src, afterLoad, beforeRender)
-            if (!this.#stacked || generation !== this.#stackGeneration) {
-                try { view.destroy() } catch { /* ignore */ }
+            if (!this.#stacked || generation !== this.#stackGeneration || isStalePreload()) {
+                if (this.#stacked && this.#views.get(index) === view) {
+                    this.#unmountSection(index)
+                } else {
+                    try { view.destroy() } catch { /* ignore */ }
+                    this.sections[index]?.unload?.()
+                }
                 return
             }
             this.dispatchEvent(new CustomEvent('create-overlayer', {
@@ -1443,22 +1497,98 @@ export class Paginator extends HTMLElement {
         this.sections[index]?.unload?.()
         this.#views.delete(index)
     }
-    async #slideWindow(focal) {
-        const seq = ++this.#slideSeq
-        const R = this.#windowRadius
-        const lo = Math.max(0, focal - R)
-        const hi = Math.min(this.#hosts.length - 1, focal + R)
-        this.#trimWindow(lo, hi)
-        const toMount = []
-        for (let i = lo; i <= hi; i++) {
-            if (!this.#views.has(i) && !this.#mountPromises.has(i))
-                toMount.push(this.#mountSection(i))
+    #preloadBounds(focal) {
+        let before = this.#preloadBefore
+        let after = this.#preloadAfter
+        const maxMounted = Math.max(1, this.#maxMountedSections)
+        while (before + after + 1 > maxMounted) {
+            if (this.#stackDirection >= 0) {
+                if (before > 0) before--
+                else if (after > 0) after--
+                else break
+            } else {
+                if (after > 0) after--
+                else if (before > 0) before--
+                else break
+            }
         }
-        if (toMount.length > 0) await Promise.all(toMount)
+        const lo = Math.max(0, focal - before)
+        const hi = Math.min(this.#hosts.length - 1, focal + after)
+        return { lo, hi }
+    }
+    #preloadOrder(focal, lo, hi) {
+        const order = [focal]
+        const maxDistance = Math.max(focal - lo, hi - focal)
+        for (let d = 1; d <= maxDistance; d++) {
+            const forward = focal + d
+            const backward = focal - d
+            if (this.#stackDirection >= 0) {
+                if (forward <= hi) order.push(forward)
+                if (backward >= lo) order.push(backward)
+            } else {
+                if (backward >= lo) order.push(backward)
+                if (forward <= hi) order.push(forward)
+            }
+        }
+        return order
+    }
+    async #mountPreloadBatch(indexes, seq, immediate = false) {
+        if (indexes.length === 0) return
+        let cursor = 0
+        const concurrency = Math.min(this.#preloadConcurrency, indexes.length)
+        const worker = async () => {
+            while (cursor < indexes.length) {
+                const index = indexes[cursor++]
+                if (seq !== this.#slideSeq) return
+                if (this.#views.has(index)) continue
+                const pending = this.#mountPromises.get(index)
+                if (pending) {
+                    await pending
+                    if (seq !== this.#slideSeq) return
+                    if (this.#views.has(index)) continue
+                }
+                if (!immediate && index !== this.#focalIdx) {
+                    await nextIdle()
+                    if (seq !== this.#slideSeq) return
+                }
+                await this.#mountSection(index, { slideSeq: seq })
+                if (seq !== this.#slideSeq) return
+            }
+        }
+        await Promise.all(Array.from({ length: concurrency }, worker))
+    }
+    async #slideWindow(focal, opts = {}) {
+        const seq = ++this.#slideSeq
+        const { lo, hi } = this.#preloadBounds(focal)
+        this.#trimWindow(lo, hi)
+        const order = this.#preloadOrder(focal, lo, hi)
+        const urgent = order.filter(index => index === focal)
+        await this.#mountPreloadBatch(urgent, seq, true)
+        if (seq !== this.#slideSeq) return
+        const neighbors = order.filter(index => index !== focal)
+        if (opts.immediate) {
+            const before = neighbors.filter(index => index < focal)
+            const after = neighbors.filter(index => index > focal)
+            await this.#mountPreloadBatch(before, seq, true)
+            if (seq !== this.#slideSeq) return
+            const afterTask = this.#mountPreloadBatch(after, seq, false)
+            void afterTask
+                .then(() => {
+                    if (seq === this.#slideSeq) this.#trimWindow(lo, hi)
+                })
+                .catch(e => console.warn(e))
+            this.#trimWindow(lo, hi)
+            return
+        }
+        const task = this.#mountPreloadBatch(neighbors, seq, Boolean(opts.immediate))
+        void task
+            .then(() => {
+                if (seq === this.#slideSeq) this.#trimWindow(lo, hi)
+            })
+            .catch(e => console.warn(e))
         if (seq !== this.#slideSeq) {
             const current = this.#focalIdx >= 0 ? this.#focalIdx : focal
-            const currentLo = Math.max(0, current - R)
-            const currentHi = Math.min(this.#hosts.length - 1, current + R)
+            const { lo: currentLo, hi: currentHi } = this.#preloadBounds(current)
             this.#trimWindow(currentLo, currentHi)
             return
         }
@@ -1516,7 +1646,14 @@ export class Paginator extends HTMLElement {
         }
     }
     #onStackScroll() {
-        if (this.#programmaticScroll) return
+        const currentStart = this.start
+        if (this.#programmaticScroll) {
+            this.#lastStackStart = currentStart
+            return
+        }
+        if (Math.abs(currentStart - this.#lastStackStart) >= 1)
+            this.#stackDirection = currentStart >= this.#lastStackStart ? 1 : -1
+        this.#lastStackStart = currentStart
         // While pinned (mode-switch settling window), trust the caller-
         // set #focalIdx instead of recomputing from viewport midpoint.
         // Transient scroll positions during the flip land under the

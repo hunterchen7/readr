@@ -617,6 +617,14 @@ function applyTheme(theme: Theme): void {
   const renderer = view?.renderer;
   if (!renderer) return;
 
+  const preloadProfile = theme.isEink
+    ? { before: 1, after: 1, concurrency: 1, maxMounted: 3 }
+    : { before: 2, after: 2, concurrency: 2, maxMounted: 5 };
+  renderer.setAttribute('preload-before', String(preloadProfile.before));
+  renderer.setAttribute('preload-after', String(preloadProfile.after));
+  renderer.setAttribute('preload-concurrency', String(preloadProfile.concurrency));
+  renderer.setAttribute('max-mounted-sections', String(preloadProfile.maxMounted));
+
   // ── Layout work (only when something layout-affecting changed) ───
   if (!layoutChanged) return;
 
