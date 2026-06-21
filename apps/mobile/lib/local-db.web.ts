@@ -213,3 +213,51 @@ export async function pruneCachedBooks(
 export async function deleteCachedBook(_id: string): Promise<void> {
   // No-op on web.
 }
+
+// ─── Reader Measurement Cache ─────────────────────────────────────────
+
+export interface ReaderMeasurementCacheDescriptor {
+  requestId?: number;
+  sessionId: string;
+  contentKey: string;
+  algorithmVersion: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  layoutSignature: string;
+  sectionCount: number;
+  userAgent?: string | null;
+}
+
+export interface ReaderMeasurementCacheLookup extends ReaderMeasurementCacheDescriptor {
+  bookId: string;
+  fileId?: string | null;
+  format: string;
+  fileSize?: number | null;
+}
+
+export interface ReaderMeasurementCacheEntry extends ReaderMeasurementCacheLookup {
+  cacheKey: string;
+  pageCounts: number[] | null;
+  sectionHeights: number[] | null;
+  totalPages: number | null;
+  updatedAt: string;
+  lastUsedAt: string;
+}
+
+export interface ReaderMeasurementCacheSave extends ReaderMeasurementCacheLookup {
+  pageCounts?: number[] | null;
+  sectionHeights?: number[] | null;
+  totalPages?: number | null;
+}
+
+export async function getReaderMeasurementCache(
+  _input: ReaderMeasurementCacheLookup,
+): Promise<ReaderMeasurementCacheEntry | null> {
+  return null;
+}
+
+export async function upsertReaderMeasurementCache(
+  _input: ReaderMeasurementCacheSave,
+): Promise<void> {
+  // No-op on web.
+}

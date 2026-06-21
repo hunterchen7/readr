@@ -21,7 +21,10 @@ declare global {
       makeBook: (f: File) => Promise<FoliateBook>;
       Overlayer: FoliateOverlayer;
     };
-    __READR_CONFIG?: { bookUrl: string };
+    __READR_CONFIG?: {
+      bookUrl: string;
+      cache?: { sessionId: string; contentKey: string };
+    };
   }
 }
 
@@ -49,6 +52,9 @@ interface FoliateRenderer extends HTMLElement {
   focalIndex?: number;
   setStyles?(styles: string | [string, string]): void;
   getContents?(): Array<{ doc: Document; index: number }>;
+  setSectionHeights?(heights: number[]): void;
+  getSectionHeights?(): number[];
+  getMeasuredSectionHeights?(): number[];
 }
 interface FoliateView extends HTMLElement {
   open(book: FoliateBook): Promise<void>;
@@ -108,6 +114,25 @@ let currentSectionDoc: Document | null = null;
 let sectionPageCounts: Record<number, number> = {};
 let sectionPageCountsLocked = false;
 
+interface MeasurementCacheDescriptor {
+  requestId: number;
+  sessionId: string;
+  contentKey: string;
+  algorithmVersion: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  layoutSignature: string;
+  sectionCount: number;
+  userAgent: string;
+}
+
+const MEASUREMENT_CACHE_ALGORITHM_VERSION = 1;
+let measurementCacheRequestId = 0;
+let activeMeasurementDescriptor: MeasurementCacheDescriptor | null = null;
+let measurementFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+let measurementSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let measurementCacheState: 'idle' | 'awaiting-cache' | 'measuring' | 'settled' = 'idle';
+
 // Theme CSS that gets injected into every new section document.
 let currentThemeCSS = '';
 let currentTheme: Theme = {};
@@ -140,6 +165,189 @@ const highlightRegistry = new Map<string, string>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function post(type: string, payload: any): void {
   window.ReactNativeWebView?.postMessage(JSON.stringify({ type, payload }));
+}
+
+function getMeasurementDescriptor(): MeasurementCacheDescriptor | null {
+  if (!view || !book?.sections?.length) return null;
+  const config = window.__READR_CONFIG;
+  const viewportWidth = Math.round(view.clientWidth || window.innerWidth || 0);
+  const viewportHeight = Math.round(view.clientHeight || window.innerHeight || 0);
+  if (viewportWidth <= 0 || viewportHeight <= 0) return null;
+  return {
+    requestId: ++measurementCacheRequestId,
+    sessionId: config?.cache?.sessionId ?? 'unknown-session',
+    contentKey: config?.cache?.contentKey ?? config?.bookUrl ?? 'unknown-content',
+    algorithmVersion: MEASUREMENT_CACHE_ALGORITHM_VERSION,
+    viewportWidth,
+    viewportHeight,
+    layoutSignature: pageCountSignature(currentTheme),
+    sectionCount: book.sections.length,
+    userAgent: navigator.userAgent || '',
+  };
+}
+
+function descriptorMatchesCurrent(descriptor: MeasurementCacheDescriptor | null): boolean {
+  if (!descriptor || !activeMeasurementDescriptor || !view || !book) return false;
+  return descriptor.requestId === activeMeasurementDescriptor.requestId
+    && descriptor.sessionId === activeMeasurementDescriptor.sessionId
+    && descriptor.contentKey === activeMeasurementDescriptor.contentKey
+    && descriptor.algorithmVersion === MEASUREMENT_CACHE_ALGORITHM_VERSION
+    && descriptor.viewportWidth === Math.round(view.clientWidth || window.innerWidth || 0)
+    && descriptor.viewportHeight === Math.round(view.clientHeight || window.innerHeight || 0)
+    && descriptor.layoutSignature === pageCountSignature(currentTheme)
+    && descriptor.sectionCount === book.sections.length
+    && descriptor.userAgent === (navigator.userAgent || '');
+}
+
+function countsRecordFromArray(counts: number[]): Record<number, number> | null {
+  if (!book || counts.length !== book.sections.length) return null;
+  const next: Record<number, number> = {};
+  for (let i = 0; i < counts.length; i++) {
+    const count = Math.round(Number(counts[i]));
+    if (!Number.isFinite(count) || count <= 0) return null;
+    next[i] = count;
+  }
+  return next;
+}
+
+function pageCountsArray(): number[] | null {
+  if (!book?.sections?.length || !sectionPageCountsLocked) return null;
+  const counts: number[] = [];
+  for (let i = 0; i < book.sections.length; i++) {
+    const count = sectionPageCounts[i];
+    if (!Number.isFinite(count) || count <= 0) return null;
+    counts.push(Math.round(count));
+  }
+  return counts;
+}
+
+function currentSectionHeights(): number[] | null {
+  const heights = view?.renderer?.getMeasuredSectionHeights?.()
+    ?? view?.renderer?.getSectionHeights?.();
+  if (!Array.isArray(heights) || !book?.sections?.length) return null;
+  if (heights.length !== book.sections.length) return null;
+  const rounded = heights.map((value) => Math.round(Number(value) || 0));
+  return rounded.some((value) => value > 0) ? rounded : null;
+}
+
+function postMeasurementCacheSave(descriptor = activeMeasurementDescriptor): void {
+  if (!descriptor || !descriptorMatchesCurrent(descriptor)) return;
+  const pageCounts = pageCountsArray();
+  const sectionHeights = currentSectionHeights();
+  if (!pageCounts && !sectionHeights) return;
+  const totalPages = pageCounts?.reduce((sum, count) => sum + count, 0) ?? null;
+  post('measurementCacheSave', {
+    descriptor,
+    pageCounts,
+    sectionHeights,
+    totalPages,
+  });
+}
+
+function scheduleMeasurementCacheSave(): void {
+  if (measurementSaveTimer) clearTimeout(measurementSaveTimer);
+  const descriptor = activeMeasurementDescriptor
+    ? { ...activeMeasurementDescriptor }
+    : null;
+  measurementSaveTimer = setTimeout(() => {
+    measurementSaveTimer = null;
+    postMeasurementCacheSave(descriptor);
+  }, 500);
+}
+
+function invalidateMeasurementForViewportChange(): void {
+  if (!view || !book?.sections?.length) return;
+  const viewportWidth = Math.round(view.clientWidth || window.innerWidth || 0);
+  const viewportHeight = Math.round(view.clientHeight || window.innerHeight || 0);
+  if (viewportWidth <= 0 || viewportHeight <= 0) return;
+  if (
+    activeMeasurementDescriptor
+    && activeMeasurementDescriptor.viewportWidth === viewportWidth
+    && activeMeasurementDescriptor.viewportHeight === viewportHeight
+  ) {
+    return;
+  }
+  sectionPageCounts = {};
+  sectionPageCountsLocked = false;
+  _measureSeq++;
+  scheduleMeasurementWithCache();
+}
+
+function runMeasurementAfterCacheMiss(): void {
+  if (measurementFallbackTimer) {
+    clearTimeout(measurementFallbackTimer);
+    measurementFallbackTimer = null;
+  }
+  measurementCacheState = 'measuring';
+  requestAnimationFrame(() => {
+    void runMeasurement();
+  });
+}
+
+function scheduleMeasurementWithCache(): void {
+  if (measurementFallbackTimer) clearTimeout(measurementFallbackTimer);
+  const descriptor = getMeasurementDescriptor();
+  if (!descriptor) {
+    runMeasurementAfterCacheMiss();
+    return;
+  }
+  activeMeasurementDescriptor = descriptor;
+  measurementCacheState = 'awaiting-cache';
+  post('measurementCacheRequest', { descriptor });
+  measurementFallbackTimer = setTimeout(() => {
+    measurementFallbackTimer = null;
+    if (!descriptorMatchesCurrent(descriptor)) return;
+    measurementCacheState = 'measuring';
+    void runMeasurement();
+  }, 1000);
+}
+
+function hydrateMeasurementCache(payload: {
+  descriptor?: MeasurementCacheDescriptor;
+  entry?: {
+    pageCounts?: number[] | null;
+    sectionHeights?: number[] | null;
+    totalPages?: number | null;
+  } | null;
+}): void {
+  if (!descriptorMatchesCurrent(payload.descriptor ?? null)) return;
+  if (measurementCacheState !== 'awaiting-cache') return;
+  if (measurementFallbackTimer) {
+    clearTimeout(measurementFallbackTimer);
+    measurementFallbackTimer = null;
+  }
+
+  const entry = payload.entry;
+  if (Array.isArray(entry?.sectionHeights)) {
+    view?.renderer?.setSectionHeights?.(entry.sectionHeights);
+  }
+
+  const counts = Array.isArray(entry?.pageCounts)
+    ? countsRecordFromArray(entry.pageCounts)
+    : null;
+  if (!counts) {
+    runMeasurementAfterCacheMiss();
+    return;
+  }
+
+  measurementCacheState = 'settled';
+  sectionPageCounts = counts;
+  sectionPageCountsLocked = true;
+  const totalPages = Object.values(counts)
+    .reduce((sum, count) => sum + count, 0);
+  post('debug', {
+    msg: `measurement cache hit: ${entry?.pageCounts?.length ?? 0} sections, ${totalPages} pages`,
+  });
+  post('pagesComputed', {
+    totalPages,
+    measured: entry?.pageCounts?.length ?? 0,
+    total: book?.sections.length ?? 0,
+    cached: true,
+  });
+  try {
+    const last = view?.lastLocation;
+    if (last) computeAndPostProgress(last);
+  } catch { /* ignore */ }
 }
 
 // Compute progressUpdated payload from a foliate location detail and
@@ -262,6 +470,9 @@ function handleRNMessage(data: RNMessage): void {
   switch (data.type) {
     case 'setTheme':
       applyTheme(data.payload);
+      break;
+    case 'hydrateMeasurementCache':
+      hydrateMeasurementCache(data.payload ?? {});
       break;
     case 'goToLocation': {
       // Await the nav so we can post 'restored' once foliate has
@@ -655,9 +866,7 @@ function applyTheme(theme: Theme): void {
   post('debug', {
     msg: `applyTheme triggered remeasure seq=${_measureSeq} margin=${theme.margin} marginV=${theme.marginV} fs=${theme.fontSize} ff=${theme.fontFamily} mode=${mode}`,
   });
-  requestAnimationFrame(() => {
-    void runMeasurement();
-  });
+  scheduleMeasurementWithCache();
 }
 
 // Force our bg color onto every element inside the foliate-view's
@@ -842,10 +1051,12 @@ async function measureOnce(mySeq: number): Promise<boolean> {
     }
     sectionPageCounts = next;
     sectionPageCountsLocked = true;
+    measurementCacheState = 'settled';
     post('debug', {
       msg: `measure done seq=${mySeq}: ${total} sections, ${totalPages} pages in ${Date.now() - t0}ms`,
     });
     post('pagesComputed', { totalPages, measured: total, total });
+    postMeasurementCacheSave();
 
     // Foliate doesn't auto-fire relocate when measurement completes,
     // so call computeAndPostProgress directly with the main view's
@@ -950,6 +1161,15 @@ async function init(): Promise<void> {
     view.renderer?.setAttribute('max-inline-size', '99999px');
     view.renderer?.setAttribute('max-block-size', '99999px');
     view.renderer?.setAttribute('margin', `${currentTheme.marginV ?? 24}px`);
+
+    let resizeMeasureTimer: ReturnType<typeof setTimeout> | null = null;
+    window.addEventListener('resize', () => {
+      if (resizeMeasureTimer) clearTimeout(resizeMeasureTimer);
+      resizeMeasureTimer = setTimeout(() => {
+        resizeMeasureTimer = null;
+        invalidateMeasurementForViewportChange();
+      }, 200);
+    });
 
     // Docs we've already wired up. Each new section gets its own iframe
     // document; track in a WeakSet so re-attachment is idempotent.
@@ -1141,6 +1361,9 @@ async function init(): Promise<void> {
     // the progress bar / page numbers.
     if (view.renderer) {
       let scrollRaf = 0;
+      view.renderer.addEventListener('section-heights-changed', () => {
+        scheduleMeasurementCacheSave();
+      });
       view.renderer.addEventListener('scroll', () => {
         const r = view!.renderer!;
         if (r.getAttribute('flow') !== 'scrolled') return;
